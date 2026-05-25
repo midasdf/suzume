@@ -1,111 +1,80 @@
 {
-  "projectName": "suzume WPT coverage push",
-  "goal": "Iteratively raise WPT scores across dom/events, dom/nodes, css/selectors, css/css-flexbox, css-box toward 100% via spec-driven (WHATWG/W3C/ECMAScript) fixes, not test-specific hacks.",
+  "projectName": "suzume WPT Wave 136+ autonomous push",
+  "goal": "Continue suzume's wave-by-wave WPT improvement (post-Wave 135 baseline) by shipping 3-5 narrowly-scoped, spec-cited waves that add subtests without regressing the Node-contains 1482/1482 and Node-compareDocumentPosition 1444/1444 canaries.",
   "constraints": [
-    "No WPT-specific hacks; all fixes must cite and comply with the relevant spec section.",
-    "zig build test must stay green after every commit.",
-    "Parallel work only on fully file-disjoint tasks (prior chaos bite).",
-    "Commit small and frequent; push in batches.",
-    "Update memory/project_suzume_wpt_progress.md each round."
+    "Every fix cites a WHATWG DOM / HTML / Selectors / WebIDL spec section.",
+    "No WPT-specific hacks; logic must generalize.",
+    "Canary regression (Node-contains, Node-compareDocumentPosition) is non-negotiable — block immediately.",
+    "Do NOT widen parentNode own-property to lexbor-backed Element/PI/Comment (Wave 130/134 constraint).",
+    "All wpt-mode measurements run sequentially (parallel runs cause silent OOM on 4GB VPS).",
+    "Each wave = 1 narrowly-scoped theme = 1-2 commits + wave{N}-final tag.",
+    "Commit message: feat(forms|kotori|dom): <summary> (Wave N) with Co-Authored-By footer."
   ],
   "stories": [
     {
       "id": "US-001",
-      "title": "Baseline + root-cause classification (all 5 areas)",
-      "passes": false,
+      "title": "Wave 136 — Unicode-aware NameStartChar / NameChar in dom_names.isValidName",
+      "passes": true,
       "priority": 1,
       "acceptanceCriteria": [
-        "Fresh WPT baseline logs exist at /tmp/wpt-flexbox-baseline.log, /tmp/wpt-dom-events-baseline.log, /tmp/wpt-dom-nodes-baseline.log, /tmp/wpt-selectors-baseline.log.",
-        "For each area, a written cluster breakdown of failures with spec citations is produced in the session.",
-        "Top 3 highest-impact fixes per area are identified with files + approach + estimated test gain.",
-        "memory/project_suzume_wpt_progress.md is refreshed with the new baselines."
-      ]
+        "src/js/dom_names.zig isValidName decodes UTF-8 codepoints and applies the full XML Name production ranges per XML 1.0 §2.3 / DOM §1.5 Validate.",
+        "Document-createProcessingInstruction.html ·A (U+00B7 start), ×A (U+00D7 start), A× (U+00D7 interior) all throw InvalidCharacterError (subtests pass).",
+        "Document-createProcessingInstruction.html reaches 12/12 (was 9/12).",
+        "Node-contains canary remains 1482/1482; Node-compareDocumentPosition canary remains 1444/1444.",
+        "zig build --libc /tmp/libc.txt produces a working binary.",
+        "Commit + tag wave136-final created."
+      ],
+      "deliveredAt": "commit 9f40357, tag wave136-final"
     },
     {
       "id": "US-002",
-      "title": "css/css-flexbox: implement top-impact spec fix cluster #1",
-      "passes": false,
+      "title": "Wave 137 — `<template>.content` DocumentFragment getter (HTML §4.12.3)",
+      "passes": true,
       "priority": 2,
       "acceptanceCriteria": [
-        "Highest-impact flexbox fix (e.g. getComputedStyle initial resolution for flex-* shorthands per CSS Flexbox L1 §7 + CSSOM §6.5) is implemented.",
-        "Fix cites the CSS spec section in a code comment only if the why is non-obvious.",
-        "WPT css/css-flexbox score improves by ≥ 5 percentage points vs. baseline.",
-        "zig build test passes.",
-        "Change is committed with a spec-referencing message."
-      ]
+        "HTMLTemplateElement.content getter wired through kotori, returning a DocumentFragment that mirrors the template's children per HTML §4.12.3.",
+        "DocumentFragment-getElementById.html `using a template` subtest passes (target 4/5 → 5/5).",
+        "Node-contains 1482/1482 + compareDocPos 1444/1444 canaries preserved.",
+        "Commit + tag wave137-final created."
+      ],
+      "deliveredAt": "commit 186d1a2, tag wave137-final"
     },
     {
       "id": "US-003",
-      "title": "css/css-flexbox: implement top-impact fix cluster #2",
+      "title": "Wave 138 — DEFERRED: Attr.value setter propagates to lexbor (DOM §4.9.2)",
       "passes": false,
       "priority": 3,
       "acceptanceCriteria": [
-        "Second flexbox fix (likely flex-basis intrinsic sizing or flex-wrap column) implemented per CSS Flexbox L1.",
-        "WPT css/css-flexbox score gains another ≥ 3 percentage points.",
-        "zig build test green; commit made."
+        "DEFERRED to next session: requires Zig-side PropertyDescriptor.accessor wiring on each native Attr from createAttrObject in kotori_dom.zig:3882. Yield = 1 subtest. Defer rationale: complexity > yield for this session."
       ]
     },
     {
       "id": "US-004",
-      "title": "dom/events: close remaining spec-compliant gaps",
-      "passes": false,
+      "title": "Wave 139 — URL percent-encode non-ASCII bytes in canonicalizeUrl (WHATWG URL §1.3)",
+      "passes": true,
       "priority": 4,
       "acceptanceCriteria": [
-        "After re-baseline post-Shadow-DOM-Phase-1/2 merge, remaining failures are bucketed.",
-        "Any cluster not blocked on navigation/testdriver/cross-realm is fixed (≥ 1 cluster).",
-        "WPT dom/events score reaches ≥ 93% (from 89.9%).",
-        "zig build test green; commits made."
-      ]
+        "html_reflection.canonicalizeUrl applies percentEncodeNonAscii to absolute-URL output so non-ASCII bytes in path/query/fragment are %XX-encoded per URL Living Standard §1.3.",
+        "DOMImplementation-createHTMLDocument.html URL parsing subtest passes (12/13 → 13/13).",
+        "Document-constructor.html URL parsing subtest passes (4/5 → 5/5).",
+        "Node-contains + compareDocPos canaries preserved.",
+        "Commit + tag wave139-final created."
+      ],
+      "deliveredAt": "commit de8b291, tag wave139-final",
+      "scopeNote": "Original PRD target was createElementNS validateAndExtract; pivoted because ~390 of the 394 failures are XML/XHTML iframe loading (out of session scope)."
     },
     {
       "id": "US-005",
-      "title": "dom/nodes + css/selectors: close residual spec gaps",
-      "passes": false,
+      "title": "Reviewer sign-off + memory update + cancel",
+      "passes": true,
       "priority": 5,
       "acceptanceCriteria": [
-        "At least 2 cluster fixes across the two areas, one per area.",
-        "dom/nodes reaches ≥ 94%; css/selectors reaches ≥ 88%.",
-        "All fixes cite DOM Living Standard or Selectors L4 sections.",
-        "zig build test green; commits made."
-      ]
-    },
-    {
-      "id": "US-006",
-      "title": "Shadow DOM Phase 3 kickoff: slots assignment algorithm",
-      "passes": false,
-      "priority": 6,
-      "acceptanceCriteria": [
-        "HTMLSlotElement class + named/default slot assignment per DOM §4.2.2.3 implemented.",
-        "assignedNodes / assignedElements / assign() available on slot element.",
-        "slotchange event fires on assignment change.",
-        "Unit tests cover named slot, default slot, reassignment, slotchange firing.",
-        "zig build test green; commit made."
-      ]
-    },
-    {
-      "id": "US-007",
-      "title": "Shadow DOM Phase 3: flattened tree view for layout + :host matcher",
-      "passes": false,
-      "priority": 7,
-      "acceptanceCriteria": [
-        "Flattened tree iterator consumed by layout per DOM §4.2.2.4.",
-        ":host selector matcher integrated; matches only within that shadow scope.",
-        "Scoped stylesheet list on ShadowRoot honored by selector engine.",
-        "WPT shadow-dom slots tests show measurable pass improvement.",
-        "zig build test green; commit made."
-      ]
-    },
-    {
-      "id": "US-008",
-      "title": "Verification pass + memory + push",
-      "passes": false,
-      "priority": 8,
-      "acceptanceCriteria": [
-        "All updated areas re-baselined; scores recorded in memory/project_suzume_wpt_progress.md with timestamps.",
-        "Commits pushed to origin/main.",
-        "Reviewer (architect) signs off on spec-compliance of changes.",
-        "ai-slop-cleaner run on changed files; post-cleanup zig build test passes."
-      ]
+        "memory/project_suzume_next_session.md updated with Wave 136-139 deltas + remaining tracks.",
+        "Reviewer (architect) signs off on spec-compliance of Waves 136/137/139.",
+        "Post-deslop regression run (Node-contains, compareDocPos, plus targeted wave files) passes.",
+        "All commits authored with the established feat(...) (Wave N) format (verified: 9f40357 / 186d1a2 / de8b291)."
+      ],
+      "deliveredAt": "session 2026-05-16-wave136-139; architect APPROVED all 3 waves; post-deslop canaries 1482/1482 + 1444/1444 + all wave targets re-verified"
     }
   ]
 }

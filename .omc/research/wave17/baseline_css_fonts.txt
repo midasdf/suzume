@@ -1,0 +1,310 @@
+=== WPT Tests: css/css-fonts (158 files, 2 parallel, engine=kotori) ===
+FAIL css/css-fonts/animations/font-palette-interpolation.html (0/2 pass)
+  FAIL: An interpolation to inherit updates correctly on a parent style change. — Cannot read properties of undefined (reading 'pause')
+  FAIL: Test additive animations — Cannot read properties of undefined (reading 'forEach')
+FAIL css/css-fonts/animations/font-size-adjust-composition.html (226/500 pass)
+  FAIL: Compositing CSS Animations: property <font-size-adjust> underlying [ex-height 0.5] from replace [none] to add [ex-height 2.0] at (-0.5) should be [none] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <font-size-adjust> underlying [ex-height 0.5] from replace [none] to add [ex-height 2.0] at (0) should be [none] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <font-size-adjust> underlying [ex-height 0.5] from replace [none] to add [ex-height 2.0] at (0.5) should be [2.5] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+FAIL css/css-fonts/animations/font-stretch-interpolation.html (0/1 pass)
+  FAIL: An interpolation to inherit updates correctly on a parent style change. — Cannot read properties of undefined (reading 'pause')
+FAIL css/css-fonts/animations/font-style-interpolation.html (0/1 pass)
+  FAIL: An interpolation to inherit updates correctly on a parent style change. — Cannot read properties of undefined (reading 'pause')
+FAIL css/css-fonts/animations/font-variation-settings-composition.html (42/60 pass)
+  FAIL: Compositing CSS Animations: property <font-variation-settings> underlying ['test' 100] from add [normal] to replace ['test' 200] at (-0.3) should be [normal] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <font-variation-settings> underlying ['test' 100] from add [normal] to replace ['test' 200] at (0) should be [normal] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing Web Animations: property <font-variation-settings> underlying ['test' 100] from add [normal] to replace ['test' 200] at (-0.3) should be [normal] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+FAIL css/css-fonts/calc-in-font-variation-settings.html (0/2 pass)
+  FAIL: calc() specified value serialization in font-variation-settings — assert_equals: expected ""XHGT" calc(0.7)" but got ""
+  FAIL: calc() computed value serialization in font-variation-settings — assert_equals: expected ""XHGT" 0.7" but got ""
+FAIL css/css-fonts/cjk-kerning.html (0/9 pass)
+  FAIL: expected match: .kernON .latin vs .paltOFFkernON .latin — Cannot read properties of null (reading 'offsetWidth')
+  FAIL: expected match: .kernON .latin vs .paltONkernON .latin — Cannot read properties of null (reading 'offsetWidth')
+  FAIL: expected match: .kernOFF .latin vs .paltONkernOFF .latin — Cannot read properties of null (reading 'offsetWidth')
+FAIL css/css-fonts/crash-font-face-invalid-descriptor.html (0/1 pass)
+  FAIL: Do not crash when setting an invalid @font-face descriptor via CSSOM — Cannot read properties of undefined
+FAIL css/css-fonts/crash-large-grapheme-cluster.html (0/1 pass)
+  FAIL: Should not crash when there is an exceedingly large grapheme cluster — Cannot set properties of undefined (setting 'textContent')
+FAIL css/css-fonts/fallback-url-to-local.html (0/1 pass)
+  FAIL: We should use the local font to render the page when the primary remote font is loading — Cannot read properties of undefined (reading 'check')
+FAIL css/css-fonts/font-display/font-display-failure-fallback.html (0/1 pass)
+  FAIL: Fallback for font failure period — Cannot read properties of undefined (reading 'ready')
+FAIL css/css-fonts/font-face-range-order.html (0/1 pass)
+  FAIL: CSS Fonts Module Level 3: Order of values in @font-face range descriptors — Cannot read properties of undefined (reading 'load')
+FAIL css/css-fonts/font-face-style-normal.html (0/4 pass)
+  FAIL: CSS Fonts: parsing 'normal' in the font-style descriptor — Cannot read properties of undefined (reading 'load')
+  FAIL: CSS Fonts: parsing 'normal' in the font-style descriptor 1 — Cannot read properties of undefined (reading 'load')
+  FAIL: CSS Fonts: parsing 'normal' in the font-style descriptor 2 — Cannot read properties of undefined (reading 'load')
+FAIL css/css-fonts/font-family-src-quoted.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/css-fonts/font-feature-settings-serialization-001.html (0/2 pass)
+  FAIL: font-feature-settings should be serialized with double quotes, and the default value of 1 should be omitted — assert_equals: expected ""vert"" but got ""
+  FAIL: font-feature-settings should serialize 0 instead of off, given it's shorter — assert_equals: expected ""vert" 0" but got ""
+FAIL css/css-fonts/font-palette-vs-shorthand.html (0/4 pass)
+  FAIL: CSS Fonts Module Level 4: interaction of font-palette and font shorthand — assert_equals: expected "dark" but got ""
+  FAIL: CSS Fonts Module Level 4: interaction of font-palette and font shorthand 1 — assert_equals: expected "dark" but got ""
+  FAIL: CSS Fonts Module Level 4: interaction of font-palette and font shorthand 2 — assert_equals: expected "dark" but got ""
+FAIL css/css-fonts/font-shorthand-serialization-font-stretch.html (0/4 pass)
+  FAIL: Keywords should appear in serialization of font and fontStretch — assert_equals: expected "ultra-condensed medium serif" but got "medium serif"
+  FAIL: Percentages which can be transformed into keywords should be for serialization of font, but not of fontStretch — assert_equals: expected "ultra-condensed medium serif" but got "medium serif"
+  FAIL: Percentages which cannot be transformed into keywords should prevent the font shorthand from serializing, but not fontStretch — assert_equals: expected "" but got "medium serif"
+FAIL css/css-fonts/font-shorthand-serialization-prevention.html (4/6 pass)
+  FAIL: Setting font-variant to all-small-caps should prevent the font shorthand from serializing in specified style — assert_equals: expected "" but got "16px serif"
+  FAIL: Setting font-variant to all-small-caps should prevent the font shorthand from serializing in computed style — assert_equals: expected "" but got "16px serif"
+FAIL css/css-fonts/font-shorthand-subproperties-reset.html (0/13 pass)
+  FAIL: Property font-size-adjust should be reset to its initial value. — assert_equals: expected "" but got "0"
+  FAIL: Property font-kerning should be reset to its initial value. — assert_equals: expected "" but got "normal"
+  FAIL: Property font-variant-caps should be reset to its initial value. — assert_equals: expected "" but got "all-small-caps"
+FAIL css/css-fonts/font-size-relative-across-calc-ff-bug-001.html (0/1 pass)
+  FAIL: font-size computation isn't messed up when mixing positive and negatives when font-family changes and the parent has a keyword font-size — assert_equals: expected "0px" but got "16px"
+FAIL css/css-fonts/font-style-sign-function.html (0/1 pass)
+  FAIL: Property font-style value 'oblique calc(sign(1rem - 1px) * 10deg)' — assert_equals: expected "oblique 10deg" but got "normal"
+FAIL css/css-fonts/font-variant-alternates-parsing.html (0/1 pass)
+  FAIL: CSS Test:  font-variant-alternates: historical-forms; parses case-insensitively — assert_equals: historical-forms is parsed case-insensitively expected "historical-forms" but got "Historical-Forms"
+FAIL css/css-fonts/font-variation-settings-calc.html (3/8 pass)
+  FAIL: e.style['font-variation-settings'] = "\"wght\" sign(2px)" should set the property value — assert_equals: serialization should be canonical expected ""wght" calc(1)" but got ""wght" sign(2px)"
+  FAIL: Property font-variation-settings value '"wght" sign(1em - 1px)' — assert_equals: expected ""wght" 1" but got ""wght" sign(1em - 1px)"
+  FAIL: Property font-variation-settings value '"wght" sibling-index()' — assert_equals: expected ""wght" 1" but got ""wght" sibling-index()"
+FAIL css/css-fonts/font-variation-settings-serialization-001.html (0/1 pass)
+  FAIL: font-variation-settings should be serialized to not include duplicates — assert_in_array: value ""bldA" 1, "bldA" 2" not in array [""bldA" 2", "'bldA' 2"]
+FAIL css/css-fonts/font-variation-settings-serialization-002.html (0/1 pass)
+  FAIL: Check if font variation settings serialization is sorted. — assert_equals: Font variation settings should be sorted when serialized. expected ""opsz" 144, "wdth" 125, "wght" 400" but got ""
+FAIL css/css-fonts/font-weight-sign-function.html (0/3 pass)
+  FAIL: Property font-weight value 'calc(sign(1rem - 1px) * 10)' — assert_equals: expected "10" but got "400"
+  FAIL: Property font-weight value 'calc(sign(1rem - 1px) * -10000)' — assert_equals: expected "1" but got "400"
+  FAIL: Property font-weight value 'calc(sign(1rem - 1px) * 10000)' — assert_equals: expected "1000" but got "400"
+FAIL css/css-fonts/font_feature_values_map_iteration.html (0/1 pass)
+  FAIL: Iteration of the CSSFontFeatureValuesMap does not crash. — Cannot read properties of undefined
+FAIL css/css-fonts/format-specifiers-variations.html (0/48 pass)
+  FAIL: Load Ahem with format woff — Cannot read properties of undefined (reading 'load')
+  FAIL: Load Ahem with format truetype — Cannot read properties of undefined (reading 'load')
+  FAIL: Load Ahem with format opentype — Cannot read properties of undefined (reading 'load')
+FAIL css/css-fonts/inheritance.html (3/39 pass)
+  FAIL: Property font-family inherits — assert_equals: expected ""Not Initial!"" but got "Not Initial!"
+  FAIL: Property font-feature-settings has initial value normal — assert_equals: expected "normal" but got "initial"
+  FAIL: Property font-feature-settings inherits — assert_equals: expected ""smcp", "swsh" 2" but got "unset"
+FAIL css/css-fonts/matching/font-unicode-PUA.html (0/3 pass)
+  FAIL: PUA character U+F000 is rendered with a non-generic font. — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: PUA character U+F001 is rendered with a non-generic font. — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: PUA character U+F002 is rendered with a non-generic font. — Cannot read properties of undefined (reading 'getBoundingClientRect')
+FAIL css/css-fonts/math-script-level-and-math-style/math-script-level-001.tentative.html (1/7 pass)
+  FAIL: Initial value of math-depth — assert_equals: expected "0" but got ""
+  FAIL: Inherited values of math-depth — assert_equals: expected "11" but got ""
+  FAIL: Specified math-depth: auto-add — assert_equals: expected "10" but got "auto-add"
+FAIL css/css-fonts/math-script-level-and-math-style/math-style-001.tentative.html (1/3 pass)
+  FAIL: Initial value of math-style — assert_equals: expected "normal" but got ""
+  FAIL: Inherited values of math-style — assert_equals: expected "compact" but got ""
+FAIL css/css-fonts/palette-mix-computed.html (20/28 pass)
+  FAIL: Property font-palette value 'palette-mix(in oklab, light 30%, light)' — assert_equals: expected "light" but got "palette-mix(in oklab, light 30%, light)"
+  FAIL: Property font-palette value 'palette-mix(in oklab, light 50%, dark 50%)' — assert_equals: expected "palette-mix(in oklab, light, dark)" but got "palette-mix(in oklab, light 50%, dark 50%)"
+  FAIL: Property font-palette value 'palette-mix(in oklab, light, dark 50%)' — assert_equals: expected "palette-mix(in oklab, light, dark)" but got "palette-mix(in oklab, light, dark 50%)"
+FAIL css/css-fonts/parsing/font-computed.html (6/315 pass)
+  FAIL: Property font value 'xx-small serif' — assert_equals: expected "9px serif" but got "xx-small serif"
+  FAIL: Property font value 'normal medium/normal sans-serif' — assert_equals: expected "16px sans-serif" but got "normal medium/normal sans-serif"
+  FAIL: Property font value 'normal normal xx-large/1.2 cursive' — assert_equals: expected "32px / 1.2px cursive" but got "normal normal xx-large/1.2 cursive"
+FAIL css/css-fonts/parsing/font-family-computed.html (5/10 pass)
+  FAIL: Property font-family value 'serif, sans-serif, cursive, fantasy, monospace' — assert_equals: expected "serif, sans-serif, cursive, fantasy, monospace" but got "serif"
+  FAIL: Property font-family value 'Helvetica, Verdana, sans-serif' — assert_equals: expected "Helvetica, Verdana, sans-serif" but got "sans-serif"
+  FAIL: Property font-family value '"New Century Schoolbook", serif' — assert_equals: expected "New Century Schoolbook, serif" but got "New Century Schoolbook"
+FAIL css/css-fonts/parsing/font-family-invalid.html (0/7 pass)
+  FAIL: e.style['font-family'] = "cursive serif" should not set the property value — assert_equals: expected "" but got "cursive serif"
+  FAIL: e.style['font-family'] = "Red/Black, sans-serif" should not set the property value — assert_equals: expected "" but got "Red/Black, sans-serif"
+  FAIL: e.style['font-family'] = "\"Lucida\" Grande, sans-serif" should not set the property value — assert_equals: expected "" but got ""Lucida" Grande, sans-serif"
+FAIL css/css-fonts/parsing/font-family-valid.html (3/11 pass)
+  FAIL: e.style['font-family'] = "Serif" should set the property value — assert_equals: serialization should be canonical expected "serif" but got "Serif"
+  FAIL: e.style['font-family'] = "Sans-Serif" should set the property value — assert_equals: serialization should be canonical expected "sans-serif" but got "Sans-Serif"
+  FAIL: e.style['font-family'] = "Cursive" should set the property value — assert_equals: serialization should be canonical expected "cursive" but got "Cursive"
+FAIL css/css-fonts/parsing/font-feature-settings-computed.html (6/10 pass)
+  FAIL: Property font-feature-settings value '"tnum", "hist"' — assert_equals: expected ""hist", "tnum"" but got ""tnum", "hist""
+  FAIL: Property font-feature-settings value '"dlig", "smcp", "dlig" 0' — assert_equals: expected ""dlig" 0, "smcp"" but got ""dlig", "smcp", "dlig" 0"
+  FAIL: Property font-feature-settings value '"liga" calc(10 + (sign(2cqw - 10px) * 5))' — assert_equals: expected ""liga" 5" but got ""liga" calc(10 + (sign(2cqw - 10px) * 5))"
+FAIL css/css-fonts/parsing/font-feature-settings-invalid.html (0/5 pass)
+  FAIL: e.style['font-feature-settings'] = "normal \"dlig\"" should not set the property value — assert_equals: expected "" but got "normal "dlig""
+  FAIL: e.style['font-feature-settings'] = "\"c2sc\", normal" should not set the property value — assert_equals: expected "" but got ""c2sc", normal"
+  FAIL: e.style['font-feature-settings'] = "\"tnum\" \"hist\"" should not set the property value — assert_equals: expected "" but got ""tnum" "hist""
+FAIL css/css-fonts/parsing/font-feature-settings-valid.html (2/8 pass)
+  FAIL: e.style['font-feature-settings'] = "\"dlig\" 1" should set the property value — assert_equals: serialization should be canonical expected ""dlig"" but got ""dlig" 1"
+  FAIL: e.style['font-feature-settings'] = "\"smcp\" on" should set the property value — assert_equals: serialization should be canonical expected ""smcp"" but got ""smcp" on"
+  FAIL: e.style['font-feature-settings'] = "'c2sc'" should set the property value — assert_equals: serialization should be canonical expected ""c2sc"" but got "'c2sc'"
+FAIL css/css-fonts/parsing/font-invalid.html (0/16 pass)
+  FAIL: e.style['font'] = "menu icon" should not set the property value — assert_equals: expected "" but got "menu icon"
+  FAIL: e.style['font'] = "italic oblique xx-small serif" should not set the property value — assert_equals: expected "" but got "italic oblique xx-small serif"
+  FAIL: e.style['font'] = "small-caps small-caps medium/normal sans-serif" should not set the property value — assert_equals: expected "" but got "small-caps small-caps medium/normal sans-serif"
+FAIL css/css-fonts/parsing/font-language-override-computed.html (2/5 pass)
+  FAIL: Property font-language-override value '"ENG "' — assert_equals: expected ""ENG"" but got ""ENG ""
+  FAIL: Property font-language-override value '"en  "' — assert_equals: expected ""en"" but got ""en  ""
+  FAIL: Property font-language-override value '" en "' — assert_equals: expected "" en"" but got "" en ""
+FAIL css/css-fonts/parsing/font-language-override-invalid.html (0/6 pass)
+  FAIL: e.style['font-language-override'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['font-language-override'] = "normal \"ksw\"" should not set the property value — assert_equals: expected "" but got "normal "ksw""
+  FAIL: e.style['font-language-override'] = "\"turkish\"" should not set the property value — assert_equals: expected "" but got ""turkish""
+FAIL css/css-fonts/parsing/font-language-override-valid.html (6/9 pass)
+  FAIL: e.style['font-language-override'] = "\"ENG \"" should set the property value — assert_equals: serialization should be canonical expected ""ENG"" but got ""ENG ""
+  FAIL: e.style['font-language-override'] = "\"en  \"" should set the property value — assert_equals: serialization should be canonical expected ""en"" but got ""en  ""
+  FAIL: e.style['font-language-override'] = "\" en \"" should set the property value — assert_equals: serialization should be canonical expected "" en"" but got "" en ""
+FAIL css/css-fonts/parsing/font-palette-invalid.html (0/4 pass)
+  FAIL: e.style['font-palette'] = "normal none" should not set the property value — assert_equals: expected "" but got "normal none"
+  FAIL: e.style['font-palette'] = "none, light" should not set the property value — assert_equals: expected "" but got "none, light"
+  FAIL: e.style['font-palette'] = "A" should not set the property value — assert_equals: expected "" but got "A"
+FAIL css/css-fonts/parsing/font-shorthand-variant.html (0/1 pass)
+  FAIL: font shorthand returns only CSS2 font-variant values — assert_equals: font should be updated expected "small-caps medium serif" but got "medium serif"
+FAIL css/css-fonts/parsing/font-size-adjust-computed.html (0/1 pass)
+  FAIL: CSS Fonts Module Level 5: getComputedStyle().fontSizeAdjust — Cannot read properties of undefined (reading 'load')
+FAIL css/css-fonts/parsing/font-size-computed.html (12/21 pass)
+  FAIL: Property font-size value 'calc(30% - 40px)' — assert_equals: expected "0px" but got "40px"
+  FAIL: Property font-size value 'calc(30% + 40px)' — assert_equals: expected "52px" but got "40px"
+  FAIL: Property font-size value 'calc(10px - 0.5em)' — assert_equals: expected "0px" but got "40px"
+FAIL css/css-fonts/parsing/font-size-adjust-valid.html (12/19 pass)
+  FAIL: e.style['font-size-adjust'] = "ex-height 0.5" should set the property value — assert_equals: serialization should be canonical expected "0.5" but got "ex-height 0.5"
+  FAIL: e.style['font-size-adjust'] = "ex-height from-font" should set the property value — assert_equals: serialization should be canonical expected "from-font" but got "ex-height from-font"
+  FAIL: e.style['font-size-adjust'] = "ex-height calc(0.5)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-fonts/parsing/font-stretch-alias.html (0/1 pass)
+  FAIL: font-stretch is a legacy name alias for font-width — assert_equals: font-stretch is an alias for font-width expected "inherit" but got ""
+FAIL css/css-fonts/parsing/font-style-computed.html (5/17 pass)
+  FAIL: Property font-style value 'oblique 10deg' — assert_equals: expected "oblique 10deg" but got "normal"
+  FAIL: Property font-style value 'oblique -10deg' — assert_equals: expected "oblique -10deg" but got "normal"
+  FAIL: Property font-style value 'oblique 14deg' — assert_equals: expected "oblique" but got "normal"
+FAIL css/css-fonts/parsing/font-style-invalid.html (0/2 pass)
+  FAIL: e.style['font-style'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['font-style'] = "italic oblique" should not set the property value — assert_equals: expected "" but got "italic oblique"
+FAIL css/css-fonts/parsing/font-style-valid.html (13/17 pass)
+  FAIL: e.style['font-style'] = "oblique 0deg" should set the property value — assert_equals: serialization should be canonical expected "normal" but got "oblique 0deg"
+  FAIL: e.style['font-style'] = "oblique calc(10deg - 10deg)" should set the property value — assert_equals: serialization should be canonical expected "oblique calc(0deg)" but got "oblique calc(10deg - 10deg)"
+  FAIL: e.style['font-style'] = "oblique calc(30deg * 2)" should set the property value — assert_equals: serialization should be canonical expected "oblique calc(60deg)" but got "oblique calc(30deg * 2)"
+FAIL css/css-fonts/parsing/font-synthesis-invalid.html (0/12 pass)
+  FAIL: e.style['font-synthesis'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['font-synthesis'] = "none weight" should not set the property value — assert_equals: expected "" but got "none weight"
+  FAIL: e.style['font-synthesis'] = "none style" should not set the property value — assert_equals: expected "" but got "none style"
+FAIL css/css-fonts/parsing/font-synthesis-position-invalid.html (0/2 pass)
+  FAIL: e.style['font-synthesis-position'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['font-synthesis-position'] = "auto none" should not set the property value — assert_equals: expected "" but got "auto none"
+FAIL css/css-fonts/parsing/font-synthesis-small-caps-invalid.html (0/2 pass)
+  FAIL: e.style['font-synthesis-small-caps'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['font-synthesis-small-caps'] = "auto none" should not set the property value — assert_equals: expected "" but got "auto none"
+FAIL css/css-fonts/parsing/font-synthesis-style-invalid.html (0/4 pass)
+  FAIL: e.style['font-synthesis-style'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['font-synthesis-style'] = "auto none" should not set the property value — assert_equals: expected "" but got "auto none"
+  FAIL: e.style['font-synthesis-style'] = "none oblique-only" should not set the property value — assert_equals: expected "" but got "none oblique-only"
+FAIL css/css-fonts/parsing/font-synthesis-valid.html (6/23 pass)
+  FAIL: e.style['font-synthesis'] = "style weight" should set the property value — assert_equals: serialization should be canonical expected "weight style" but got "style weight"
+  FAIL: e.style['font-synthesis'] = "oblique-only weight" should set the property value — assert_equals: serialization should be canonical expected "weight oblique-only" but got "oblique-only weight"
+  FAIL: e.style['font-synthesis'] = "small-caps weight" should set the property value — assert_equals: serialization should be canonical expected "weight small-caps" but got "small-caps weight"
+FAIL css/css-fonts/parsing/font-synthesis-weight-invalid.html (0/2 pass)
+  FAIL: e.style['font-synthesis-weight'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['font-synthesis-weight'] = "auto none" should not set the property value — assert_equals: expected "" but got "auto none"
+FAIL css/css-fonts/parsing/font-valid.html (9/315 pass)
+  FAIL: e.style['font'] = "normal medium/normal sans-serif" should set the property value — assert_equals: serialization should be canonical expected "medium sans-serif" but got "normal medium/normal sans-serif"
+  FAIL: e.style['font'] = "normal normal xx-large/1.2 cursive" should set the property value — assert_equals: serialization should be canonical expected "xx-large / 1.2 cursive" but got "normal normal xx-large/1.2 cursive"
+  FAIL: e.style['font'] = "normal normal normal larger/calc(120% + 1.2em) fantasy" should set the property value — assert_equals: serialization should be canonical expected "larger / calc(120% + 1.2em) fantasy" but got "normal normal normal larger/calc(120% + 1.2em) fantasy"
+FAIL css/css-fonts/parsing/font-variant-alternates-invalid.html (0/15 pass)
+  FAIL: e.style['font-variant-alternates'] = "swash(several,different,aliases)" should not set the property value — assert_equals: expected "" but got "swash(several,different,aliases)"
+  FAIL: e.style['font-variant-alternates'] = "stylistic(more,than,one)" should not set the property value — assert_equals: expected "" but got "stylistic(more,than,one)"
+  FAIL: e.style['font-variant-alternates'] = "ornaments(more,than,one)" should not set the property value — assert_equals: expected "" but got "ornaments(more,than,one)"
+FAIL css/css-fonts/parsing/font-variant-east-asian-invalid.html (0/9 pass)
+  FAIL: e.style['font-variant-east-asian'] = "normal ruby" should not set the property value — assert_equals: expected "" but got "normal ruby"
+  FAIL: e.style['font-variant-east-asian'] = "jis78 jis83" should not set the property value — assert_equals: expected "" but got "jis78 jis83"
+  FAIL: e.style['font-variant-east-asian'] = "full-width proportional-width" should not set the property value — assert_equals: expected "" but got "full-width proportional-width"
+FAIL css/css-fonts/parsing/font-variant-east-asian-valid.html (11/12 pass)
+  FAIL: e.style['font-variant-east-asian'] = "ruby full-width simplified" should set the property value — assert_equals: serialization should be canonical expected "simplified full-width ruby" but got "ruby full-width simplified"
+FAIL css/css-fonts/parsing/font-variant-emoji-computed.html (3/4 pass)
+  FAIL: Property font-variant-emoji value 'normal' — assert_true: 'normal' is a supported value for font-variant-emoji. expected true got false
+FAIL css/css-fonts/parsing/font-variant-emoji-invalid.html (6/7 pass)
+  FAIL: e.style['font-variant-emoji'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+FAIL css/css-fonts/parsing/font-variant-emoji-valid.html (3/4 pass)
+  FAIL: e.style['font-variant-emoji'] = "normal" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-fonts/parsing/font-variant-invalid.html (0/21 pass)
+  FAIL: e.style['font-variant'] = "normal none" should not set the property value — assert_equals: expected "" but got "normal none"
+  FAIL: e.style['font-variant'] = "none normal" should not set the property value — assert_equals: expected "" but got "none normal"
+  FAIL: e.style['font-variant'] = "small-caps normal" should not set the property value — assert_equals: expected "" but got "small-caps normal"
+FAIL css/css-fonts/parsing/font-variant-ligatures-invalid.html (0/6 pass)
+  FAIL: e.style['font-variant-ligatures'] = "none normal" should not set the property value — assert_equals: expected "" but got "none normal"
+  FAIL: e.style['font-variant-ligatures'] = "normal common-ligatures" should not set the property value — assert_equals: expected "" but got "normal common-ligatures"
+  FAIL: e.style['font-variant-ligatures'] = "common-ligatures no-common-ligatures" should not set the property value — assert_equals: expected "" but got "common-ligatures no-common-ligatures"
+FAIL css/css-fonts/parsing/font-variant-numeric-invalid.html (0/9 pass)
+  FAIL: e.style['font-variant-numeric'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['font-variant-numeric'] = "normal lining-nums" should not set the property value — assert_equals: expected "" but got "normal lining-nums"
+  FAIL: e.style['font-variant-numeric'] = "lining-nums oldstyle-nums" should not set the property value — assert_equals: expected "" but got "lining-nums oldstyle-nums"
+FAIL css/css-fonts/parsing/font-variant-serialization.html (0/1 pass)
+  FAIL: checking serialized value of font-variant — assert_equals: expected "tabular-nums" but got ""
+FAIL css/css-fonts/parsing/font-variant-valid.html (44/46 pass)
+  FAIL: e.style['font-variant'] = "annotation(flowing) ornaments(flowing) swash(flowing) character-variant(flowing) styleset(flowing) historical-forms stylistic(flowing)" should set the property value — assert_equals: serialization should be canonical expected "stylistic(flowing) historical-forms styleset(flowing) character-variant(flowing) swash(flowing) ornaments(flowing) annotation(flowing)" but got "annotation(flowing) ornaments(flowing) swash(flowing) character-variant(flowing) styleset(flowing) historical-forms stylistic(flowing)"
+  FAIL: e.style['font-variant'] = "super proportional-width jis83 stacked-fractions tabular-nums oldstyle-nums historical-forms all-small-caps no-contextual no-historical-ligatures no-discretionary-ligatures no-common-ligatures" should set the property value — assert_in_array: serialization should be sound value "super proportional-width jis83 stacked-fractions tabular-nums oldstyle-nums historical-forms all-small-caps no-contextual no-historical-ligatures no-discretionary-ligatures no-common-ligatures" not in array ["no-common-ligatures no-discretionary-ligatures no-historical-ligatures no-contextual all-small-caps historical-forms oldstyle-nums tabular-nums stacked-fractions jis83 proportional-width super", "no-contextual no-historical-ligatures no-discretionary-ligatures no-common-ligatures all-small-caps historical-forms stacked-fractions tabular-nums oldstyle-nums jis83 proportional-width super"]
+FAIL css/css-fonts/parsing/font-variation-settings-computed.html (4/8 pass)
+  FAIL: Property font-variation-settings value '"wght" 700, "wght" 500' duplicate values should be removed, keeping the rightmost occurrence. — assert_equals: expected ""wght" 500" but got ""wght" 700, "wght" 500"
+  FAIL: Property font-variation-settings value '"wght" 100, "wdth" 200' values should be sorted alphabetically by tag. — assert_equals: expected ""wdth" 200, "wght" 100" but got ""wght" 100, "wdth" 200"
+  FAIL: Property font-variation-settings value '"wght" 100, "wdth" 200, "wght" 300, "wdth" 400' duplicate values should be removed, keeping the rightmost occurrence, and sorted alphabetically by tag. — assert_equals: expected ""wdth" 400, "wght" 300" but got ""wght" 100, "wdth" 200, "wght" 300, "wdth" 400"
+FAIL css/css-fonts/parsing/font-variation-settings-invalid.html (0/18 pass)
+  FAIL: e.style['font-variation-settings'] = "700" should not set the property value — assert_equals: expected "" but got "700"
+  FAIL: e.style['font-variation-settings'] = "\"XHGT\"" should not set the property value — assert_equals: expected "" but got ""XHGT""
+  FAIL: e.style['font-variation-settings'] = "wght 700" should not set the property value — assert_equals: expected "" but got "wght 700"
+FAIL css/css-fonts/parsing/font-variation-settings-valid.html (5/7 pass)
+  FAIL: e.style['font-variation-settings'] = "'wght' 700" should set the property value — assert_equals: serialization should be canonical expected ""wght" 700" but got "'wght' 700"
+  FAIL: e.style['font-variation-settings'] = "'wght' 1e3, 'slnt' -450.0e-1" should set the property value — assert_equals: serialization should be canonical expected ""wght" 1000, "slnt" -45" but got "'wght' 1e3, 'slnt' -450.0e-1"
+FAIL css/css-fonts/parsing/font-weight-computed.html (34/58 pass)
+  FAIL: Property font-weight value '150.25' — assert_equals: expected "150.25" but got "400"
+  FAIL: Property font-weight value 'calc(100)' — assert_equals: expected "100" but got "400"
+  FAIL: Property font-weight value 'calc(0)' — assert_equals: expected "1" but got "400"
+FAIL css/css-fonts/parsing/font-weight-valid.html (20/22 pass)
+  FAIL: e.style['font-weight'] = "calc(100 + 100)" should set the property value — assert_equals: serialization should be canonical expected "calc(200)" but got "calc(100 + 100)"
+  FAIL: e.style['font-weight'] = "calc(100 + (sign(20cqw - 10px) * 5))" should set the property value — assert_equals: serialization should be canonical expected "calc(100 + (5 * sign(20cqw - 10px)))" but got "calc(100 + (sign(20cqw - 10px) * 5))"
+FAIL css/css-fonts/parsing/font-width-computed.html (2/30 pass)
+  FAIL: Property font-width value 'ultra-condensed' — assert_equals: expected "50%" but got "ultra-condensed"
+  FAIL: Property font-width value 'extra-condensed' — assert_equals: expected "62.5%" but got "extra-condensed"
+  FAIL: Property font-width value 'condensed' — assert_equals: expected "75%" but got "condensed"
+FAIL css/css-fonts/parsing/font-width-invalid.html (0/8 pass)
+  FAIL: e.style['font-width'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['font-width'] = "normal, ultra-condensed" should not set the property value — assert_equals: expected "" but got "normal, ultra-condensed"
+  FAIL: e.style['font-width'] = "condensed expanded" should not set the property value — assert_equals: expected "" but got "condensed expanded"
+FAIL css/css-fonts/parsing/font-width-valid.html (26/30 pass)
+  FAIL: e.style['font-width'] = "calc(100% + 100%)" should set the property value — assert_equals: serialization should be canonical expected "calc(200%)" but got "calc(100% + 100%)"
+  FAIL: e.style['font-width'] = "calc(100% + (sign(20cqw - 10px) * 5%))" should set the property value — assert_equals: serialization should be canonical expected "calc(100% + (5% * sign(20cqw - 10px)))" but got "calc(100% + (sign(20cqw - 10px) * 5%))"
+  FAIL: e.style['font-stretch'] = "calc(100% + 100%)" should set the property value — assert_equals: serialization should be canonical expected "calc(200%)" but got "calc(100% + 100%)"
+FAIL css/css-fonts/test_datafont_same_origin.html (0/1 pass)
+  FAIL: Test if data:font would be treated same origin. — Cannot set properties of undefined (setting 'onloadingdone')
+FAIL css/css-fonts/variable-in-font-variation-settings.html (0/1 pass)
+  FAIL: var() in font-variation-settings — assert_equals: expected ""wght" 850" but got ""
+FAIL css/css-fonts/variations/at-font-face-descriptors.html (0/88 pass)
+  FAIL: font-weight(valid): 'normal' keyword: normal — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: font-weight(valid): 'bold' keyword: bold — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: font-weight(valid): 'auto' keyword inside @font-face: auto — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/css-fonts/variations/font-parse-numeric-stretch-style-weight.html (22/81 pass)
+  FAIL: Invalid value 100% 110% for font property stretch used for styling. — assert_false: expected false got true
+  FAIL: Invalid value 100% 150% for font property stretch used for styling. — assert_false: expected false got true
+  FAIL: Invalid value calc(1 + 10%) for font property stretch used for styling. — assert_false: expected false got true
+FAIL css/css-fonts/variations/font-stretch.html (25/51 pass)
+  FAIL: @supports: 100 - only percentages, not numbers allowed — assert_equals: only percentages, not numbers allowed expected false but got true
+  FAIL: @supports: -1% - negative values are illegal — assert_equals: negative values are illegal expected false but got true
+  FAIL: @getComputedStyle: 1e9% - huge legal percentage — assert_equals: huge legal percentage expected "1e+009%" but got "1e9%"
+FAIL css/css-fonts/variations/font-style-interpolation.html (0/1 pass)
+  FAIL: font-style transition — assert_equals: Font style before transition expected "oblique -12deg" but got "normal"
+FAIL css/css-fonts/test_font_family_parsing.html (812/2232 pass)
+  FAIL: font-family: simple — Cannot read properties of undefined
+  FAIL: font: 16px simple — Cannot read properties of undefined
+  FAIL: font: 900px simple — Cannot read properties of undefined
+FAIL css/css-fonts/variations/font-style-parsing.html (17/43 pass)
+  FAIL: Font-style (supports): 'italic' followed by angle is invalid — assert_equals: Font-style supports: 'italic' followed by angle is invalid expected false but got true
+  FAIL: Font-style (supports): 'italic' followed by non-number is invalid — assert_equals: Font-style supports: 'italic' followed by non-number is invalid expected false but got true
+  FAIL: Font-style (supports): 'oblique' followed by number with invalid unit type is in valid — assert_equals: Font-style supports: 'oblique' followed by number with invalid unit type is in valid expected false but got true
+FAIL css/css-fonts/variations/font-variation-settings-inherit.html (1/3 pass)
+  FAIL: Test font-variation-settings for child inheritance — assert_equals: Child should override parent value. expected (string) "2" but got (undefined) undefined
+  FAIL: Test font-variation-settings for child override — assert_equals: Child should override parent value. expected "4" but got "3"
+FAIL css/css-fonts/variations/font-weight-lighter-bolder.html (6/22 pass)
+  FAIL: Test lighter font-weight for base weight 99 — assert_equals: Lighter value for 99 should match expected value. expected "99" but got "100"
+  FAIL: Test bolder font-weight for base weight 99 — assert_equals: Bolder value 99 should match expected value. expected "400" but got "700"
+  FAIL: Test bolder font-weight for base weight 100 — assert_equals: Bolder value 100 should match expected value. expected "400" but got "700"
+FAIL css/css-fonts/variations/font-weight-matching-installed-fonts.html (0/6 pass)
+  FAIL: Test native font matching on 'CSSTest Weights W2569' for weight 375 — Cannot read properties of undefined (reading 'width')
+  FAIL: Test native font matching on 'CSSTest Weights Full' for weight 375 — Cannot read properties of undefined (reading 'width')
+  FAIL: Test native font matching on 'CSSTest Weights W1479' for weight 475 — Cannot read properties of undefined (reading 'width')
+FAIL css/css-fonts/variations/font-weight-parsing.html (19/26 pass)
+  FAIL: @supports: Valid calc expression with units — assert_equals: Valid calc expression with units expected false but got true
+  FAIL: Computed style: Non-integer Values should be parsed successfully — assert_equals: Non-integer Values should be parsed successfully expected "400.5" but got "400"
+  FAIL: Computed style: Simple calc value — assert_equals: Simple calc value expected "100.5" but got "400"
+
+===========================================
+  WPT Results: css/css-fonts
+===========================================
+  Test files: 158 (pass=66 fail=91 err=1)
+  Subtests: 1761/4788 pass
+  Pass rate: 36.8%
+===========================================

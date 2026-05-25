@@ -1,0 +1,33 @@
+=== WPT Tests: css/selectors (262 files, 2 parallel, engine=kotori) ===
+FAIL css/selectors/attribute-selectors/attribute-case/cssom.html (0/72 pass)
+  FAIL: [foo="bar"] /* sanity check */ insertRule — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: [foo="bar"] /* sanity check */ getting CSSRule#cssText — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: [foo="bar"] /* sanity check */ getting CSSStyleRule#selectorText — Cannot read properties of undefined (reading 'insertRule')
+FAIL css/selectors/attribute-selectors/style-attribute-selector.html (0/11 pass)
+  FAIL: Match style attribute with no value — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: Match style attribute with empty value — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: Match style attribute with background value — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/selectors/child-indexed-pseudo-class.html (22/54 pass)
+  FAIL: Expected HTML element to match :first-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+  FAIL: Expected HTML element to match :last-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+  FAIL: Expected HTML element to match :only-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+FAIL css/selectors/dir-pseudo-on-bdi-element.html (2/5 pass)
+  FAIL: bdi element without dir content attribute — assert_false: expected false got true
+  FAIL: bdi element with invalid dir content attribute — assert_false: expected false got true
+  FAIL: bdi element with dir=auto content attribute — assert_false: expected false got true
+FAIL css/selectors/dir-pseudo-on-input-element.html (8/20 pass)
+  FAIL: input element whose type attribute is in the telephone state — assert_false: expected false got true
+  FAIL: input element whose type attribute is in the telephone state in a RTL block — assert_true: expected true got false
+  FAIL: input element whose type attribute is in the password state — assert_false: expected false got true
+FAIL css/selectors/dir-selector-querySelector.html (1/4 pass)
+  FAIL: :dir() requires exactly an ident argument — assert_throws_dom: function "[Function]" did not throw
+  FAIL: :dir() works in compound selectors — assert_equals: expected (undefined) undefined but got (object) null
+  FAIL: :dir() works in complex selectors — assert_equals: expected (undefined) undefined but got (object) null
+
+===========================================
+  WPT Results: css/selectors
+===========================================
+  Test files: 262 (pass=4 fail=6 err=252)
+  Subtests: 33/166 pass
+  Pass rate: 19.9%
+===========================================

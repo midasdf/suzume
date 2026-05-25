@@ -1,0 +1,151 @@
+=== WPT Tests: css/css-values (237 files, 2 parallel, engine=kotori) ===
+FAIL css/css-values/acos-asin-atan-atan2-computed.html (0/45 pass)
+  FAIL: acos(1) should be used-value-equivalent to 0deg — assert_not_equals: acos(1) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+  FAIL: atan(0) should be used-value-equivalent to 0deg — assert_not_equals: atan(0) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+  FAIL: asin(0) should be used-value-equivalent to 0deg — assert_not_equals: asin(0) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/acos-asin-atan-atan2-invalid.html (0/63 pass)
+  FAIL: e.style['transform'] = "rotate(asin())" should not set the property value — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: e.style['transform'] = "rotate(asin( ))" should not set the property value — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: e.style['transform'] = "rotate(asin(,))" should not set the property value — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL css/css-values/acos-asin-atan-atan2-serialize.html (0/62 pass)
+  FAIL: 'rotate(acos(1))' as a specified value should serialize as 'rotate(calc(0deg))'. — assert_equals: 'rotate(calc(0deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(0deg))" but got (undefined) undefined
+  FAIL: 'rotate(calc(acos(1)))' as a specified value should serialize as 'rotate(calc(0deg))'. — assert_equals: 'rotate(calc(0deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(0deg))" but got (undefined) undefined
+  FAIL: 'rotate(acos(-1))' as a specified value should serialize as 'rotate(calc(180deg))'. — assert_equals: 'rotate(calc(180deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(180deg))" but got (undefined) undefined
+FAIL css/css-values/animations/line-height-lh-transition.html (0/1 pass)
+  FAIL: lh unit length should change with transitioning line-height — Cannot read properties of undefined (reading 'offsetTop')
+FAIL css/css-values/attr-IACVT.html (0/1 pass)
+  FAIL: CSS Values Test: attr() IACVT — assert_not_equals: got disallowed value "rgb(255, 0, 0)"
+FAIL css/css-values/attr-container-style-query.html (0/1 pass)
+  FAIL: style query should implement to true — Cannot read properties of null (reading 'color')
+FAIL css/css-values/attr-length-specified.html (0/3 pass)
+  FAIL: type(<length>) lowercase — assert_equals: expected "3em" but got ""
+  FAIL: type(<length>) uppercase — assert_equals: expected "3em" but got ""
+  FAIL: Unit (em) number — assert_equals: expected "3em" but got ""
+FAIL css/css-values/attr-pseudo-elem-invalidation.html (0/6 pass)
+  FAIL: CSS Values and Units Test: attr() invalidation of pseudo elements — assert_not_equals: Change of attribute value should lead to invalidation of ::after element style. got disallowed value "16px"
+  FAIL: CSS Values and Units Test: attr() invalidation of pseudo elements 1 — assert_not_equals: Change of attribute value should lead to invalidation of ::backdrop element style. got disallowed value "16px"
+  FAIL: CSS Values and Units Test: attr() invalidation of pseudo elements 2 — assert_not_equals: Change of attribute value should lead to invalidation of ::before element style. got disallowed value "16px"
+FAIL css/css-values/attr-security.html (0/22 pass)
+  FAIL: '--x: image-set(attr(data-foo))' with data-foo="https://does-not-exist.test/404.png" — assert_equals: expected "image-set("https://does-not-exist.test/404.png")" but got ""
+  FAIL: 'background-image: image-set(attr(data-foo))' with data-foo="https://does-not-exist.test/404.png" — assert_equals: expected "none" but got ""
+  FAIL: 'background-image: image-set("https://does-not-exist.test/404.png")' with data-foo="https://does-not-exist.test/404.png" — assert_equals: expected "image-set(url("https://does-not-exist.test/404.png") 1dppx)" but got ""
+FAIL css/css-values/attr-serialization.html (0/1 pass)
+  FAIL: 'attr(data-foo type(<length>))' as a computed value should serialize as '10px'. — assert_equals: '10px' should round-trip exactly in computed values. expected (string) "10px" but got (undefined) undefined
+FAIL css/css-values/attr-universal-selector.html (0/1 pass)
+  FAIL: CSS Values and Units Test: attr() security limitations in universal selector  — assert_equals: 'background-image: attr(data-foo)' with data-foo='https://does-not-exist.test/404.png' expected "none" but got ""
+FAIL css/css-values/calc-angle-values.html (0/27 pass)
+  FAIL: addition of 2 angle units: deg plus deg — Cannot read properties of undefined (reading 'replace')
+  FAIL: addition of 2 angle units: deg plus rad — Cannot read properties of undefined (reading 'replace')
+  FAIL: addition of 2 angle units: deg plus grad — Cannot read properties of undefined (reading 'replace')
+FAIL css/css-values/calc-background-position-002.html (0/6 pass)
+  FAIL: testing background-position: calc(2px + 3px) calc(4px + 5px) — assert_equals: expected (string) "5px 9px" but got (undefined) undefined
+  FAIL: testing background-position: calc(18px - 7px) calc(19px - 7px) — assert_equals: expected (string) "11px 12px" but got (undefined) undefined
+  FAIL: testing background-position: calc(4 * 5px) calc(6px * 4) — assert_equals: expected (string) "20px 24px" but got (undefined) undefined
+FAIL css/css-values/calc-background-position-003.html (0/6 pass)
+  FAIL: testing background-position: calc(2px + 3px) calc(4px + 5px) — assert_equals: expected "calc(5px) calc(9px)" but got "calc(2px + 3px) calc(4px + 5px)"
+  FAIL: testing background-position: calc(18px - 7px) calc(19px - 7px) — assert_equals: expected "calc(11px) calc(12px)" but got "calc(18px - 7px) calc(19px - 7px)"
+  FAIL: testing background-position: calc(4 * 5px) calc(6px * 4) — assert_equals: expected "calc(20px) calc(24px)" but got "calc(4 * 5px) calc(6px * 4)"
+FAIL css/css-values/calc-catch-divide-by-0.html (0/21 pass)
+  FAIL: 'calc(100px * 0 / 0)' as a specified value should serialize as 'calc(NaN * 1px)'. — assert_equals: 'calc(NaN * 1px)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1px)" but got (undefined) undefined
+  FAIL: 'calc(100px / 0)' as a specified value should serialize as 'calc(infinity * 1px)'. — assert_equals: 'calc(infinity * 1px)' should round-trip exactly in specified values. expected (string) "calc(infinity * 1px)" but got (undefined) undefined
+  FAIL: 'calc(100px / (0))' as a specified value should serialize as 'calc(infinity * 1px)'. — assert_equals: 'calc(infinity * 1px)' should round-trip exactly in specified values. expected (string) "calc(infinity * 1px)" but got (undefined) undefined
+FAIL css/css-values/calc-complex-unresolved-serialize.html (0/12 pass)
+  FAIL: 'calc(pow(2, sign(1em - 18px)))' as a specified value should serialize as 'calc(pow(2, sign(1em - 18px)))'. — assert_equals: 'calc(pow(2, sign(1em - 18px)))' should round-trip exactly in specified values. expected (string) "calc(pow(2, sign(1em - 18px)))" but got (undefined) undefined
+  FAIL: 'calc(pow(2, sign(1em - 18px)))' as a computed value should serialize as '2'. — assert_equals: '2' should round-trip exactly in computed values. expected (string) "2" but got (undefined) undefined
+  FAIL: 'calc(pow(sign(1em - 18px), 2))' as a specified value should serialize as 'calc(pow(sign(1em - 18px), 2))'. — assert_equals: 'calc(pow(sign(1em - 18px), 2))' should round-trip exactly in specified values. expected (string) "calc(pow(sign(1em - 18px), 2))" but got (undefined) undefined
+FAIL css/css-values/calc-in-color-001.html (0/1 pass)
+  FAIL: calc() in color functions — assert_equals: rgb(calc(0), calc(255 + 0), calc(140 - 139 - 1)) expected "rgb(0, 255, 0)" but got "rgb(calc(0), calc(255 + 0), calc(140 - 139 - 1))"
+FAIL css/css-values/calc-in-font-feature-settings.html (0/1 pass)
+  FAIL: calc() in font-feature-settings — assert_in_array: value "" not in array ["'vert' 2", ""vert" 2"]
+FAIL css/css-values/calc-infinity-nan-computed.html (0/48 pass)
+  FAIL: Property width value 'calc(NaN * 1px)' — Cannot read properties of undefined (reading 'supports')
+  FAIL: Property width value 'calc(NaN * 1%)' — Cannot read properties of undefined (reading 'supports')
+  FAIL: Property width value 'calc(infinity * 1px)' — Cannot read properties of undefined (reading 'supports')
+FAIL css/css-values/calc-infinity-nan-serialize-angle.html (0/30 pass)
+  FAIL: 'rotate(calc(1deg * NaN))' as a specified value should serialize as 'rotate(calc(NaN * 1deg))'. — assert_equals: 'rotate(calc(NaN * 1deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(NaN * 1deg))" but got (undefined) undefined
+  FAIL: 'rotate(calc(1rad * NaN))' as a specified value should serialize as 'rotate(calc(NaN * 1deg))'. — assert_equals: 'rotate(calc(NaN * 1deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(NaN * 1deg))" but got (undefined) undefined
+  FAIL: 'rotate(calc(1turn * NaN))' as a specified value should serialize as 'rotate(calc(NaN * 1deg))'. — assert_equals: 'rotate(calc(NaN * 1deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(NaN * 1deg))" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-length.html (0/41 pass)
+  FAIL: 'calc(1px * NaN)' as a specified value should serialize as 'calc(NaN * 1px)'. — assert_equals: 'calc(NaN * 1px)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1px)" but got (undefined) undefined
+  FAIL: 'calc(1% * NaN)' as a specified value should serialize as 'calc(NaN * 1%)'. — assert_equals: 'calc(NaN * 1%)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1%)" but got (undefined) undefined
+  FAIL: 'calc(1in * NaN)' as a specified value should serialize as 'calc(NaN * 1px)'. — assert_equals: 'calc(NaN * 1px)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1px)" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-number.html (0/31 pass)
+  FAIL: 'calc(NaN)' as a specified value should serialize as 'calc(NaN)'. — assert_equals: 'calc(NaN)' should round-trip exactly in specified values. expected (string) "calc(NaN)" but got (undefined) undefined
+  FAIL: 'calc(infinity)' as a specified value should serialize as 'calc(infinity)'. — assert_equals: 'calc(infinity)' should round-trip exactly in specified values. expected (string) "calc(infinity)" but got (undefined) undefined
+  FAIL: 'calc(-infinity)' as a specified value should serialize as 'calc(-infinity)'. — assert_equals: 'calc(-infinity)' should round-trip exactly in specified values. expected (string) "calc(-infinity)" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-resolution.html (0/29 pass)
+  FAIL: 'image-set(url("") calc(1x * NaN))' as a specified value should serialize as 'image-set(url("") calc(NaN * 1dppx))'. — assert_equals: 'image-set(url("") calc(NaN * 1dppx))' should round-trip exactly in specified values. expected (string) "image-set(url("") calc(NaN * 1dppx))" but got (undefined) undefined
+  FAIL: 'image-set(url("") calc(1x * nan))' as a specified value should serialize as 'image-set(url("") calc(NaN * 1dppx))'. — assert_equals: 'image-set(url("") calc(NaN * 1dppx))' should round-trip exactly in specified values. expected (string) "image-set(url("") calc(NaN * 1dppx))" but got (undefined) undefined
+  FAIL: 'image-set(url("") calc(1dppx * NaN))' as a specified value should serialize as 'image-set(url("") calc(NaN * 1dppx))'. — assert_equals: 'image-set(url("") calc(NaN * 1dppx))' should round-trip exactly in specified values. expected (string) "image-set(url("") calc(NaN * 1dppx))" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-time.html (0/29 pass)
+  FAIL: 'calc(1s * NaN)' as a specified value should serialize as 'calc(NaN * 1s)'. — assert_equals: 'calc(NaN * 1s)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1s)" but got (undefined) undefined
+  FAIL: 'calc(1s * nan)' as a specified value should serialize as 'calc(NaN * 1s)'. — assert_equals: 'calc(NaN * 1s)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1s)" but got (undefined) undefined
+  FAIL: 'calc(1ms * NaN)' as a specified value should serialize as 'calc(NaN * 1s)'. — assert_equals: 'calc(NaN * 1s)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1s)" but got (undefined) undefined
+FAIL css/css-values/calc-invalid-parsing.html (0/6 pass)
+  FAIL: e.style['transform'] = "rotate(calc((0.25turn error)))" should not set the property value — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: e.style['width'] = "calc(7px * up)" should not set the property value — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: e.style['width'] = "round(nearest, 1px, 1px, 1px)" should not set the property value — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL css/css-values/calc-letter-spacing.html (0/6 pass)
+  FAIL: testing letter-spacing: calc(1 + 1px) — assert_equals: calc(1 + 1px) should compute to 20px expected (string) "20px" but got (undefined) undefined
+  FAIL: testing letter-spacing: calc(1 + 100%) — assert_equals: calc(1 + 100%) should compute to 20px expected (string) "20px" but got (undefined) undefined
+  FAIL: testing letter-spacing: calc(100%) — assert_equals: calc(100%) should compute to 100% expected (string) "100%" but got (undefined) undefined
+FAIL css/css-values/calc-linear-radial-conic-gradient-001.html (0/8 pass)
+  FAIL: testing background-image: linear-gradient(rgb(0, 128, 0) calc(0%), rgb(0, 0, 255)) — assert_equals: expected (string) "linear-gradient(rgb(0, 128, 0) 0%, rgb(0, 0, 255))" but got (undefined) undefined
+  FAIL: testing background-image: linear-gradient(calc(90deg), rgb(0, 128, 0), rgb(0, 0, 255)) — assert_equals: expected (string) "linear-gradient(90deg, rgb(0, 128, 0), rgb(0, 0, 255))" but got (undefined) undefined
+  FAIL: testing background-image: linear-gradient(calc(90deg), rgb(0, 128, 0) calc(0%), rgb(0, 0, 255)) — assert_equals: expected (string) "linear-gradient(90deg, rgb(0, 128, 0) 0%, rgb(0, 0, 255))" but got (undefined) undefined
+FAIL css/css-values/calc-nesting-002.html (0/11 pass)
+  FAIL: testing calc(20px + calc(80px)) — assert_equals: expected "calc(100px)" but got "calc(20px + calc(80px))"
+  FAIL: testing calc(calc(100px)) — assert_equals: expected "calc(100px)" but got "calc(calc(100px))"
+  FAIL: testing calc(calc(2) * calc(50px) — assert_equals: expected "calc(100px)" but got "calc(calc(2) * calc(50px)"
+FAIL css/css-values/calc-nesting.html (0/8 pass)
+  FAIL: e.style['left'] = "calc(20px + calc(80px))" should set the property value — assert_equals: serialization should be canonical expected (string) "calc(100px)" but got (undefined) undefined
+  FAIL: e.style['left'] = "calc(calc(100px))" should set the property value — assert_equals: serialization should be canonical expected (string) "calc(100px)" but got (undefined) undefined
+  FAIL: e.style['left'] = "calc(calc(2) * calc(50px))" should set the property value — assert_equals: serialization should be canonical expected (string) "calc(100px)" but got (undefined) undefined
+FAIL css/css-values/calc-numbers.html (0/12 pass)
+  FAIL: testing tab-size: calc(2 * 3) — assert_equals: calc(2 * 3) should compute to 6 expected (string) "6" but got (undefined) undefined
+  FAIL: testing tab-size: calc(2 * -4) — assert_equals: calc(2 * -4) should compute to 0 expected (string) "0" but got (undefined) undefined
+  FAIL: testing opacity: calc(2 / 4) — assert_equals: calc(2 / 4) should compute to 0.5 expected (string) "0.5" but got (undefined) undefined
+FAIL css/css-values/calc-rgb-percent-001.html (0/1 pass)
+  FAIL: testing rgb(calc(5% + 15%), calc(40% / 2), calc(5% * 4)) — assert_equals: expected "rgb(51, 51, 51)" but got ""
+FAIL css/css-values/calc-serialization-002.html (2/24 pass)
+  FAIL: testing calc(1vh + 2px + 3%) — assert_equals: expected "calc(3% + 2px + 1vh)" but got "calc(1vh + 2px + 3%)"
+  FAIL: testing calc(5px + 6em + 1vh) — assert_equals: expected "calc(6em + 5px + 1vh)" but got "calc(5px + 6em + 1vh)"
+  FAIL: testing calc(-8px + 9em + 1vh) — assert_equals: expected "calc(9em - 8px + 1vh)" but got "calc(-8px + 9em + 1vh)"
+FAIL css/css-values/calc-serialization.html (0/1 pass)
+  FAIL: calc() serialization — assert_equals: Serialization of calc(10px + 1vmin + 10%) expected "calc(10% + 10px + 1vmin)" but got "calc(10px + 1vmin + 10%)"
+FAIL css/css-values/calc-size/animation/calc-size-interpolation-expansion.html (0/1 pass)
+  FAIL: value at progress 0.75 in animation of "height" from "auto" to "calc-size(any, 0px)" — Cannot read properties of undefined (reading 'get')
+FAIL css/css-values/calc-size/animation/interpolate-size-which-value.html (0/4 pass)
+  FAIL: Use the after-change value of interpolate-size: numeric-only when starting CSS transition from 100px to min-content — assert_equals: width before change expected "100px" but got ""
+  FAIL: Use the non-animation value of interpolate-size: numeric-only when starting CSS animation from 100px to min-content — assert_equals: width with animation expected "100px" but got ""
+  FAIL: Use the after-change value of interpolate-size: numeric-only when starting CSS transition from 100px to min-content — assert_equals: width before change expected "0px" but got ""
+FAIL css/css-values/calc-size/calc-size-height-box-sizing.html (0/15 pass)
+  FAIL: resolved height with styles {"height":"auto"} — assert_equals: getComputedStyle(target).height expected "7px" but got ""
+  FAIL: resolved height with styles {"height":"auto","box-sizing":"border-box"} — assert_equals: getComputedStyle(target).height expected "19px" but got ""
+  FAIL: resolved height with styles {"height":"calc-size(auto, size)"} — assert_equals: getComputedStyle(target).height expected "7px" but got ""
+FAIL css/css-values/calc-size/calc-size-height.html (0/37 pass)
+  FAIL: resolved height for height in auto height container: calc-size(any, 357px) — assert_equals: expected "357px" but got "calc-size(any, 357px)"
+  FAIL: resolved height for height in definite height container: calc-size(any, 357px) — assert_equals: expected "357px" but got "calc-size(any, 357px)"
+  FAIL: resolved height for height in auto height container: calc-size(any, 31%) — assert_equals: expected "0px" but got "calc-size(any, 31%)"
+FAIL css/css-values/calc-size/calc-size-parsing.html (0/94 pass)
+  FAIL: e.style['width'] = "calc-size(auto, size)" should set the property value — assert_equals: serialization should be canonical expected (string) "calc-size(auto, size)" but got (undefined) undefined
+  FAIL: e.style['min-width'] = "calc-size(auto, size)" should set the property value — assert_equals: serialization should be canonical expected (string) "calc-size(auto, size)" but got (undefined) undefined
+  FAIL: e.style['height'] = "calc-size(auto, size)" should set the property value — assert_equals: serialization should be canonical expected (string) "calc-size(auto, size)" but got (undefined) undefined
+FAIL css/css-values/calc-size/calc-size-typed-om.html (0/19 pass)
+  FAIL: computedStyleMap serialization of width: calc-size(auto, size) — Cannot read properties of undefined (reading 'get')
+  FAIL: computedStyleMap serialization of width: calc-size(fit-content, size) — Cannot read properties of undefined (reading 'get')
+  FAIL: computedStyleMap serialization of height: calc-size(min-content, size * 2) — Cannot read properties of undefined (reading 'get')
+FAIL css/css-values/calc-size/calc-size-width-box-sizing.html (0/15 pass)
+  FAIL: resolved width with styles {"width":"auto"} — assert_equals: getComputedStyle(target).width expected "7px" but got ""
+  FAIL: resolved width with styles {"width":"auto","box-sizing":"border-box"} — assert_equals: getComputedStyle(target).width expected "19px" but got ""
+  FAIL: resolved width with styles {"width":"calc-size(auto, size)"} — assert_equals: getComputedStyle(target).width expected "7px" but got ""
+
+===========================================
+  WPT Results: css/css-values
+===========================================
+  Test files: 237 (pass=28 fail=40 err=169)
+  Subtests: 182/930 pass
+  Pass rate: 19.6%
+===========================================
+
+EXIT=0

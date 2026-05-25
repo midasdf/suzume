@@ -1,0 +1,550 @@
+=== WPT Tests: css/selectors (262 files, 2 parallel, engine=kotori) ===
+FAIL css/selectors/attribute-selectors/attribute-case/cssom.html (0/72 pass)
+  FAIL: [foo="bar"] /* sanity check */ insertRule — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: [foo="bar"] /* sanity check */ getting CSSRule#cssText — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: [foo="bar"] /* sanity check */ getting CSSStyleRule#selectorText — Cannot read properties of undefined (reading 'insertRule')
+FAIL css/selectors/child-indexed-pseudo-class.html (22/54 pass)
+  FAIL: Expected HTML element to match :first-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+  FAIL: Expected HTML element to match :last-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+  FAIL: Expected HTML element to match :only-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+FAIL css/selectors/attribute-selectors/style-attribute-selector.html (0/11 pass)
+  FAIL: Match style attribute with no value — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: Match style attribute with empty value — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: Match style attribute with background value — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/selectors/dir-pseudo-on-bdi-element.html (2/5 pass)
+  FAIL: bdi element without dir content attribute — assert_false: expected false got true
+  FAIL: bdi element with invalid dir content attribute — assert_false: expected false got true
+  FAIL: bdi element with dir=auto content attribute — assert_false: expected false got true
+FAIL css/selectors/dir-pseudo-on-input-element.html (8/20 pass)
+  FAIL: input element whose type attribute is in the telephone state — assert_false: expected false got true
+  FAIL: input element whose type attribute is in the telephone state in a RTL block — assert_true: expected true got false
+  FAIL: input element whose type attribute is in the password state — assert_false: expected false got true
+FAIL css/selectors/dir-selector-querySelector.html (1/4 pass)
+  FAIL: :dir() requires exactly an ident argument — assert_throws_dom: function "[Function]" did not throw
+  FAIL: :dir() works in compound selectors — assert_equals: expected (undefined) undefined but got (object) null
+  FAIL: :dir() works in complex selectors — assert_equals: expected (undefined) undefined but got (object) null
+FAIL css/selectors/first-of-type.html (1/9 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Thre is another child element of the same type. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is a prior child element of another type. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/first-child.html (0/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is the second child element. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/focus-visible-007.html (0/1 pass)
+  FAIL: Using keyboard while element is focused should trigger :focus-visible; using mouse without moving focus should not cancel it; moving focus using mouse should cancel it. — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-006.html (0/1 pass)
+  FAIL: Focus should always match :focus-visible on content editable divs — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-009.html (0/1 pass)
+  FAIL: Autofocus should match :focus-visible — Cannot read properties of null (reading 'outlineColor')
+FAIL css/selectors/focus-visible-008.html (0/1 pass)
+  FAIL: Programmatic focus after keypress should match :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-010.html (0/1 pass)
+  FAIL: Programmatic focus on page load should match :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-013.html (0/1 pass)
+  FAIL: :focus-visible does not match after mouse click even if previous focused element was matching :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-014.html (0/1 pass)
+  FAIL: :focus-visible matches after script focus move — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-015.html (0/1 pass)
+  FAIL: :focus-visible does not match after script focus move — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-016.html (0/1 pass)
+  FAIL: :focus-visible always match on text inputs — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-017-2.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-017.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: By default initial programatic focus matches ':focus-visible', so the element shows a focus ring with 'outline-style: auto' — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-021.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Ctrl key doesn't make an element to stop matching :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-023.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: :focus-visible stop matching after blur — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-022.tentative.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-001.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Script focus without any previous user interaction matches :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-script-focus-002.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Script focus after mouse click does match :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-script-focus-003.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Script focus after blur after mouse click does match :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-script-focus-004.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Script focus after keyboard event does match :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-script-focus-005.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Script focus after blur after keyboard event does match :focus-visible — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/selectors/focus-visible-script-focus-006.tentative.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-007.tentative.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-008-b.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-008.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-009.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-010.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-012.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-011.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-013.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-014.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-016.tentative.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-015.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-017.tentative.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-018.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-019.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-visible-script-focus-020.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/focus-within-009.html (4/12 pass)
+  FAIL: Focus 'target1' — assert_array_equals: lengths differ, expected array ["html", "body", "test", "container1", "sibling2", "target1"] length 6, got [] length 0
+  FAIL: Focus 'target2' — assert_array_equals: lengths differ, expected array ["html", "body", "test", "container2", "sibling5", "target2"] length 6, got [] length 0
+  FAIL: Focus 'target1' again — assert_array_equals: lengths differ, expected array ["html", "body", "test", "container1", "sibling2", "target1"] length 6, got [] length 0
+FAIL css/selectors/focus-within-toplayer-001.html (0/3 pass)
+  FAIL: Focusing inside a modal dialog should not propagate :focus-within beyond the dialog. — assert_true: input should be focused expected true got false
+  FAIL: Focusing inside a popover should not propagate :focus-within beyond the popover. — assert_true: input should be focused expected true got false
+  FAIL: With nested top layer elements, :focus-within should stop at the innermost top layer boundary. — assert_true: input should be focused expected true got false
+FAIL css/selectors/has-basic.html (0/18 pass)
+  FAIL: :has(#a) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :has(.ancestor) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :has(.target) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+FAIL css/selectors/has-matches-to-uninserted-elements.html (11/12 pass)
+  FAIL: :has(~ indirect_sibling) matches expectedly — assert_equals: expected true but got false
+FAIL css/selectors/has-relative-argument.html (0/35 pass)
+  FAIL: .x:has(.a) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: .x:has(.a > .b) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: .x:has(.a .b) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+FAIL css/selectors/has-specificity.html (0/8 pass)
+  FAIL: :has(#foo) wins over :has(.foo) — Cannot read properties of null (reading 'getPropertyValue')
+  FAIL: :has(span#foo) wins over :has(#foo) — Cannot read properties of null (reading 'getPropertyValue')
+  FAIL: :has(.bar, #foo) has same specificity as :has(#foo, .bar) — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/selectors/hash-collision.html (0/1 pass)
+  FAIL: Test string hash collision in bucketing — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/selectors/i18n/css3-selectors-lang-001.html (0/1 pass)
+  FAIL: A :lang value that matches an identical lang attribute value on the same element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-002.html (0/1 pass)
+  FAIL: A :lang value that matches an identical lang attribute value on a parent element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-004.html (0/1 pass)
+  FAIL: A :lang value will match a lang attribute value regardless of case differences. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-005.html (0/1 pass)
+  FAIL: A :lang value will match a lang attribute value when the latter contains additional subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-006.html (0/1 pass)
+  FAIL: A :lang value will NOT match a lang attribute value when the former contains more subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-007.html (0/1 pass)
+  FAIL: When the :lang value uses a single subtag, it will NOT match against an attribute value where it appears in a different position. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-008.html (0/1 pass)
+  FAIL: A :lang value with language and region subtags will match a lang attribute value with the same subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-009.html (0/1 pass)
+  FAIL: A :lang value with a multiple subtags will match a lang attribute value with multiple subtags as long as the first part is the same. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-010.html (0/1 pass)
+  FAIL: A :lang value and a lang attribute value will NOT match if their region subtags differ. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-011.html (0/1 pass)
+  FAIL: A :lang value with language, script and region subtags will match a lang attribute value with the same language, script and region subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-012.html (0/1 pass)
+  FAIL: A :lang value with language, script and region subtags will NOT match a lang attribute value with the script subtag missing. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-014.html (0/1 pass)
+  FAIL: A :lang value with language and region subtags will match a lang attribute value with language, script and region subtags under CSS Selectors 4, but not Selectors 3. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-015.html (0/1 pass)
+  FAIL: A :lang value will match a lang attribute value regardless of case differences in the script tag. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-016.html (0/1 pass)
+  FAIL: A :lang value that matches an identical xml:lang attribute value will NOT produce styling in pages served as HTML. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-021.html (0/1 pass)
+  FAIL: A lang|= value that matches an identical lang attribute value on the same element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-022.html (0/1 pass)
+  FAIL: A lang|= value that matches an identical lang attribute value on the parent element will NOT produce styling. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-024.html (0/1 pass)
+  FAIL: A lang|= value will match a lang attribute value regardless of case differences. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-025.html (0/1 pass)
+  FAIL: A lang|= value will match a lang attribute value when the latter contains additional subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-026.html (0/1 pass)
+  FAIL: A lang|= value will NOT match a lang attribute value when the former contains more subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-027.html (0/1 pass)
+  FAIL: When the lang|= value uses a single subtag, it will NOT match against an attribute value where it appears in a different position. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-028.html (0/1 pass)
+  FAIL: A lang|= value with language and region subtags will match a lang attribute value with the same subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-029.html (0/1 pass)
+  FAIL: A lang|= value with a multiple subtags will match a lang attribute value with multiple subtags as long as the first part is the same. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-030.html (0/1 pass)
+  FAIL: A lang|= value and a lang attribute value will NOT match if their region subtags differ. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-031.html (0/1 pass)
+  FAIL: A lang|= value with language, script and region subtags will match a lang attribute value with the same language, script and region subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-032.html (0/1 pass)
+  FAIL: A lang|= value with language, script and region subtags will NOT match a lang attribute value with the script subtag missing. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-034.html (0/1 pass)
+  FAIL: A lang|= value with language and region subtags will NOT match a lang attribute value with language, script and region subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-035.html (0/1 pass)
+  FAIL: A lang|= value will match a lang attribute value regardless of case differences in the script tag. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-036.html (0/1 pass)
+  FAIL: A [lang|='es'] value that matches an identical xml:lang attribute value will NOT produce styling in pages served as HTML. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-041.html (0/1 pass)
+  FAIL: A lang= value that matches an identical lang attribute value on the same element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-042.html (0/1 pass)
+  FAIL: A lang|= value that matches an identical lang attribute value on the parent element will NOT produce styling. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-044.html (0/1 pass)
+  FAIL: A lang= value will match a lang attribute value regardless of case differences. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-045.html (0/1 pass)
+  FAIL: A lang= value will NOT match a lang attribute value when the latter contains additional subtags. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-046.html (0/1 pass)
+  FAIL: A lang= value will NOT match a lang attribute value when the former contains more subtags. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-047.html (0/1 pass)
+  FAIL: When the lang= value uses a single subtag, it will NOT match against an attribute value where it appears in a different position. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-048.html (0/1 pass)
+  FAIL: A lang= value with language and region subtags will match a lang attribute value with the same subtags. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-049.html (0/1 pass)
+  FAIL: A lang= value with multiple subtags will NOT match a lang attribute value with multiple subtags if the latter has more subtags, even if the first two subtags are the same. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-050.html (0/1 pass)
+  FAIL: A lang= value and a lang attribute value will NOT match if their region subtags differ. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-051.html (0/1 pass)
+  FAIL: A lang= value with language, script and region subtags will match a lang attribute value with the same language, script and region subtags. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-052.html (0/1 pass)
+  FAIL: A lang= value with language, script and region subtags will NOT match a lang attribute value with the script subtag missing. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-054.html (0/1 pass)
+  FAIL: A lang= value with language and region subtags will NOT match a lang attribute value with language, script and region subtags. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-055.html (0/1 pass)
+  FAIL: A lang= value will match a lang attribute value regardless of case differences in the script tag. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-056.html (0/1 pass)
+  FAIL: A [lang='es'] value that matches an identical xml:lang attribute value will NOT produce styling in pages served as HTML. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/lang-pseudo-class-disconnected.html (0/1 pass)
+  FAIL: :lang pseudo class should work in a disconnected subtree — Cannot read properties of undefined (reading 'querySelector')
+FAIL css/selectors/invalidation/any-link-pseudo.html (0/1 pass)
+  FAIL: Style was recalculated for the :any-link pseudo class. — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/selectors/invalidation/attribute.html (0/6 pass)
+  FAIL: [att] selector is effective — Cannot read properties of null (reading 'color')
+  FAIL: [att=val] selector is effective — Cannot read properties of undefined (reading 'parentElement')
+  FAIL: [att~=val] selector is effective — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/child-indexed-pseudo-classes-in-has.html (0/6 pass)
+  FAIL: Initial colors: #only_child — Cannot read properties of null (reading 'color')
+  FAIL: Initial colors: #first_child — Cannot read properties of null (reading 'color')
+  FAIL: Initial colors: #last_child — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/defined-in-has.html (0/1 pass)
+  FAIL: Test :has() invalidation with :defined pseudo-class — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/selectors/invalidation/defined.html (0/1 pass)
+  FAIL: :defined selector is effective — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/empty-pseudo-in-has.html (0/1 pass)
+  FAIL: Empty #subject — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/enabled-disabled.html (0/2 pass)
+  FAIL: Element updates when disabled — Cannot read properties of null (reading 'left')
+  FAIL: Element updates when enabled — Cannot read properties of null (reading 'left')
+FAIL css/selectors/invalidation/first-child-last-child.html (0/2 pass)
+  FAIL: Adding multiple nodes at once should invalidate :first-child correctly. — assert_equals: expected "rgb(0, 0, 0)" but got "rgb(0, 0, 255)"
+  FAIL: Adding multiple nodes at once should invalidate :last-child correctly. — assert_equals: expected "rgb(0, 0, 0)" but got "rgb(255, 0, 0)"
+FAIL css/selectors/invalidation/fullscreen-pseudo-class-in-has.html (0/2 pass)
+  FAIL: :fullscreen pseudo-class invalidation with requestFullscreen + exitFullscreen — Cannot read properties of null (reading 'color')
+  FAIL: :fullscreen pseudo-class invalidation with requestFullscreen + remove — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-complexity.html (0/1 pass)
+  FAIL: Before appending 25000 elements — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-in-ancestor-position.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-in-adjacent-position.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-in-parent-position.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-in-sibling-position.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-sibling-insertion-removal.html (0/1 pass)
+  FAIL: subject1: initial color should be rgb(128, 128, 128) — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-sibling.html (0/1 pass)
+  FAIL: initial_color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-side-effect.html (0/1 pass)
+  FAIL: Initial colors — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-unstyled.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-with-is-child-combinator.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-with-not.html (0/1 pass)
+  FAIL: Initial color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/has-with-nth-child.html (0/5 pass)
+  FAIL: Initially red — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: :nth-child() no longer matching after removal — Cannot read properties of undefined (reading 'remove')
+  FAIL: :nth-last-child() no longer matching after removal — Cannot read properties of undefined (reading 'remove')
+FAIL css/selectors/invalidation/heading-pseudo-class-in-has.html (0/6 pass)
+  FAIL: Initial colors: #has_heading_1 — Cannot read properties of null (reading 'color')
+  FAIL: Initial colors: #has_heading_2 — Cannot read properties of null (reading 'color')
+  FAIL: Initial colors: #has_heading_3 — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/input-in-range-in-has-with-readonly.html (0/1 pass)
+  FAIL: :in-range in :has() invalidation when setting readonly — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/input-pseudo-classes-in-has.html (0/1 pass)
+  FAIL: :checked & :indeterminate invalidation on <input> — Cannot set properties of undefined (setting 'checked')
+FAIL css/selectors/invalidation/is-pseudo-containing-sibling-relationship-in-has.html (0/21 pass)
+  FAIL: Initially red — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: sibling selector enclosed by :is() no longer matching after removal (1) — Cannot read properties of undefined (reading 'remove')
+  FAIL: sibling selector enclosed by :is() no longer matching after removal (2) — Cannot read properties of undefined (reading 'remove')
+FAIL css/selectors/invalidation/is.html (0/7 pass)
+  FAIL: Preconditions. — Cannot read properties of null (reading 'color')
+  FAIL: Invalidate :is() for simple selector arguments. — Cannot set properties of undefined (setting 'className')
+  FAIL: Invalidate :is() for compound selector arguments. — Cannot set properties of undefined (setting 'className')
+FAIL css/selectors/invalidation/link-pseudo-class-in-has.html (0/2 pass)
+  FAIL: :any-link & :link pseudo-class invalidation with an HTML link — Cannot read properties of null (reading 'color')
+  FAIL: :any-link & :link pseudo-class invalidation with an SVG link — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/link-pseudo-in-has.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: :link, :visited :any-link, pseudo-class in :has() argument — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/location-pseudo-classes-in-has.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: location pseudo classes in :has() argument — Cannot read properties of undefined (reading 'replaceState')
+FAIL css/selectors/invalidation/media-loading-pseudo-classes-in-has.sub.html (0/2 pass)
+  FAIL: Test :has(:stalled) invalidation — assert_implements: :stalled is not supported undefined
+  FAIL: Test :has(:buffering) invalidation — assert_implements: :buffering is not supported undefined
+FAIL css/selectors/invalidation/media-pseudo-classes-in-has.html (0/3 pass)
+  FAIL: Test :playing pseudo-class — assert_implements: :playing is not supported undefined
+  FAIL: Test :seeking pseudo-class — assert_implements: :seeking is not supported undefined
+  FAIL: Test :muted pseudo-class — assert_implements: :muted is not supported undefined
+FAIL css/selectors/invalidation/modal-pseudo-class-in-has.html (0/5 pass)
+  FAIL: :modal pseudo-class is not active with dialog.show() — Cannot read properties of null (reading 'color')
+  FAIL: :modal pseudo-class invalidation with showModal + close — Cannot read properties of null (reading 'color')
+  FAIL: :modal pseudo-class invalidation with showModal + remove — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/not-001.html (1/2 pass)
+  FAIL: Invalidation of sibling combinators in :not() — assert_equals: expected "rgb(255, 255, 0)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/not-002.html (0/6 pass)
+  FAIL: Preconditions. — Cannot read properties of null (reading 'color')
+  FAIL: Invalidate :not() for simple selector arguments. — Cannot set properties of undefined (setting 'className')
+  FAIL: Invalidate :not() for compound selector arguments. — Cannot set properties of undefined (setting 'className')
+FAIL css/selectors/invalidation/not-pseudo-containing-sibling-relationship-in-has.html (0/3 pass)
+  FAIL: Initially red — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: :nth-child() enclosed by :not() matching after insertion — Cannot read properties of undefined (reading 'parentElement')
+  FAIL: :nth-last-child() enclosed by :not() matching after insertion — Cannot read properties of undefined (reading 'parentElement')
+FAIL css/selectors/invalidation/nth-child-whole-subtree.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: :nth-child(... of :not()) combined with whole subtree invalidation — Cannot read properties of undefined (reading 'classList')
+FAIL css/selectors/invalidation/open-pseudo-class-in-has.html (0/3 pass)
+  FAIL: :open pseudo-class invalidation with dialog.show() + dialog.close() — Cannot read properties of null (reading 'color')
+  FAIL: :open pseudo-class invalidation with dialog.show() + dialog.requestClose() — Cannot read properties of null (reading 'color')
+  FAIL: :open pseudo-class invalidation with dialog.show() + dialog.open = false — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/placeholder-shown.html (0/4 pass)
+  FAIL: Initially no placeholder text — Cannot read properties of null (reading 'color')
+  FAIL: Added placeholder text — Cannot read properties of undefined (reading 'setAttribute')
+  FAIL: Set placeholder text to empty string — Cannot read properties of undefined (reading 'setAttribute')
+FAIL css/selectors/invalidation/quirks-mode-stylesheet-dynamic-add-001.html (0/1 pass)
+  FAIL: Style should've changed to a green background — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(255, 0, 0)"
+FAIL css/selectors/invalidation/selectorText-dynamic-001.html (0/1 pass)
+  FAIL: Style should be recomputed correctly when the selector it depends on changes — Cannot read properties of undefined
+FAIL css/selectors/invalidation/sheet-going-away-001.html (0/1 pass)
+  FAIL: Style should be recomputed correctly when the stylesheet it depends on goes away — Cannot read properties of undefined (reading 'remove')
+FAIL css/selectors/invalidation/sibling.html (0/7 pass)
+  FAIL: Adjacent with universal selector — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: Indirect adjacent with universal selector — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: Indirect adjacent with two adjacent selectors — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/selectors/invalidation/state-in-has.html (0/1 pass)
+  FAIL: Test :has() invalidation with :state() pseudo-classes — Cannot read properties of undefined (reading 'define')
+FAIL css/selectors/invalidation/subject-has-invalidation-with-display-none-anchor-element.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: subject :has() invalidation with display: none anchor element — Cannot set properties of undefined (setting 'checked')
+FAIL css/selectors/invalidation/target-pseudo-in-has.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: :target pseudo-class in :has() argument — Cannot set properties of undefined (setting 'hash')
+FAIL css/selectors/invalidation/typed-child-indexed-pseudo-classes-in-has.html (0/6 pass)
+  FAIL: Initial colors: #only_of_type — Cannot read properties of null (reading 'color')
+  FAIL: Initial colors: #first_of_type — Cannot read properties of null (reading 'color')
+  FAIL: Initial colors: #last_of_type — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/user-valid-user-invalid.html (0/1 pass)
+  FAIL: :user-valid and :user-invalid should invalidate after user input. — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/where.html (0/5 pass)
+  FAIL: Preconditions. — Cannot read properties of null (reading 'color')
+  FAIL: Invalidate :where() for simple selector arguments. — Cannot set properties of undefined (setting 'className')
+  FAIL: Invalidate :where() for compound selector arguments. — Cannot set properties of undefined (setting 'className')
+FAIL css/selectors/is-nested.html (0/2 pass)
+  FAIL: Test nested :is() chooses highest specificity for class outside :is(). — Cannot read properties of null (reading 'color')
+  FAIL: Test nested :is() specificity for class within arguments. — Cannot read properties of null (reading 'color')
+FAIL css/selectors/is-specificity-shadow.html (0/1 pass)
+  FAIL: Specificity of :host() inside :is() — Cannot read properties of null (reading 'color')
+FAIL css/selectors/is-specificity.html (0/1 pass)
+  FAIL: Test :is() uses highest possible specificity — Cannot read properties of null (reading 'width')
+FAIL css/selectors/is-where-basic.html (0/15 pass)
+  FAIL: :is() matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :is(#a) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :is(#a, #f) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+FAIL css/selectors/is-where-not.html (0/18 pass)
+  FAIL: :not(:is(#a)) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :not(:where(#b)) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :not(:where(:root #c)) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+FAIL css/selectors/is-where-pseudo-classes.html (0/1 pass)
+  FAIL: :is() combined with pseudo-classes — Cannot read properties of null (reading 'color')
+FAIL css/selectors/last-child.html (0/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is a prior child element. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/last-of-type.html (1/9 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Thre is another child element of the same type. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is a posterior child element of another type. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/media/media-loading-state-timing.sub.html (0/1 pass)
+  FAIL: Test :stalled timing relative to waiting and timeupdate events — assert_implements: :stalled is not supported undefined
+FAIL css/selectors/media/media-playback-state-timing.html (0/3 pass)
+  FAIL: Test :playing and :paused timing without media resource — assert_implements: :playing is not supported undefined
+  FAIL: Test :playing and :paused timing with a media resource — assert_implements: :playing is not supported undefined
+  FAIL: Test :seeking timing when setting currentTime — assert_implements: :seeking is not supported undefined
+FAIL css/selectors/media/media-playback-state.html (1/5 pass)
+  FAIL: Test that non-media elements do not match :playing, :paused, or :seeking — assert_implements: :playing is not supported undefined
+  FAIL: Test :playing pseudo-class — assert_implements: :playing is not supported undefined
+  FAIL: Test :paused pseudo-class — assert_implements: :paused is not supported undefined
+FAIL css/selectors/missing-right-token.html (0/1 pass)
+  FAIL: attribute selectors with missing right tokens succeed — assert_equals: expected (undefined) undefined but got (object) null
+FAIL css/selectors/modal-pseudo-class.html (0/2 pass)
+  FAIL: Test that :modal matches modal <dialog> — assert_true: dialog should match :modal after showModal() call expected true got false
+  FAIL: Test that :modal matches the fullscreen element — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/not-complex.html (0/20 pass)
+  FAIL: :not(#a) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :not(#a #d) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+  FAIL: :not(#b div) matches expected elements — Cannot read properties of undefined (reading 'querySelectorAll')
+FAIL css/selectors/not-specificity.html (0/8 pass)
+  FAIL: :not(#foo) wins over :not(.foo) — Cannot read properties of null (reading 'getPropertyValue')
+  FAIL: :not(div#foo) wins over :not(#foo) — Cannot read properties of null (reading 'getPropertyValue')
+  FAIL: :not(.bar, #foo) has same specificity as :not(#foo, .bar) — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/selectors/nth-last-child-invalid.html (0/1 pass)
+  FAIL: CSS Selectors: :nth-last-child() with no argument — Cannot read properties of null (reading 'color')
+FAIL css/selectors/only-child.html (1/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Non-whitespace text node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/only-of-type.html (1/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Non-whitespace text node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/open-pseudo.html (0/3 pass)
+  FAIL: The dialog element should support :open. — assert_equals: :open style should not be applied when the dialog is closed expected "auto" but got ""
+  FAIL: The details element should support :open. — assert_equals: :open style should not be applied when the details is closed expected "auto" but got ""
+  FAIL: The select element should support :open. — assert_equals: :open style should not be applied when the select is closed expected "auto" but got ""
+FAIL css/selectors/parsing/invalid-pseudos.html (0/12 pass)
+  FAIL: ":-internal-animating-full-screen-transition" should be an invalid selector — assert_throws_dom: ":-internal-animating-full-screen-transition" should throw in querySelector function "[Function]" did not throw
+  FAIL: ":-internal-fullscreen-document" should be an invalid selector — assert_throws_dom: ":-internal-fullscreen-document" should throw in querySelector function "[Function]" did not throw
+  FAIL: ":-internal-html-document" should be an invalid selector — assert_throws_dom: ":-internal-html-document" should throw in querySelector function "[Function]" did not throw
+FAIL css/selectors/parsing/parse-anplusb.html (0/112 pass)
+  FAIL: :nth-child(1n+0) should be parsed and serialized correctly — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: :nth-child(n+0) should be parsed and serialized correctly — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: :nth-child(n) should be parsed and serialized correctly — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-attribute.html (0/16 pass)
+  FAIL: "[att]" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "[att=val]" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "[att~=val]" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-child.html (0/2 pass)
+  FAIL: "body > p" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "div ol>li p" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-class.html (0/4 pass)
+  FAIL: "*.pastoral" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ".pastoral" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "h1.pastoral" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-descendant.html (0/3 pass)
+  FAIL: "h1 em" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "div * p" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "div p *[href]" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-focus-visible.html (0/3 pass)
+  FAIL: ":focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "a:focus-visible" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":focus:not(:focus-visible)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-has-disallow-nesting-has-inside-has.html (0/2 pass)
+  FAIL: ".a:has(.b:has(.c))" should be an invalid selector — assert_throws_dom: ".a:has(.b:has(.c))" should throw in querySelector function "[Function]" did not throw
+  FAIL: CSS Selectors: The relational pseudo-class (disallow nesting :has() inside :has()) — assert_false: expected false got true
+FAIL css/selectors/parsing/parse-has-forgiving-selector.html (0/3 pass)
+  FAIL: ":has(:is(:has(*)))" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":has(:where(:has(*)))" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":has(:is(.a, 123))" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-has-slotted.tentative.html (0/23 pass)
+  FAIL: ":has-slotted(bar)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":has-slotted([attr=\"foo\"])" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":has-slotted(*)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-has.html (0/29 pass)
+  FAIL: ":has(a)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":has(#a)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":has(.a)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-heading.html (0/28 pass)
+  FAIL: ":heading" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":heading(2)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":heading(99999)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-id.html (0/3 pass)
+  FAIL: "h1#chapter1" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "#chapter1" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "*#z98y" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-is-where.html (0/33 pass)
+  FAIL: ":is(div )" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":where(div )" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":is(div + bar, div ~ .baz)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-is.html (0/6 pass)
+  FAIL: ":is(ul,ol,.list) > [hidden]" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":is(:hover,:focus)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "a:is(:not(:hover))" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-not.html (0/26 pass)
+  FAIL: "button:not([disabled])" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "*:not(foo)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":not(:link):not(:visited)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-part.html (0/32 pass)
+  FAIL: "::part(--foo)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "::part(bar)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "::part(--)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-sibling.html (0/3 pass)
+  FAIL: "math + p" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "h1.opener + h2" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "h1 ~ pre" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-slotted.html (0/19 pass)
+  FAIL: "::slotted(bar)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "::slotted([attr=\"foo\"])" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "::slotted(*)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-state.html (0/24 pass)
+  FAIL: ":state(--foo)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":state(bar)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":state(--)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-universal.html (0/3 pass)
+  FAIL: "*" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "div :first-child" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "div *:first-child" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/parsing/parse-where.html (0/6 pass)
+  FAIL: ":where(ul,ol,.list) > [hidden]" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: ":where(:hover,:focus)" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: "a:where(:not(:hover))" should be a valid selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/placeholder-shown.html (0/7 pass)
+  FAIL: CSS Selectors Test: :placeholder-shown matching — Cannot read properties of null (reading 'color')
+  FAIL: CSS Selectors Test: :placeholder-shown matching 1 — Cannot read properties of null (reading 'color')
+  FAIL: CSS Selectors Test: :placeholder-shown matching 2 — Cannot read properties of null (reading 'color')
+FAIL css/selectors/query/query-is.html (0/6 pass)
+  FAIL: Selector '.a :is(.b, .c)" should find the expected elements — assert_equals: expected 5 but got 0
+  FAIL: Selector '.a :is(.c#d, .e)" should find the expected elements — assert_equals: expected 2 but got 0
+  FAIL: Selector '.a :is(.e+.f, .g>.b, .h)" should find the expected elements — assert_equals: expected 3 but got 0
+FAIL css/selectors/query/query-where.html (0/6 pass)
+  FAIL: Selector '.a :where(.b, .c)" should find the expected elements — assert_equals: expected 5 but got 0
+  FAIL: Selector '.a :where(.c#d, .e)" should find the expected elements — assert_equals: expected 2 but got 0
+  FAIL: Selector '.a :where(.e+.f, .g>.b, .h)" should find the expected elements — assert_equals: expected 3 but got 0
+FAIL css/selectors/scope-selector.html (1/3 pass)
+  FAIL: Untitled 1 — Cannot read properties of undefined (reading 'length')
+  FAIL: querySelector() with ":scope" should return the document element, if present in the subtree — assert_equals: should return null expected (object) null but got (undefined) undefined
+FAIL css/selectors/selector-placeholder-shown-emptify-placeholder.html (0/2 pass)
+  FAIL: input:placeholder-shown should not be matched — assert_false: expected false got true
+  FAIL: textarea:placeholder-shown should not be matched — assert_false: expected false got true
+FAIL css/selectors/selectors-4/lang-singleton-subtag-matching.html (2/10 pass)
+  FAIL: :lang(fr-x) matches lang="fr-x" and lang="fr-x-standard" (singleton "x" matches) — assert_equals: expected 2 but got 0
+  FAIL: :lang(fr-x) matches the correct elements — assert_equals: expected 2 but got 0
+  FAIL: :lang(fr-standard) only matches lang="fr-standard" (not lang="fr-x-standard") — assert_equals: expected 1 but got 0
+FAIL css/selectors/user-invalid.html (0/8 pass)
+  FAIL: :user-error selector should not be supported — assert_throws_dom: function "[Function]" did not throw
+  FAIL: :user-invalid selector should respond to user action — Cannot read properties of undefined (reading 'valid')
+  FAIL: :user-invalid selector properly interacts with submit & reset buttons — Cannot read properties of undefined (reading 'valid')
+FAIL css/selectors/user-valid-user-invalid-multifield-inputs.tentative.html (0/3 pass)
+  FAIL: <input type=date> keyboard behavior for :user-valid/:user-invalid. — assert_equals: Date input should not have a value at the start of the test. expected (string) "" but got (undefined) undefined
+  FAIL: <input type=time> keyboard behavior for :user-valid/:user-invalid. — assert_equals: Time input should not have a value at the start of the test. expected (string) "" but got (undefined) undefined
+  FAIL: <input type=datetime-local> keyboard behavior for :user-valid/:user-invalid. — assert_equals: Datetime input should not have a value at the start of the test. expected (string) "" but got (undefined) undefined
+FAIL css/selectors/user-valid.html (0/5 pass)
+  FAIL: :user-valid selector should respond to user action — Cannot read properties of undefined (reading 'valid')
+  FAIL: :user-valid selector properly interacts with submit & reset buttons — Cannot read properties of undefined (reading 'valid')
+  FAIL: Checkboxes should match :user-valid after the user clicks on it. — assert_false: Checkbox should not be checked at the start of the test. expected false got undefined
+FAIL css/selectors/valid-invalid-form-fieldset.html (0/1 pass)
+  FAIL: form and fieldset elements should match :valid/:invalid but not :user-valid/:user-invalid. — Cannot read properties of null (reading 'matches')
+FAIL css/selectors/webkit-pseudo-element.html (1/4 pass)
+  FAIL: rules include webkit-prefixed pseudo-element should be cascaded — assert_equals: expected "rgb(0, 255, 0)" but got "rgb(255, 0, 0)"
+  FAIL: webkit-prefixed pseudo-element selectors should be accessible from CSSOM — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: webkit-prefix without dash is invalid — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/selectors/x-pseudo-element.html (0/1 pass)
+  FAIL: x-prefixed pseudo-elements should make the whole rule invalid — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(255, 0, 0)"
+
+===========================================
+  WPT Results: css/selectors
+===========================================
+  Test files: 262 (pass=67 fail=194 err=1)
+  Subtests: 69/1052 pass
+  Pass rate: 6.6%
+===========================================

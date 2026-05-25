@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"git worktree remove .claude/worktrees/track-d-html-reflect --force 2>&1; git branch -D wave8/html-reflection-fixes 2>&1\",\"description\":\"Remove unused Track D worktree\"}",
+  "error": "Exit code 128\nfatal: Unable to read current working directory: そのようなファイルやディレクトリはありません",
+  "timestamp": "2026-04-20T13:27:06.065Z",
+  "retry_count": 1
+}

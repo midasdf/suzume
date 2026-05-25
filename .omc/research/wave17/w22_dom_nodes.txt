@@ -1,0 +1,406 @@
+=== WPT Tests: dom/nodes (245 files, 2 parallel, engine=kotori) ===
+FAIL dom/nodes/CharacterData-appendChild.html (6/9 pass)
+  FAIL: ProcessingInstruction.appendChild(Text) — assert_throws_dom: CharacterData type ProcessingInstruction must not have children function "[Function]" did not throw
+  FAIL: ProcessingInstruction.appendChild(Comment) — assert_throws_dom: CharacterData type ProcessingInstruction must not have children function "[Function]" did not throw
+  FAIL: ProcessingInstruction.appendChild(ProcessingInstruction) — assert_throws_dom: CharacterData type ProcessingInstruction must not have children function "[Function]" did not throw
+FAIL dom/nodes/CharacterData-remove.html (10/12 pass)
+  FAIL: remove() should work if PI does have a parent — HierarchyRequestError
+  FAIL: remove() should work if PI does have a parent and siblings — HierarchyRequestError
+FAIL dom/nodes/CharacterData-surrogates.html (0/8 pass)
+grep: (標準入力): binary file matches
+FAIL dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html (0/1 pass)
+  FAIL: createHTMLDocument(): from a saved and detached implementation does not return null — Cannot read properties of undefined (reading 'implementation')
+FAIL dom/nodes/DOMImplementation-createHTMLDocument.html (10/13 pass)
+  FAIL: createHTMLDocument test 0: [Array] — assert_equals: expected 1 but got 0
+  FAIL: createHTMLDocument test 7: [Array] — assert_equals: expected "foobar baz" but got "foo
+  FAIL: createHTMLDocument(): URL parsing — assert_equals: expected "http://example.org/?%C3%A4" but got "http://example.org/?ä"
+FAIL dom/nodes/Document-adoptNode.html (2/4 pass)
+  FAIL: Adopting an Element called 'x<' should work. — assert_equals: expected (object) Element node <x<>x</x<> but got (undefined) undefined
+  FAIL: Adopting an Element called ':good:times:' should work. — assert_equals: expected (object) Element node <:good:times:></:good:times:> but got (undefined) undefined
+FAIL dom/nodes/Document-constructor.html (4/5 pass)
+  FAIL: new Document(): URL parsing — assert_equals: expected "http://example.org/?%C3%A4" but got "http://example.org/?ä"
+FAIL dom/nodes/Document-contentType/contentType/xhr_responseType_document.html (0/1 pass)
+  FAIL: XHR - retrieve HTML document: document.contentType === 'application/xml' — Cannot read properties of undefined (reading 'open')
+FAIL dom/nodes/Document-createElement-namespace.html (8/11 pass)
+  FAIL: Created element's namespace in created XML document by DOMParser ('text/xml') — assert_equals: expected (object) null but got (string) "http://www.w3.org/1999/xhtml"
+  FAIL: Created element's namespace in created XML document by DOMParser ('application/xml') — assert_equals: expected (object) null but got (string) "http://www.w3.org/1999/xhtml"
+  FAIL: Created element's namespace in created SVG document by DOMParser ('image/svg+xml') — assert_equals: expected (object) null but got (string) "http://www.w3.org/1999/xhtml"
+FAIL dom/nodes/Document-createElement.html (12/147 pass)
+  FAIL: createElement(undefined) in HTML document — assert_equals: tagName expected "undefined" but got "UNDEFINED"
+  FAIL: createElement(undefined) in XML document — Cannot read properties of null (reading 'contentDocument')
+  FAIL: createElement(undefined) in XHTML document — Cannot read properties of null (reading 'contentDocument')
+FAIL dom/nodes/Document-createElementNS.html (96/596 pass)
+  FAIL: createElementNS test in XML document: [Array] — Cannot read properties of null (reading 'contentDocument')
+  FAIL: createElementNS test in XHTML document: [Array] — Cannot read properties of null (reading 'contentDocument')
+  FAIL: createElementNS test in XML document: [Array] — Cannot read properties of null (reading 'contentDocument')
+FAIL dom/nodes/Document-createEvent.https.html (273/279 pass)
+  FAIL: TouchEvent should be an alias for TouchEvent. — 'expose legacy touch event APIs'
+  FAIL: createEvent('TouchEvent') should be initialized correctly. — 'expose legacy touch event APIs'
+  FAIL: touchevent should be an alias for TouchEvent. — 'expose legacy touch event APIs'
+FAIL dom/nodes/Document-createProcessingInstruction.html (3/12 pass)
+  FAIL: Should throw an INVALID_CHARACTER_ERR for target "·A" and data "x". — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Should throw an INVALID_CHARACTER_ERR for target "×A" and data "x". — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Should throw an INVALID_CHARACTER_ERR for target "A×" and data "x". — assert_throws_dom: function "[Function]" did not throw
+FAIL dom/nodes/Document-doctype.html (1/2 pass)
+  FAIL: new Document() — HierarchyRequestError
+FAIL dom/nodes/Document-getElementById.html (14/18 pass)
+  FAIL: Calling document.getElementById with an empty string argument. — assert_equals: expected null but got Element node <div id=""></div>
+  FAIL: changing attribute's value via `Attr` gotten from `Element.attribute`. — assert_equals: should return null after updated id via Attr.value expected null but got Element node <div id="test7-updated"></div>
+  FAIL: add id attribute via outerHTML — assert_not_equals: should not be null got disallowed value null
+FAIL dom/nodes/Document-getElementsByClassName.html (0/1 pass)
+  FAIL: getElementsByClassName() should be a live collection — assert_equals: expected 2 but got 1
+FAIL dom/nodes/Document-getElementsByTagName.html (14/18 pass)
+  FAIL: Shouldn't be able to set unsigned properties on a HTMLCollection (non-strict mode) — assert_equals: expected (undefined) undefined but got (string) "foopy"
+  FAIL: Shouldn't be able to set unsigned properties on a HTMLCollection (strict mode) — assert_throws_js: function "[Function]" did not throw
+  FAIL: hasOwnProperty, getOwnPropertyDescriptor, getOwnPropertyNames — assert_equals: expected (object) Element node <pre id="x"></pre> but got (undefined) undefined
+FAIL dom/nodes/Document-getElementsByTagNameNS.html (13/14 pass)
+  FAIL: getElementsByTagNameNS() should be a live collection — assert_equals: expected 2 but got 1
+FAIL dom/nodes/Document-implementation.html (1/2 pass)
+  FAIL: Getting implementation off the same document — assert_true: implementation should implement DOMImplementation expected true got false
+FAIL dom/nodes/Document-importNode.html (4/5 pass)
+  FAIL: Import an Attr node with namespace/prefix correctly. — Cannot read properties of null (reading 'prefix')
+FAIL dom/nodes/DocumentFragment-getElementById.html (4/5 pass)
+  FAIL: It must return the first element when there are matches, using a template — Cannot read properties of null (reading 'hasAttribute')
+FAIL dom/nodes/DocumentType-remove.html (2/4 pass)
+  FAIL: remove() should work if doctype does have a parent — assert_equals: Appended node should have a parent expected Document node with 0 children but got null
+  FAIL: remove() should work if doctype does have a parent and siblings — assert_equals: Appended node should have a parent expected Document node with 0 children but got null
+FAIL dom/nodes/Element-children.html (0/2 pass)
+  FAIL: HTMLCollection edge cases — assert_true: Expected an Element. expected true got false
+  FAIL: HTMLCollection edge cases 1 — assert_array_equals: lengths differ, expected array ["0", "1", "2", "3", "4", "5", "foo", "bar", "baz"] length 9, got ["0", "1", "2", "3", "4", "5"] length 6
+FAIL dom/nodes/Element-closest.html (26/29 pass)
+  FAIL: Element.closest with context node 'test4' and selector ':scope' — assert_equals: :scope expected "test4" but got ""
+  FAIL: Element.closest with context node 'test4' and selector 'select > :scope' — assert_equals: select > :scope expected "test4" but got ""
+  FAIL: Element.closest with context node 'test4' and selector ':has(> :scope)' — assert_equals: :has(> :scope) expected "test3" but got ""
+FAIL dom/nodes/Element-getElementsByClassName.html (2/3 pass)
+  FAIL: getElementsByClassName() should be a live collection — assert_equals: expected 2 but got 1
+FAIL dom/nodes/Element-classlist.html (1395/1420 pass)
+  FAIL: classList.add("a") with attribute value "a a a  b" (HTML node) — assert_equals: wrong class after modification expected "a b" but got "a a a  b"
+  FAIL: classList.add("a") with attribute value "   a  a b" (HTML node) — assert_equals: wrong class after modification expected "a b" but got "   a  a b"
+  FAIL: classList.add("a", "a") with attribute value "a b c " (HTML node) — assert_equals: wrong class after modification expected "a b c" but got "a b c "
+FAIL dom/nodes/Element-getElementsByTagName.html (15/19 pass)
+  FAIL: Shouldn't be able to set unsigned properties on a HTMLCollection (non-strict mode) — assert_equals: expected (undefined) undefined but got (string) "foopy"
+  FAIL: Shouldn't be able to set unsigned properties on a HTMLCollection (strict mode) — assert_throws_js: function "[Function]" did not throw
+  FAIL: hasOwnProperty, getOwnPropertyDescriptor, getOwnPropertyNames — assert_equals: expected (object) Element node <pre id="x"></pre> but got (undefined) undefined
+FAIL dom/nodes/Element-getElementsByTagNameNS.html (15/16 pass)
+  FAIL: getElementsByTagNameNS() should be a live collection — assert_equals: expected 2 but got 1
+FAIL dom/nodes/Element-matches-namespaced-elements.html (3/6 pass)
+  FAIL: empty string namespace, webkitMatchesSelector — assert_true: expected true got undefined
+  FAIL: has a namespace, webkitMatchesSelector — assert_true: expected true got undefined
+  FAIL: has a namespace, *|, webkitMatchesSelector — assert_true: expected true got undefined
+FAIL dom/nodes/Element-removeAttribute.html (0/2 pass)
+  FAIL: removeAttribute should remove the first attribute, irrespective of namespace, when the first attribute is not in a namespace — assert_equals: expected 2 but got 1
+  FAIL: removeAttribute should remove the first attribute, irrespective of namespace, when the first attribute is in a namespace — assert_equals: expected 2 but got 1
+FAIL dom/nodes/Element-removeAttributeNS.html (0/1 pass)
+  FAIL: removeAttributeNS should take a local name. — assert_equals: expected "bb" but got "a:bb"
+FAIL dom/nodes/Element-setAttribute.html (1/2 pass)
+  FAIL: setAttribute should change the first attribute, irrespective of namespace — assert_equals: expected 2 but got 1
+FAIL dom/nodes/Element-tagName.html (3/6 pass)
+  FAIL: tagName should be updated when changing ownerDocument — assert_equals: tagName should be lowercase in XML expected "div" but got "HTML"
+  FAIL: tagName should be updated when changing ownerDocument (createDocument without prefix) — assert_equals: tagName should be lowercase in XML expected "div" but got "DIV"
+  FAIL: tagName should be updated when changing ownerDocument (createDocument with prefix) — Cannot read properties of null (reading 'tagName')
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL dom/nodes/MutationObserver-attributes.html (8/19 pass)
+  FAIL: attributes Element.id: same value mutation — assert_equals: mutation records must match expected 2 but got 1
+  FAIL: attributes Element.classList.remove: single token removal mutation — assert_equals: oldValue didn't match expected "c01 c02" but got "c02c02"
+  FAIL: attributes Element.classList.remove: multiple tokens removal mutation — assert_equals: oldValue didn't match expected "c01 c02" but got "01 c02"
+FAIL dom/nodes/MutationObserver-childList.html (22/28 pass)
+  FAIL: childList Node.nodeValue: no mutation — assert_equals: mutation records must match expected 1 but got 2
+  FAIL: childList Node.insertBefore: removal and addition mutations — assert_equals: mutation records must match expected 2 but got 1
+  FAIL: childList Node.insertBefore: fragment addition mutations — assert_array_equals: addedNodes didn't match lengths differ, expected array [Text node "11", Text node "22"] length 2, got [DocumentFragment node with 2 children] length 1
+FAIL dom/nodes/MutationObserver-document.html (0/3 pass)
+  FAIL: parser insertion mutations — assert_unreached: document observer did not trigger Reached unreachable code
+  FAIL: parser script insertion mutation — assert_unreached: document observer did not trigger Reached unreachable code
+  FAIL: removal of parent during parsing — assert_equals: nextSibling didn't match expected null but got Element node <script id="s012">
+FAIL dom/nodes/MutationObserver-sanity.html (9/13 pass)
+  FAIL: Should throw if none of childList, attributes, characterData are true — assert_throws_js: function "[Function]" did not throw
+  FAIL: Should throw if attributeOldValue is true and attributes is false — assert_throws_js: function "[Function]" did not throw
+  FAIL: Should throw if attributeFilter is present and attributes is false — assert_throws_js: function "[Function]" did not throw
+FAIL dom/nodes/MutationObserver-takeRecords.html (2/3 pass)
+  FAIL: All records present — assert_equals: mutation records must match expected 5 but got 2
+FAIL dom/nodes/MutationObserver-textContent.html (1/4 pass)
+  FAIL: Setting Element.textContent to the same value when the old node is a CDATASection — assert_equals: expected "foo" but got ""
+  FAIL: Setting Element.textContent — assert_equals: Should have one record expected 1 but got 3
+  FAIL: Setting Element.textContent to the same value — assert_equals: Should have one record expected 1 but got 2
+FAIL dom/nodes/Node-appendChild.html (8/11 pass)
+  FAIL: Appending a document — Cannot read properties of undefined
+  FAIL: Adopting an orphan — Cannot read properties of undefined
+  FAIL: Adopting a non-orphan — Cannot read properties of undefined
+FAIL dom/nodes/Node-childNodes.html (0/6 pass)
+  FAIL: Caching of Node.childNodes — assert_equals: expected [] but got []
+  FAIL: Node.childNodes on an Element. — assert_equals: expected [] but got [Element node <p></p>]
+  FAIL: Node.childNodes on a DocumentFragment. — assert_equals: expected [] but got [Element node <p></p>]
+FAIL dom/nodes/Node-cloneNode-XMLDocument.html (0/1 pass)
+  FAIL: Created with createDocument — assert_equals: Precondition check: document.implementation.createDocument() creates an XMLDocument expected (function) function "[Function]" but got (undefined) undefined
+FAIL dom/nodes/Node-cloneNode-document-with-doctype.html (2/3 pass)
+  FAIL: Created with the createDocument/createDocumentType — Cannot read properties of null (reading 'childNodes')
+FAIL dom/nodes/Node-cloneNode-svg.html (2/4 pass)
+  FAIL: cloned <svg>'s xmlns:xlink attribute should have the right properties — assert_equals: expected (string) "http://www.w3.org/2000/xmlns/" but got (object) null
+  FAIL: cloned <use>'s xlink:href attribute should have the right properties — assert_equals: expected (string) "http://www.w3.org/1999/xlink" but got (object) null
+FAIL dom/nodes/Node-cloneNode.html (128/135 pass)
+  FAIL: createElementNS HTML — assert_equals: prefix expected (string) "foo" but got (object) null
+  FAIL: createElementNS non-HTML — assert_equals: prefix expected (string) "foo" but got (object) null
+  FAIL: createProcessingInstruction — Cannot read properties of null (reading 'nodeType')
+FAIL dom/nodes/Node-insertBefore.html (26/40 pass)
+  FAIL: Should check the 'parent' type before checking whether 'child' is a child of 'parent' — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent of the type that 'parent' is. — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now. — assert_throws_dom: function "[Function]" did not throw
+FAIL dom/nodes/Node-isConnected.html (1/2 pass)
+  FAIL: Test with iframes — Cannot read properties of undefined (reading 'body')
+FAIL dom/nodes/Node-isEqualNode.html (3/9 pass)
+  FAIL: doctypes should be compared on name, public ID, and system ID — assert_true: self-comparison expected true got false
+  FAIL: elements should be compared on namespace, namespace prefix, local name, and number of attributes — assert_false: different namespace expected false got true
+  FAIL: elements should be compared on attribute namespace, local name, and value — assert_false: attribute with different namespace expected false got true
+FAIL dom/nodes/Node-isSameNode.html (5/9 pass)
+  FAIL: doctypes should be compared on reference — assert_true: self-comparison expected true got false
+  FAIL: processing instructions should be compared on reference — assert_true: self-comparison expected true got false
+  FAIL: documents should be compared on reference — assert_true: self-comparison expected true got false
+FAIL dom/nodes/Node-mutation-adoptNode.html (0/2 pass)
+  FAIL: simple append of foreign div with text — assert_equals: expected Document node with 2 children but got Document node with 2 children
+  FAIL: Adopting an element into a different document update's the element's owner doc as well as the owner docs of it's attributes — assert_equals: expected (object) Document node with 2 children but got (undefined) undefined
+FAIL dom/nodes/Node-nodeValue.html (6/7 pass)
+  FAIL: ProcessingInstruction.nodeValue — assert_equals: expected "test again" but got "A PI!"
+FAIL dom/nodes/Node-normalize.html (3/4 pass)
+  FAIL: Non-text nodes with empty textContent values. — HierarchyRequestError
+FAIL dom/nodes/Node-removeChild.html (19/28 pass)
+  FAIL: Passing a detached element from a frame document to removeChild should not affect it. — Cannot read properties of undefined
+  FAIL: Passing a non-detached element from a frame document to removeChild should not affect it. — Cannot read properties of undefined
+  FAIL: Calling removeChild on a element from a frame document with no children should throw NOT_FOUND_ERR. — Cannot read properties of undefined
+FAIL dom/nodes/Node-replaceChild.html (21/29 pass)
+  FAIL: Should check the 'parent' type before checking whether 'child' is a child of 'parent' — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent of the type that 'parent' is. — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now. — assert_throws_dom: function "[Function]" did not throw
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL dom/nodes/Node-textContent.html (41/81 pass)
+  FAIL: Element with children — HierarchyRequestError
+  FAIL: Element with descendants — HierarchyRequestError
+  FAIL: DocumentFragment with children — HierarchyRequestError
+FAIL dom/nodes/NodeList-Iterable.html (3/8 pass)
+  FAIL: NodeList has values method. — assert_true: expected true got false
+  FAIL: NodeList has entries method. — assert_true: expected true got false
+  FAIL: NodeList has forEach method. — assert_true: expected true got false
+FAIL dom/nodes/NodeList-static-length-getter-tampered-1.html (0/1 pass)
+  FAIL: NodeList (static collection) "length" getter tampered — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL dom/nodes/NodeList-static-length-getter-tampered-2.html (0/1 pass)
+  FAIL: NodeList (static collection) "length" getter tampered — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL dom/nodes/NodeList-static-length-getter-tampered-3.html (0/1 pass)
+  FAIL: NodeList (static collection) "length" getter tampered — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html (0/1 pass)
+  FAIL: NodeList (static collection) "length" getter tampered (Array.prototype.indexOf) — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL dom/nodes/NodeList-static-length-getter-tampered-indexOf-2.html (0/1 pass)
+  FAIL: NodeList (static collection) "length" getter tampered (Array.prototype.indexOf) — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html (0/1 pass)
+  FAIL: NodeList (static collection) "length" getter tampered (Array.prototype.indexOf) — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL dom/nodes/ParentNode-children.html (0/1 pass)
+  FAIL: ParentNode.children should be a live collection — assert_true: expected true got false
+FAIL dom/nodes/ParentNode-querySelector-case-insensitive.html (0/2 pass)
+  FAIL: querySelector — assert_equals: expected Element node <input name="User" id="testInput"></input> but got null
+  FAIL: querySelectorAll — Cannot read properties of undefined (reading 'join')
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL dom/nodes/ParentNode-querySelector-escapes.html (19/68 pass)
+  FAIL: "0nextIsWhiteSpace" should match with "#\\30 nextIsWhiteSpace" — assert_equals: expected Element node <span id="0nextIsWhiteSpace"></span> but got null
+  FAIL: "0nextIsNotHexLetters" should match with "#\\30nextIsNotHexLetters" — assert_equals: expected Element node <span id="0nextIsNotHexLetters"></span> but got null
+  FAIL: "0connectHexMoreThan6Hex" should match with "#\\000030connectHexMoreThan6Hex" — assert_equals: expected Element node <span id="0connectHexMoreThan6Hex"></span> but got null
+FAIL dom/nodes/ParentNode-querySelector-scope.html (0/4 pass)
+  FAIL: querySelector with :scope — assert_equals: expected Element node <p><span>hello</span></p> but got null
+  FAIL: querySelector with id and sibling — assert_equals: expected Element node <p><span>hello</span></p> but got null
+  FAIL: querySelectorAll with :scope — Cannot read properties of undefined (reading 'join')
+FAIL dom/nodes/ParentNode-querySelectors-space-and-dash-attribute-value.html (0/2 pass)
+  FAIL: querySelector — assert_equals: expected Element node <a title="test with - dash and space" id="testme">Test On... but got null
+  FAIL: querySelectorAll — Cannot read properties of undefined (reading 'join')
+FAIL dom/nodes/Text-splitText.html (0/6 pass)
+  FAIL: Split text after end of data — assert_throws_dom: function "[Function]" did not throw
+  FAIL: Split empty text — Cannot read properties of undefined (reading 'data')
+  FAIL: Split text at beginning — assert_equals: expected "" but got "comté"
+FAIL dom/nodes/Text-wholeText.html (0/1 pass)
+  FAIL: wholeText returns text of all Text nodes logically adjacent to the node, in document order. — assert_equals: expected (string) "a" but got (undefined) undefined
+FAIL dom/nodes/_svg_debug3.html (2/4 pass)
+  FAIL: proto is SVGElement.prototype? — assert_equals: proto === SVGElement.prototype expected object "[object Object]" but got object "[object Object]"
+  FAIL: proto is Element.prototype? — assert_equals: proto === Element.prototype expected object "[object Object]" but got object "[object Object]"
+FAIL dom/nodes/_svg_debug5.html (0/2 pass)
+  FAIL: rect is Element not SVG — assert_equals: rect proto === Element.prototype expected object "[object Object]" but got object "[object Object]"
+  FAIL: rect instanceof chain — assert_false: not instanceof SVGElement expected false got true
+FAIL dom/nodes/_svg_eq.html (3/4 pass)
+  FAIL: proto.constructor check — assert_equals: proto.constructor === SVGRectElement expected function "[Function]" but got function "[Function]"
+FAIL dom/nodes/_svg_eq3.html (1/3 pass)
+  FAIL: rect proto vs SVGElement.prototype — assert_equals: p1 === SVGElement.prototype expected object "[object Object]" but got object "[object Object]"
+  FAIL: svg proto vs SVGElement.prototype — assert_equals: p1 === SVGElement.prototype expected object "[object Object]" but got object "[object Object]"
+FAIL dom/nodes/_svg_eq4.html (2/3 pass)
+  FAIL: direct compare — assert_equals: p1 === SVGElement.prototype DIRECT? expected object "[object Object]" but got object "[object Object]"
+FAIL dom/nodes/append-on-Document.html (0/5 pass)
+  FAIL: Document.append() without any argument, on a Document having no child. — Cannot read properties of null (reading 'append')
+  FAIL: Document.append() with only one element as an argument, on a Document having no child. — Cannot read properties of null (reading 'append')
+  FAIL: Document.append() with only one element as an argument, on a Document having one child. — Cannot read properties of null (reading 'appendChild')
+FAIL dom/nodes/attributes-namednodemap.html (6/8 pass)
+  FAIL: setNamedItem and removeNamedItem on `attributes` should add and remove fields from `attributes` — assert_equals: expected (object) Node object of unknown type but got (undefined) undefined
+  FAIL: setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names — assert_equals: expected (object) Node object of unknown type but got (undefined) undefined
+FAIL dom/nodes/attributes.html (44/67 pass)
+  FAIL: toggleAttribute should set the first attribute with the given name — Cannot read properties of undefined (reading 'value')
+  FAIL: toggleAttribute should set the attribute with the given qualified name — assert_equals: expected "bar" but got "foo:bar"
+  FAIL: Toggling element with inline style should make inline style disappear — assert_equals: expected false but got true
+FAIL dom/nodes/case.html (188/285 pass)
+  FAIL: setAttributeNS [Array] — assert_equals: prefix expected (string) "abc" but got (object) null
+  FAIL: setAttributeNS [Array] — assert_equals: prefix expected (string) "abc" but got (object) null
+  FAIL: setAttributeNS [Array] — assert_equals: prefix expected (string) "abc" but got (object) null
+FAIL dom/nodes/getElementsByClassName-empty-set.html (0/3 pass)
+  FAIL: Passing an empty string to getElementsByClassName should return an empty HTMLCollection — assert_array_equals: lengths differ, expected array [] length 0, got [Element node <html><head><meta charset="utf-8">
+  FAIL: Passing a space to getElementsByClassName should return an empty HTMLCollection — assert_array_equals: lengths differ, expected array [] length 0, got [Element node <html><head><meta charset="utf-8">
+  FAIL: Passing three spaces to getElementsByClassName should return an empty HTMLCollection — assert_array_equals: lengths differ, expected array [] length 0, got [Element node <html><head><meta charset="utf-8">
+FAIL dom/nodes/insert-adjacent.html (8/14 pass)
+  FAIL: invalid object argument insertAdjacentElement — assert_throws_js: function "[Function]" did not throw
+  FAIL: invalid caller object insertAdjacentElement — assert_throws_dom: function "[Function]" did not throw
+  FAIL: invalid caller object insertAdjacentText — assert_throws_dom: function "[Function]" did not throw
+FAIL dom/nodes/insertion-removing-steps/Node-append-form-and-script-from-fragment.tentative.html (0/1 pass)
+  FAIL: When adding a script+form in a fragment and the form matches an associated element, the script that checks whether the button is associated to the form should run after inserting the form — assert_equals: expected (object) Element node <form id="someForm"></form> but got (undefined) undefined
+FAIL dom/nodes/insertion-removing-steps/Node-append-meta-referrer-and-script-from-fragment.tentative.html (0/1 pass)
+  FAIL: <meta name=referrer> gets processed and applied in the post-insertion steps — Cannot read properties of undefined (reading 'href')
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-button-from-div.tentative.html (0/1 pass)
+  FAIL: Script inserted before a form-associated button can observe the button's form, because by the time the script executes, the DOM insertion that associates the button with the form is already done — assert_equals: expected Element node <form id="form"><div><script>
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-custom-from-fragment.tentative.html (0/1 pass)
+  FAIL: An earlier-inserted script can upgrade a later-inserted custom element, whose upgrading is synchronously observable to the script, since DOM insertion has been completed by the time it runs — assert_true: expected true got false
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-default-style-meta-from-fragment.tentative.html (0/1 pass)
+  FAIL: Inserting <meta> that uses alternate stylesheets, applies the style during DOM post-insertion steps — assert_true: script has run after insertion expected true got false
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-div-from-fragment.tentative.html (0/1 pass)
+  FAIL: Earlier-inserted scripts can observe the parentNode of later-inserted nodes, because script runs after DOM insertion completes — assert_equals: expected Element node <head><meta charset="utf-8">
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-iframe.tentative.html (0/4 pass)
+  FAIL: Script inserted after an iframe in the same appendChild() call can observe the iframe's non-null contentWindow — assert_equals: expected "iframe with content window" but got "script not run yet"
+  FAIL: A script inserted atomically before an iframe (using a div) does not observe the iframe's contentWindow, since the 'script running' and 'iframe setup' both happen in order, after DOM insertion completes — assert_equals: expected "contentWindow is null" but got "script not run yet"
+  FAIL: A script inserted atomically before an iframe (using a DocumentFragment) does not observe the iframe's contentWindow, since the 'script running' and 'iframe setup' both happen in order, after DOM insertion completes — assert_equals: expected "contentWindow is null" but got "script not run yet"
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-source-from-fragment.tentative.html (0/1 pass)
+  FAIL: Empty <source> immediately sets media.networkState during DOM insertion, so that an earlier-running script can observe networkState — assert_array_equals: lengths differ, expected array [undefined] length 1, got [] length 0
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-and-style.tentative.html (0/5 pass)
+  FAIL: An earlier-inserted <script> synchronously observes a later-inserted <style> (via a div) being applied — assert_array_equals: lengths differ, expected array ["sheet", 2] length 2, got [] length 0
+  FAIL: An earlier-inserted <script> synchronously observes a later-inserted <style> (via a DocumentFragment) being applied — assert_array_equals: lengths differ, expected array ["sheet", 2] length 2, got [] length 0
+  FAIL: Earlier-inserted <script> (via a DocumentFragment) synchronously observes a later-inserted <link rel=stylesheet>'s CSSStyleSheet creation — assert_array_equals: lengths differ, expected array ["sheet"] length 1, got [] length 0
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-in-script.tentative.html (0/1 pass)
+  FAIL: An outer script whose preparation/execution gets triggered by the insertion of a 'nested'/'inner' script, executes *before* the inner script executes — assert_array_equals: lengths differ, expected array ["s1", "s2", "s2ran"] length 3, got [] length 0
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-script-with-mutation-observer-takeRecords.html (0/1 pass)
+  FAIL: An inserted script should be able to observe its own mutation record with takeRecords — Cannot read properties of undefined (reading 'length')
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-text-and-script-in-style.tentative.html (0/1 pass)
+  FAIL: All style rules appended to a <style> element are inserted and script-observable to scripts inserted in the `<style>` element, by the time scripts execute after DOM insertions. — assert_array_equals: lengths differ, expected array [2] length 1, got [] length 0
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-text-in-script.tentative.html (0/1 pass)
+  FAIL: Node.appendChild: inserting two text nodes in an empty script — assert_array_equals: lengths differ, expected array ["t1", "t2"] length 2, got [] length 0
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-three-scripts-from-fragment.tentative.html (0/1 pass)
+  FAIL: Node.appendChild: inserting three scripts from a document fragment — assert_array_equals: lengths differ, expected array ["s3", "s1", "s2"] length 3, got [] length 0
+FAIL dom/nodes/insertion-removing-steps/Node-appendChild-three-scripts.tentative.html (0/1 pass)
+  FAIL: Node.appendChild: inserting three scripts from a div — assert_array_equals: lengths differ, expected array ["s3", "s1", "s2"] length 3, got [] length 0
+FAIL dom/nodes/moveBefore/Node-moveBefore.html (3/32 pass)
+  FAIL: If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException. — assert_throws_dom: function "[Function]" threw object "TypeError: Cannot read properties of undefined (reading 'length')" that is not a DOMException HierarchyRequestError: property "code" is equal to undefined, expected 3
+  FAIL: If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException. — assert_throws_dom: function "[Function]" threw object "TypeError: Cannot read properties of undefined (reading 'length')" that is not a DOMException HierarchyRequestError: property "code" is equal to undefined, expected 3
+  FAIL: If node is a Text node and parent is a document, then throw a HierarchyRequestError DOMException. — assert_throws_dom: function "[Function]" threw object "TypeError: Cannot read properties of undefined (reading 'length')" that is not a DOMException HierarchyRequestError: property "code" is equal to undefined, expected 3
+FAIL dom/nodes/moveBefore/child-style-preserve.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'width')
+FAIL dom/nodes/moveBefore/continue-css-animation-left.html (0/1 pass)
+  FAIL: Node.moveBefore should preserve CSS animation state (left) — assert_equals: expected 1 but got 0
+FAIL dom/nodes/moveBefore/continue-css-animation-transform.html (0/1 pass)
+  FAIL: Node.moveBefore should preserve CSS animation state (transform) — assert_equals: expected 1 but got 0
+FAIL dom/nodes/moveBefore/continue-css-transition-left-pseudo.html (0/1 pass)
+  FAIL: Node.moveBefore should preserve CSS transition state on pseudo-elements (left) — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/continue-css-transition-left.html (0/1 pass)
+  FAIL: Node.moveBefore should preserve CSS transition state (left) — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/continue-css-transition-transform-pseudo.html (0/1 pass)
+  FAIL: Node.moveBefore should preserve CSS transition state on pseudo-elements (transform) — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/continue-css-transition-transform.html (0/1 pass)
+  FAIL: Node.moveBefore should preserve CSS transition state (transform) — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/css-animation-commit-styles.html (0/1 pass)
+  FAIL: Calling commitStyles after Node.moveBefore should commit mid-transition value — Cannot read properties of undefined
+FAIL dom/nodes/moveBefore/css-transition-cross-document.html (0/1 pass)
+  FAIL: Moving a transition across documents should reset its state — Cannot read properties of undefined (reading 'head')
+FAIL dom/nodes/moveBefore/css-transition-cross-shadow.html (0/1 pass)
+  FAIL: Moving an element with a transition across shadow boundaries preserves the transition — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/css-transition-to-disconnected-document.html (0/1 pass)
+  FAIL: Moving an element with a transition to a disconnected document should reset the transitionm state — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/css-transition-trigger.html (0/1 pass)
+  FAIL: Node.moveBefore should trigger CSS transition state (left) if needed — Cannot read properties of undefined (reading 'x')
+FAIL dom/nodes/moveBefore/custom-element-move-reactions.html (0/6 pass)
+  FAIL: the disconnected/connected callbacks should be called when no other callback is defined — Cannot read properties of undefined (reading 'define')
+  FAIL: the element should stay connected during the callbacks — Cannot read properties of undefined (reading 'define')
+  FAIL: When connectedMoveCallback is defined, it is called instead of disconnectedCallback/connectedCallback — Cannot read properties of undefined (reading 'define')
+FAIL dom/nodes/moveBefore/fire-focusin-focusout.html (0/5 pass)
+  FAIL: Don't fire focusin/out when reparenting focused element directly — assert_array_equals: lengths differ, expected array ["button.onfocusin"] length 1, got [] length 0
+  FAIL: Don't fire focusin/out when reparenting an element that has focus within — assert_array_equals: lengths differ, expected array ["button.onfocusin"] length 1, got [] length 0
+  FAIL: Don't fire focusin/out when moving to the same parent — assert_array_equals: lengths differ, expected array ["button.onfocusin"] length 1, got [] length 0
+FAIL dom/nodes/moveBefore/focus-preserve.html (0/4 pass)
+  FAIL: when reparenting an element, don't automatically reset the document focus — assert_equals: expected (object) Element node <button id="button" tabindex="1">Button</button> but got (undefined) undefined
+  FAIL: when reparenting a focused element into an inert parent, reset the document focus — assert_equals: expected (object) Element node <button id="button" tabindex="1">Button</button> but got (undefined) undefined
+  FAIL: when reparenting a focused element into a hidden parent, reset the document focus — assert_equals: expected (object) Element node <button id="button" tabindex="1">Button</button> but got (undefined) undefined
+FAIL dom/nodes/moveBefore/focus-within.html (0/5 pass)
+  FAIL: focus-within should be updated when reparenting focused element directly — assert_array_equals: lengths differ, expected array ["HTML", "BODY", "old_parent", "button"] length 4, got [] length 0
+  FAIL: focus-within should be updated when reparenting an element that has focus within — assert_array_equals: lengths differ, expected array ["HTML", "BODY", "new_parent", "old_parent", "button"] length 5, got [] length 0
+  FAIL: focus-within should remain the same when moving to the same parent — assert_array_equals: lengths differ, expected array ["HTML", "BODY", "old_parent", "button"] length 4, got [] length 0
+FAIL dom/nodes/moveBefore/fullscreen-preserve.html (0/1 pass)
+  FAIL: Document#fullscreenElement — Cannot read properties of undefined (reading 'click')
+FAIL dom/nodes/moveBefore/listed-form-element-reset.html (0/1 pass)
+  FAIL: Listed form element form owner is reset when a new form is moved closer before the listed element — assert_equals: button.form is correctly associated expected (object) Element node <form id="form1"></form> but got (undefined) undefined
+FAIL dom/nodes/moveBefore/live-range-updates.html (0/3 pass)
+  FAIL: moveBefore still results in range startContainer snapping up to parent when startContainer is moved — Argument is not a Node
+  FAIL: moveBefore still causes range startContainer to snap up to parent, when startContainer ancestor is moved — Argument is not a Node
+  FAIL: moveBefore still causes range endContainer to snap up to parent, when endContainer ancestor is moved — Argument is not a Node
+FAIL dom/nodes/moveBefore/modal-dialog.html (0/1 pass)
+  FAIL: when reparenting a modal dialog, the dialog should stay modal — assert_true: expected true got false
+FAIL dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'width')
+FAIL dom/nodes/moveBefore/moveBefore-id-map.html (0/1 pass)
+  FAIL: moveBefore() correctly updates id map — assert_equals: expected null but got Element node <div id="target" data-target=""></div>
+FAIL dom/nodes/moveBefore/moveBefore-name-map.html (0/1 pass)
+  FAIL: moveBefore() correctly updates name map — assert_equals: expected (object) null but got (undefined) undefined
+FAIL dom/nodes/moveBefore/moveBefore-option-recalc-style.html (0/1 pass)
+  FAIL: moveBefore() of an option element between two selects — assert_equals: expected Element node <select id="move_to"></select> but got Element node <select>
+FAIL dom/nodes/moveBefore/moveBefore-selector-matching.html (0/1 pass)
+  FAIL: moveBefore() should invalidate target when descendant selector changes — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+FAIL dom/nodes/moveBefore/moveBefore-shadow-inside.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of null (reading 'querySelector')
+FAIL dom/nodes/moveBefore/moveBefore-shadow-root.html (0/1 pass)
+  FAIL: moveBefore() is allowed in ShadowRoots (i.e., connected DocumentFragments) — assert_equals: Original lastChild is now firstChild expected Element node <p>Child2</p> but got Element node <p>Child1</p>
+FAIL dom/nodes/moveBefore/mutation-observer.html (0/2 pass)
+  FAIL: [Connected move] MutationObserver removal + insertion is tracked by moveBefore() — assert_equals: MutationObserver has emitted a single mutation list expected 1 but got 0
+  FAIL: [Disconnected move] MutationObserver removal + insertion is tracked by moveBefore() — assert_equals: MutationObserver has emitted a single mutation list expected 1 but got 0
+FAIL dom/nodes/moveBefore/nonce.html (0/1 pass)
+  FAIL: Element nonce content attribute is not cleared after move — assert_equals: expected "" but got "8IBTHwOdqNKAWeKl7plt8g=="
+FAIL dom/nodes/moveBefore/popover-preserve.html (0/1 pass)
+  FAIL: when reparenting an open popover, it shouldn't be closed automatically — Cannot read properties of null (reading 'showPopover')
+FAIL dom/nodes/moveBefore/preserve-render-blocking-script.html (0/1 pass)
+  FAIL: A moved script should keep its render-blocking state — assert_array_equals: lengths differ, expected array ["script", "render"] length 2, got ["script"] length 1
+FAIL dom/nodes/moveBefore/preserve-render-blocking-style.html (0/1 pass)
+  FAIL: A moved script should keep its render-blocking state — assert_equals: expected (string) "rgb(0, 128, 0)" but got (undefined) undefined
+FAIL dom/nodes/moveBefore/relevant-mutations.html (0/2 pass)
+  FAIL: Moving <source> out of <picture> triggers a relevant mutation on sibling <img> — promise_test: test body must return a 'thenable' object (received undefined)
+  FAIL: Moving <img> into a <picture> triggers a relevant mutation on the <img>, loading <source> — promise_test: test body must return a 'thenable' object (received undefined)
+FAIL dom/nodes/moveBefore/select-option-optgroup.html (0/1 pass)
+  FAIL: Option selectedness is updated on option and optgroup DOM moves — Cannot read properties of null (reading 'selected')
+FAIL dom/nodes/moveBefore/style-applies.html (0/1 pass)
+  FAIL: Moving a style inside the document should not affect whether it's applied — promise_test: test body must return a 'thenable' object (received undefined)
+FAIL dom/nodes/moveBefore/throws-exception.html (0/1 pass)
+  FAIL: moveBefore() on a cross-document target node — Cannot read properties of undefined (reading 'createElement')
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL dom/nodes/name-validation.html (0/5 pass)
+  FAIL: Valid and invalid characters in createElement. — assert_unreached: document.createElement should not have thrown an error for: code points: [65,1], string: "A" InvalidCharacterError: InvalidCharacterError Reached unreachable code
+  FAIL: Valid and invalid characters in createElementNS and createDocument. — assert_unreached: document.createElementNS should not have thrown an error for: code points: [1], string: "" code points: [100,105,118], string: "div" InvalidCharacterError: InvalidCharacterError Reached unreachable code
+  FAIL: Valid and invalid characters in setAttribute, toggleAttribute, and createAttribute. — assert_unreached: element.setAttribute should not have thrown an error for: code points: [1], string: "" InvalidCharacterError: InvalidCharacterError Reached unreachable code
+FAIL dom/nodes/prepend-on-Document.html (0/5 pass)
+  FAIL: Document.prepend() without any argument, on a Document having no child. — Cannot read properties of null (reading 'prepend')
+  FAIL: Document.prepend() with only one element as an argument, on a Document having no child. — Cannot read properties of null (reading 'prepend')
+  FAIL: Document.append() with only one element as an argument, on a Document having one child. — Cannot read properties of null (reading 'appendChild')
+FAIL dom/nodes/querySelector-mixed-case.html (0/1 pass)
+  FAIL: Mixed HTML/SVG/MathML tree with various mixed-case attributes — assert_equals: [viewBox] should match 2 HTML elements + 2 SVG elements expected 4 but got 0
+FAIL dom/nodes/remove-and-adopt-thcrash.html (0/1 pass)
+  FAIL: Check that removing a node and then adopting its parent into a different window/document doesn't crash. — Cannot read properties of undefined (reading 'document')
+FAIL dom/nodes/remove-next-sibling-during-replace-with.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of null (reading 'remove')
+FAIL dom/nodes/remove-unscopable.html (0/6 pass)
+  FAIL: undefined() should be unscopable — Cannot read properties of undefined
+  FAIL: undefined() should be unscopable — Cannot read properties of undefined
+  FAIL: undefined() should be unscopable — Cannot read properties of undefined
+FAIL dom/nodes/rootNode.html (0/5 pass)
+  FAIL: getRootNode() must return context object's shadow-including root if options's composed is true, and context object's root otherwise — Cannot read properties of null (reading 'getRootNode')
+  FAIL: getRootNode() must return the context object when it does not have any parent — assert_equals: getRootNode() on a processing instruction node without a parent must return the processing instruction node itself expected (object) ProcessingInstruction node with target "target" and data "data" but got (undefined) undefined
+  FAIL: getRootNode() must return the parent node of the context object when the context object has a single ancestor not in a document — HierarchyRequestError
+FAIL dom/nodes/svg-template-querySelector.html (2/3 pass)
+  FAIL: querySelector works on template contents fragments with nested SVG elements — Cannot read properties of null (reading 'querySelector')
+
+===========================================
+  WPT Results: dom/nodes
+===========================================
+  Test files: 245 (pass=104 fail=140 err=1)
+  Subtests: 6646/7868 pass
+  Pass rate: 84.5%
+===========================================

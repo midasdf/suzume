@@ -1,0 +1,271 @@
+=== WPT Tests: css/css-backgrounds (121 files, 2 parallel, engine=kotori) ===
+FAIL css/css-backgrounds/animations/background-color-transition-colormix.html (0/1 pass)
+  FAIL: Transition with currentColor in color-mix — Cannot read properties of undefined (reading 'currentTime')
+FAIL css/css-backgrounds/animations/background-position-composition.html (0/70 pass)
+  FAIL: Compositing CSS Animations: property <background-position> underlying [40px 140px] from add [60px 160px] to add [160px 260px] at (-0.25) should be [75px 275px, 75px 275px] — assert_equals: expected "$1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <background-position> underlying [40px 140px] from add [60px 160px] to add [160px 260px] at (0) should be [100px 300px, 100px 300px] — assert_equals: expected "$1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <background-position> underlying [40px 140px] from add [60px 160px] to add [160px 260px] at (0.25) should be [125px 325px, 125px 325px] — assert_equals: expected "$1 $1 $1 $1 $1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/background-size-composition.html (14/84 pass)
+  FAIL: Compositing CSS Animations: property <background-size> underlying [40px 40px] from add [60px 60px, 260px 260px] to add [160px 160px] at (-0.25) should be [75px 75px, 325px 325px] — assert_equals: expected "$1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <background-size> underlying [40px 40px] from add [60px 60px, 260px 260px] to add [160px 160px] at (0) should be [100px 100px, 300px 300px] — assert_equals: expected "$1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <background-size> underlying [40px 40px] from add [60px 60px, 260px 260px] to add [160px 160px] at (0.25) should be [125px 125px, 275px 275px] — assert_equals: expected "$1 $1 $1 $1 $1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-bottom-left-radius-composition.html (26/42 pass)
+  FAIL: Compositing CSS Animations: property <border-bottom-left-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (-0.25) should be [75px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-bottom-left-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0) should be [100px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-bottom-left-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0.25) should be [125px] — assert_equals: expected "$1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-bottom-right-radius-composition.html (26/42 pass)
+  FAIL: Compositing CSS Animations: property <border-bottom-right-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (-0.25) should be [75px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-bottom-right-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0) should be [100px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-bottom-right-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0.25) should be [125px] — assert_equals: expected "$1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-image-outset-composition.html (96/112 pass)
+  FAIL: Compositing CSS Animations: property <border-image-outset> underlying [1 2 3 4] from add [1 2 3 4] to add [101 102 103 104] at (-0.25) should be [0] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing Web Animations: property <border-image-outset> underlying [1 2 3 4] from add [1 2 3 4] to add [101 102 103 104] at (-0.25) should be [0] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <border-image-outset> underlying [10px 20px] from add [190px 180px 290px 280px] to add [90px 80px] at (-0.25) should be [225px 225px 350px 350px] — assert_equals: expected "$1 $1 $1 $1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-image-slice-composition.html (68/112 pass)
+  FAIL: Compositing CSS Animations: property <border-image-slice> underlying [1 2 3 4] from add [1 2 3 4] to add [101 102 103 104] at (-0.25) should be [0] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing Web Animations: property <border-image-slice> underlying [1 2 3 4] from add [1 2 3 4] to add [101 102 103 104] at (-0.25) should be [0] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <border-image-slice> underlying [10% 20%] from add [190% 180% 290% 280%] to add [90% 80%] at (-0.25) should be [225% 225% 350% 350%] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 $1 $1 "
+FAIL css/css-backgrounds/animations/border-image-slice-interpolation-stability.html (0/1 pass)
+  FAIL: border-image-slice interpolation stability — Cannot read properties of undefined (reading 'animate')
+FAIL css/css-backgrounds/animations/border-image-width-composition.html (88/112 pass)
+  FAIL: Compositing CSS Animations: property <border-image-width> underlying [1 2 3 4] from add [1 2 3 4] to add [101 102 103 104] at (-0.25) should be [0] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing Web Animations: property <border-image-width> underlying [1 2 3 4] from add [1 2 3 4] to add [101 102 103 104] at (-0.25) should be [0] — assert_equals: expected "$1 " but got "$1 $1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <border-image-width> underlying [10px 20px] from add [190px 180px 290px 280px] to add [90px 80px] at (-0.25) should be [225px 225px 350px 350px] — assert_equals: expected "$1 $1 $1 $1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-top-left-radius-composition.html (26/42 pass)
+  FAIL: Compositing CSS Animations: property <border-top-left-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (-0.25) should be [75px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-top-left-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0) should be [100px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-top-left-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0.25) should be [125px] — assert_equals: expected "$1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-top-right-radius-composition.html (26/42 pass)
+  FAIL: Compositing CSS Animations: property <border-top-right-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (-0.25) should be [75px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-top-right-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0) should be [100px] — assert_equals: expected "$1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <border-top-right-radius> underlying [40px 40px] from add [60px 60px] to add [160px 160px] at (0.25) should be [125px] — assert_equals: expected "$1 " but got "$1 $1 "
+FAIL css/css-backgrounds/animations/border-width-transition-with-style-change.html (0/1 pass)
+  FAIL: border-width transitions from 30px none to 0px solid — Cannot read properties of undefined (reading 'get')
+FAIL css/css-backgrounds/animations/box-shadow-composition.html (0/80 pass)
+  FAIL: Compositing CSS Animations: property <box-shadow> underlying [undefined] from replace [rgb(100, 100, 100) 10px 20px 30px 40px] to add [rgb(200, 200, 200) 20px 40px 60px 80px] at (-0.3) should be [rgb(70, 70, 70 ) 7px 14px 21px 28px] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 $1 $1 $1 $1 $1 " but got ""
+  FAIL: Compositing CSS Animations: property <box-shadow> underlying [undefined] from replace [rgb(100, 100, 100) 10px 20px 30px 40px] to add [rgb(200, 200, 200) 20px 40px 60px 80px] at (0) should be [rgb(100, 100, 100) 10px 20px 30px 40px] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 $1 $1 $1 $1 $1 " but got ""
+  FAIL: Compositing CSS Animations: property <box-shadow> underlying [undefined] from replace [rgb(100, 100, 100) 10px 20px 30px 40px] to add [rgb(200, 200, 200) 20px 40px 60px 80px] at (0.5) should be [rgb(150, 150, 150) 15px 30px 45px 60px] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 $1 $1 $1 $1 $1 " but got ""
+FAIL css/css-backgrounds/background-331.html (1/8 pass)
+  FAIL: background_initial_image — assert_equals: background initial value for background-image expected "none" but got ""
+  FAIL: background_initial_position — assert_equals: background initial value for background-position expected "0% 0%" but got ""
+  FAIL: background_initial_size — assert_equals: background initial value for background-size expected "auto" but got ""
+FAIL css/css-backgrounds/background-332.html (1/8 pass)
+  FAIL: Computed value for background-image after setting background shorthand — Cannot read properties of undefined (reading 'href')
+  FAIL: background_specified_position — assert_equals: background specified value for background-position expected "40% 50%" but got ""
+  FAIL: background_specified_size — assert_equals: background specified value for background-size expected "160px auto" but got ""
+FAIL css/css-backgrounds/background-333.html (1/8 pass)
+  FAIL: background_specified_color_image — assert_equals: background initial value for background-image expected "none" but got ""
+  FAIL: background_specified_color_position — assert_equals: background initial value for background-position expected "0% 0%" but got ""
+  FAIL: background_specified_color_size — assert_equals: background initial value for background-size expected "auto" but got ""
+FAIL css/css-backgrounds/background-335.html (0/2 pass)
+  FAIL: background_specified_box_one_origin — assert_equals: background specified value for background-origin expected "content-box" but got ""
+  FAIL: background_specified_box_one_clip — assert_equals: background specified value for background-clip expected "content-box" but got ""
+FAIL css/css-backgrounds/background-336.html (0/2 pass)
+  FAIL: background_specified_box_two_origin — assert_equals: background specified value for background-origin expected "border-box" but got ""
+  FAIL: background_specified_box_two_clip — assert_equals: background specified value for background-clip expected "padding-box" but got ""
+FAIL css/css-backgrounds/background-clip-001.html (3/4 pass)
+  FAIL: background-clip_initial — assert_equals: background-clip initial value expected "border-box" but got ""
+FAIL css/css-backgrounds/background-origin-001.html (3/4 pass)
+  FAIL: background-origin_initial — assert_equals: background-origin initial value expected "padding-box" but got ""
+FAIL css/css-backgrounds/background-size-001.html (11/20 pass)
+  FAIL: background-size_initial — assert_equals: background-size initial value expected "auto" but got ""
+  FAIL: background-size_length_zero — assert_equals: background-size supporting value expected "0px auto" but got "0px"
+  FAIL: background-size_length_negative_zero — assert_equals: background-size supporting value expected "0px auto" but got "-0px"
+FAIL css/css-backgrounds/border-image-repeat_repeatnegx_none_50px.html (0/1 pass)
+  FAIL:  CSS Background Border Test: "border-image-repeat:repeat-x;height:200px;width:200px;border-image-source:none;border-image-width:50px" on test div — assert_false: The element border-image-repeat can be repeat-x expected false got true
+FAIL css/css-backgrounds/border-image-slice-shorthand-reset.html (0/1 pass)
+  FAIL: Check that the border-image shorthand resets border-image-slice to its initial value. — assert_equals: expected "100%" but got ""
+FAIL css/css-backgrounds/border-radius-css-text.html (0/1 pass)
+  FAIL: Setting border-radius does not expand to longhand properties in cssText. — assert_equals: expected "border-radius: 20px 10px 10px;" but got "border-radius: 10px; border-top-left-radius: 20px;"
+FAIL css/css-backgrounds/parsing/background-attachment-computed.html (1/2 pass)
+  FAIL: Property background-attachment value 'scroll, fixed, local' — assert_equals: expected "scroll" but got "scroll, fixed, local"
+FAIL css/css-backgrounds/parsing/background-clip-computed.html (6/8 pass)
+  FAIL: Property background-clip value 'text border-area' — assert_equals: expected "border-area text" but got "text border-area"
+  FAIL: Property background-clip value 'border-box, padding-box, content-box, border-area' — assert_equals: expected "border-box" but got "border-box, padding-box, content-box, border-area"
+FAIL css/css-backgrounds/parsing/background-clip-valid.html (8/9 pass)
+  FAIL: e.style['background-clip'] = "text border-area" should set the property value — assert_equals: serialization should be canonical expected "border-area text" but got "text border-area"
+FAIL css/css-backgrounds/parsing/background-color-valid.html (6/9 pass)
+  FAIL: e.style['background-color'] = "currentColor" should set the property value — assert_equals: serialization should be canonical expected "currentcolor" but got "currentColor"
+  FAIL: e.style['background-color'] = "#00FF00" should set the property value — assert_equals: serialization should be canonical expected "rgb(0, 255, 0)" but got "#00FF00"
+  FAIL: e.style['background-color'] = "rgb(100%, 100%, 0%)" should set the property value — assert_equals: serialization should be canonical expected "rgb(255, 255, 0)" but got "rgb(100%, 100%, 0%)"
+FAIL css/css-backgrounds/parsing/background-computed.html (9/39 pass)
+  FAIL: Property background-attachment value 'local' — assert_equals: expected "local, local, local" but got "local"
+  FAIL: Property background-attachment value 'scroll, fixed' — assert_equals: expected "scroll, fixed, scroll" but got "scroll, fixed"
+  FAIL: Property background-attachment value 'local, fixed, scroll, fixed' — assert_equals: expected "local, fixed, scroll" but got "local, fixed, scroll, fixed"
+FAIL css/css-backgrounds/parsing/background-image-computed.sub.html (12/47 pass)
+  FAIL: Property background-image value 'linear-gradient(to left bottom, red, blue)' — assert_equals: expected "linear-gradient(to left bottom, rgb(255, 0, 0), rgb(0, 0, 255))" but got "linear-gradient(to left bottom, red, blue)"
+  FAIL: Property background-image value 'radial-gradient(at center, red, blue)' — assert_equals: expected "radial-gradient(rgb(255, 0, 0), rgb(0, 0, 255))" but got "radial-gradient(at center, red, blue)"
+  FAIL: Property background-image value 'radial-gradient(at 50%, red, blue)' — assert_equals: expected "radial-gradient(rgb(255, 0, 0), rgb(0, 0, 255))" but got "radial-gradient(at 50%, red, blue)"
+FAIL css/css-backgrounds/parsing/background-image-invalid.html (1/12 pass)
+  FAIL: e.style['background-image'] = "radial-gradient(circle -10px at center, red, blue)" should not set the property value — assert_equals: expected "" but got "radial-gradient(circle -10px at center, red, blue)"
+  FAIL: e.style['background-image'] = "repeating-radial-gradient(-10px at center, red, blue)" should not set the property value — assert_equals: expected "" but got "repeating-radial-gradient(-10px at center, red, blue)"
+  FAIL: e.style['background-image'] = "radial-gradient(ellipse -20px 30px at center, red, blue)" should not set the property value — assert_equals: expected "" but got "radial-gradient(ellipse -20px 30px at center, red, blue)"
+FAIL css/css-backgrounds/parsing/background-image-valid.html (6/12 pass)
+  FAIL: e.style['background-image'] = "light-dark(url(\"a.png\"), url(\"b.png\"))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['background-image'] = "light-dark(linear-gradient(red), url(\"b.png\"))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['background-image'] = "cross-fade(50% url(http://www.example.com), 50% url(http://www.example.com))" should set the property value — assert_in_array: serialization should be sound value "cross-fade(50% url(http://www.example.com), 50% url(http://www.example.com))" not in array ["cross-fade(url(http://www.example.com) 50%, url(http://www.example.com) 50%)", "cross-fade(url("http://www.example.com") 50%, url("http://www.example.com") 50%)"]
+FAIL css/css-backgrounds/parsing/background-invalid.html (0/2 pass)
+  FAIL: e.style['background'] = "red, green" should not set the property value — assert_equals: expected "" but got "red, green"
+  FAIL: e.style['background'] = "black 0 url(https://example.invalid/) / cover" should not set the property value — assert_equals: expected "" but got "black 0 url(https://example.invalid/) / cover"
+FAIL css/css-backgrounds/parsing/background-origin-computed.html (3/4 pass)
+  FAIL: Property background-origin value 'border-box, padding-box, content-box' — assert_equals: expected "border-box" but got "border-box, padding-box, content-box"
+FAIL css/css-backgrounds/parsing/background-position-computed.html (1/29 pass)
+  FAIL: Property background-position value '1px' — assert_equals: expected "1px 50%" but got "1px"
+  FAIL: Property background-position value '1px center' — assert_equals: expected "1px 50%" but got "1px center"
+  FAIL: Property background-position value '5% top' — assert_equals: expected "5% 0%" but got "5% top"
+FAIL css/css-backgrounds/parsing/background-position-invalid.html (2/11 pass)
+  FAIL: e.style['background-position'] = "1% center 2px" should not set the property value — assert_equals: expected "" but got "1% center 2px"
+  FAIL: e.style['background-position'] = "right 7% 50%" should not set the property value — assert_equals: expected "" but got "right 7% 50%"
+  FAIL: e.style['background-position'] = "50% top 8px" should not set the property value — assert_equals: expected "" but got "50% top 8px"
+FAIL css/css-backgrounds/parsing/background-position-valid.html (23/31 pass)
+  FAIL: e.style['background-position'] = "center left" should set the property value — assert_in_array: serialization should be sound value "center left" not in array ["left center", "left"]
+  FAIL: e.style['background-position'] = "center right 7%" should set the property value — assert_equals: serialization should be canonical expected "right 7% center" but got "center right 7%"
+  FAIL: e.style['background-position'] = "top 15px center" should set the property value — assert_in_array: serialization should be sound value "top 15px center" not in array ["center top 15px", "center 15px"]
+FAIL css/css-backgrounds/parsing/background-position-x-computed.html (4/16 pass)
+  FAIL: Property background-position-x value 'center' — assert_equals: expected "50%" but got "center"
+  FAIL: Property background-position-x value 'left' — assert_equals: expected "0%" but got "left"
+  FAIL: Property background-position-x value 'right' — assert_equals: expected "100%" but got "right"
+FAIL css/css-backgrounds/parsing/background-position-x-invalid.html (0/9 pass)
+  FAIL: e.style['background-position-x'] = "top" should not set the property value — assert_equals: expected "" but got "top"
+  FAIL: e.style['background-position-x'] = "bottom" should not set the property value — assert_equals: expected "" but got "bottom"
+  FAIL: e.style['background-position-x'] = "y-start" should not set the property value — assert_equals: expected "" but got "y-start"
+FAIL css/css-backgrounds/parsing/background-position-x-valid.html (13/15 pass)
+  FAIL: e.style['background-position-x'] = "calc(10px - 0.5em)" should set the property value — assert_equals: serialization should be canonical expected "calc(-0.5em + 10px)" but got "calc(10px - 0.5em)"
+  FAIL: e.style['background-position-x'] = "calc(10px - 0.5em), left -20%, right 10px" should set the property value — assert_equals: serialization should be canonical expected "calc(-0.5em + 10px), left -20%, right 10px" but got "calc(10px - 0.5em), left -20%, right 10px"
+FAIL css/css-backgrounds/parsing/background-position-y-computed.html (4/16 pass)
+  FAIL: Property background-position-y value 'center' — assert_equals: expected "50%" but got "center"
+  FAIL: Property background-position-y value 'top' — assert_equals: expected "0%" but got "top"
+  FAIL: Property background-position-y value 'bottom' — assert_equals: expected "100%" but got "bottom"
+FAIL css/css-backgrounds/parsing/background-position-y-invalid.html (0/9 pass)
+  FAIL: e.style['background-position-y'] = "left" should not set the property value — assert_equals: expected "" but got "left"
+  FAIL: e.style['background-position-y'] = "right" should not set the property value — assert_equals: expected "" but got "right"
+  FAIL: e.style['background-position-y'] = "x-start" should not set the property value — assert_equals: expected "" but got "x-start"
+FAIL css/css-backgrounds/parsing/background-position-y-valid.html (13/15 pass)
+  FAIL: e.style['background-position-y'] = "calc(10px - 0.5em)" should set the property value — assert_equals: serialization should be canonical expected "calc(-0.5em + 10px)" but got "calc(10px - 0.5em)"
+  FAIL: e.style['background-position-y'] = "calc(10px - 0.5em), top -20%, bottom 10px" should set the property value — assert_equals: serialization should be canonical expected "calc(-0.5em + 10px), top -20%, bottom 10px" but got "calc(10px - 0.5em), top -20%, bottom 10px"
+FAIL css/css-backgrounds/parsing/background-repeat-computed.html (8/10 pass)
+  FAIL: Property background-repeat value 'repeat repeat' — assert_equals: expected "repeat" but got "repeat repeat"
+  FAIL: Property background-repeat value 'repeat-x, repeat-y, repeat' — assert_equals: expected "repeat-x" but got "repeat-x, repeat-y, repeat"
+FAIL css/css-backgrounds/parsing/background-shorthand-serialization.html (0/11 pass)
+  FAIL: single value — assert_equals: expected "yellow" but got ""
+  FAIL: multiple values — assert_equals: expected "url("/favicon.ico") no-repeat" but got ""
+  FAIL: multiple backgrounds — assert_equals: expected "url("/favicon.ico") no-repeat, url("/favicon.ico") no-repeat" but got ""
+FAIL css/css-backgrounds/parsing/background-size-computed.html (6/11 pass)
+  FAIL: Property background-size value '1px' — assert_equals: expected "1px auto" but got "1px"
+  FAIL: Property background-size value 'auto auto' — assert_equals: expected "auto" but got "auto auto"
+  FAIL: Property background-size value 'calc(10px + 0.5em) calc(10px - 0.5em)' — assert_true: 'calc(10px + 0.5em) calc(10px - 0.5em)' is a supported value for background-size. expected true got false
+FAIL css/css-backgrounds/parsing/background-size-invalid.html (0/3 pass)
+  FAIL: e.style['background-size'] = "-1px" should not set the property value — assert_equals: expected "" but got "-1px"
+  FAIL: e.style['background-size'] = "2% -3%" should not set the property value — assert_equals: expected "" but got "2% -3%"
+  FAIL: e.style['background-size'] = "1px 2px 3px" should not set the property value — assert_equals: expected "" but got "1px 2px 3px"
+FAIL css/css-backgrounds/parsing/background-size-valid.html (7/9 pass)
+  FAIL: e.style['background-size'] = "1px" should set the property value — assert_equals: serialization should be canonical expected "1px auto" but got "1px"
+  FAIL: e.style['background-size'] = "auto auto" should set the property value — assert_equals: serialization should be canonical expected "auto" but got "auto auto"
+FAIL css/css-backgrounds/parsing/border-color-computed.html (4/8 pass)
+  FAIL: Property border-color value 'currentcolor' — assert_equals: expected "rgb(0, 255, 0)" but got "currentcolor"
+  FAIL: Property border-color value 'red yellow' — assert_equals: expected "rgb(255, 0, 0) rgb(255, 255, 0)" but got "red yellow"
+  FAIL: Property border-color value 'red yellow currentcolor' — assert_equals: expected "rgb(255, 0, 0) rgb(255, 255, 0) rgb(0, 255, 0)" but got "red yellow currentcolor"
+FAIL css/css-backgrounds/parsing/border-color-invalid.html (0/3 pass)
+  FAIL: e.style['border-color'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-color'] = "black, white" should not set the property value — assert_equals: expected "" but got "black, white"
+  FAIL: e.style['border-color'] = "black white red green blue" should not set the property value — assert_equals: expected "" but got "black white red green blue"
+FAIL css/css-backgrounds/parsing/border-color-valid.html (6/7 pass)
+  FAIL: e.style['border-color'] = "currentColor" should set the property value — assert_equals: serialization should be canonical expected "currentcolor" but got "currentColor"
+FAIL css/css-backgrounds/parsing/border-image-invalid.html (0/17 pass)
+  FAIL: e.style['border-image'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-image'] = "none, url(\"http://www.example.com/\")" should not set the property value — assert_equals: expected "" but got "none, url("http://www.example.com/")"
+  FAIL: e.style['border-image'] = "stretch repeat round" should not set the property value — assert_equals: expected "" but got "stretch repeat round"
+FAIL css/css-backgrounds/parsing/border-image-outset-computed.html (4/7 pass)
+  FAIL: Property border-image-outset value '0 calc(0.5em + 10px) 3 calc(-0.5em + 10px)' — assert_equals: expected "0 30px 3 0px" but got "0 calc(0.5em + 10px) 3 calc(-0.5em + 10px)"
+  FAIL: Property border-image-outset value 'calc(10 + (sign(2cqw - 10px) * 5))' — assert_equals: expected "5" but got "calc(10 + (sign(2cqw - 10px) * 5))"
+  FAIL: Property border-image-outset value 'calc(10 + (sign(2cqw - 10px) * 5)) calc(20px + (sign(2cqw - 10px) * 5px)' — assert_true: 'calc(10 + (sign(2cqw - 10px) * 5)) calc(20px + (sign(2cqw - 10px) * 5px)' is a supported value for border-image-outset. expected true got false
+FAIL css/css-backgrounds/parsing/border-image-outset-invalid.html (0/5 pass)
+  FAIL: e.style['border-image-outset'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-image-outset'] = "-1" should not set the property value — assert_equals: expected "" but got "-1"
+  FAIL: e.style['border-image-outset'] = "-2px" should not set the property value — assert_equals: expected "" but got "-2px"
+FAIL css/css-backgrounds/parsing/border-image-repeat-invalid.html (0/2 pass)
+  FAIL: e.style['border-image-repeat'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-image-repeat'] = "stretch repeat round" should not set the property value — assert_equals: expected "" but got "stretch repeat round"
+FAIL css/css-backgrounds/parsing/border-image-repeat-valid.html (2/3 pass)
+  FAIL: e.style['border-image-repeat'] = "space space" should set the property value — assert_equals: serialization should be canonical expected "space" but got "space space"
+FAIL css/css-backgrounds/parsing/border-image-slice-computed.html (5/7 pass)
+  FAIL: Property border-image-slice value 'calc(10 + (sign(2cqw - 10px) * 5))' — assert_equals: expected "5" but got "calc(10 + (sign(2cqw - 10px) * 5))"
+  FAIL: Property border-image-slice value 'calc(10 + (sign(2cqw - 10px) * 5)) calc(20% + (sign(2cqw - 10px) * 5%))' — assert_true: 'calc(10 + (sign(2cqw - 10px) * 5)) calc(20% + (sign(2cqw - 10px) * 5%))' is a supported value for border-image-slice. expected true got false
+FAIL css/css-backgrounds/parsing/border-image-slice-invalid.html (0/6 pass)
+  FAIL: e.style['border-image-slice'] = "fill" should not set the property value — assert_equals: expected "" but got "fill"
+  FAIL: e.style['border-image-slice'] = "1 -2% fill" should not set the property value — assert_equals: expected "" but got "1 -2% fill"
+  FAIL: e.style['border-image-slice'] = "-1 2% fill" should not set the property value — assert_equals: expected "" but got "-1 2% fill"
+FAIL css/css-backgrounds/parsing/border-image-source-computed.sub.html (2/10 pass)
+  FAIL: Property border-image-source value 'linear-gradient(-45deg, red, currentcolor)' — assert_equals: expected "linear-gradient(-45deg, rgb(255, 0, 0), rgb(0, 0, 255))" but got "linear-gradient(-45deg, red, currentcolor)"
+  FAIL: Property border-image-source value 'linear-gradient(45deg, red calc(10% + 5px), blue 90%)' — assert_equals: expected "linear-gradient(45deg, rgb(255, 0, 0) calc(10% + 5px), rgb(0, 0, 255) 90%)" but got "linear-gradient(45deg, red calc(10% + 5px), blue 90%)"
+  FAIL: Property border-image-source value 'repeating-linear-gradient(-45deg, red, 30%, currentcolor 70%, lime)' — assert_equals: expected "repeating-linear-gradient(-45deg, rgb(255, 0, 0), 30%, rgb(0, 0, 255) 70%, rgb(0, 255, 0))" but got "repeating-linear-gradient(-45deg, red, 30%, currentcolor 70%, lime)"
+FAIL css/css-backgrounds/parsing/border-image-slice-valid.html (3/4 pass)
+  FAIL: e.style['border-image-slice'] = "fill 1 2% 3 4%" should set the property value — assert_equals: serialization should be canonical expected "1 2% 3 4% fill" but got "fill 1 2% 3 4%"
+FAIL css/css-backgrounds/parsing/border-image-source-invalid.html (0/2 pass)
+  FAIL: e.style['border-image-source'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-image-source'] = "none, url(\"http://www.example.com/\")" should not set the property value — assert_equals: expected "" but got "none, url("http://www.example.com/")"
+FAIL css/css-backgrounds/parsing/border-image-valid.html (28/30 pass)
+  FAIL: e.style['border-image'] = "url(\"http://www.example.com/\") fill 1 2% 3 4%" should set the property value — assert_in_array: serialization should be sound value "url("http://www.example.com/") fill 1 2% 3 4%" not in array ["url("http://www.example.com/") 1 2% 3 4% fill", "url("http://www.example.com/") 1 2% 3 4% fill / 1 / 0 stretch"]
+  FAIL: e.style['border-image'] = "fill 1 2% 3 4% / auto" should set the property value — assert_in_array: serialization should be sound value "fill 1 2% 3 4% / auto" not in array ["1 2% 3 4% fill / auto", "none 1 2% 3 4% fill / auto / 0 stretch"]
+FAIL css/css-backgrounds/parsing/border-image-width-computed.html (10/12 pass)
+  FAIL: Property border-image-width value 'calc(-0.5em + 10px)' — assert_equals: expected "0px" but got "calc(-0.5em + 10px)"
+  FAIL: Property border-image-width value 'calc(0.5em + 10px)' — assert_equals: expected "30px" but got "calc(0.5em + 10px)"
+FAIL css/css-backgrounds/parsing/border-image-width-invalid.html (0/5 pass)
+  FAIL: e.style['border-image-width'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+  FAIL: e.style['border-image-width'] = "-1px" should not set the property value — assert_equals: expected "" but got "-1px"
+  FAIL: e.style['border-image-width'] = "-2%" should not set the property value — assert_equals: expected "" but got "-2%"
+FAIL css/css-backgrounds/parsing/border-invalid.html (0/3 pass)
+  FAIL: e.style['border'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border'] = "thin double green 1px" should not set the property value — assert_equals: expected "" but got "thin double green 1px"
+  FAIL: e.style['border'] = "-2em" should not set the property value — assert_equals: expected "" but got "-2em"
+FAIL css/css-backgrounds/parsing/border-radius-computed.html (7/14 pass)
+  FAIL: Property border-radius value '5em / 1px 2% 3px 4%' — assert_equals: expected "200px / 1px 2% 3px 4%" but got "5em / 1px 2% 3px 4%"
+  FAIL: Property border-radius value '1px 2% 3px 4% / 5em' — assert_equals: expected "1px 2% 3px 4% / 200px" but got "1px 2% 3px 4% / 5em"
+  FAIL: Property border-radius value '1px 1px 1px 2% / 1px 2% 1px 2%' — assert_equals: expected "1px 1px 1px 2% / 1px 2%" but got "1px 1px 1px 2% / 1px 2% 1px 2%"
+FAIL css/css-backgrounds/parsing/border-radius-invalid.html (0/11 pass)
+  FAIL: e.style['border-radius'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-radius'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+  FAIL: e.style['border-radius'] = "1px 2px 3px 4px 5px" should not set the property value — assert_equals: expected "" but got "1px 2px 3px 4px 5px"
+FAIL css/css-backgrounds/parsing/border-radius-valid.html (20/23 pass)
+  FAIL: e.style['border-radius'] = "1px 1px 1px 2% / 1px 2% 1px 2%" should set the property value — assert_equals: serialization should be canonical expected "1px 1px 1px 2% / 1px 2%" but got "1px 1px 1px 2% / 1px 2% 1px 2%"
+  FAIL: e.style['border-radius'] = "1px 1px 1px 1px / 1px 1px 2% 1px" should set the property value — assert_equals: serialization should be canonical expected "1px / 1px 1px 2%" but got "1px 1px 1px 1px / 1px 1px 2% 1px"
+  FAIL: e.style['border-radius'] = "1px 2% 2% 2% / 1px 2% 3px 2%" should set the property value — assert_equals: serialization should be canonical expected "1px 2% 2% / 1px 2% 3px" but got "1px 2% 2% 2% / 1px 2% 3px 2%"
+FAIL css/css-backgrounds/parsing/border-shorthand.html (34/36 pass)
+  FAIL: e.style['border'] = "2px solid color-mix(42deg)" should not set the property value — assert_equals: expected "" but got "2px solid color-mix(42deg)"
+  FAIL: e.style['border'] = "2px solid color-contrast(42deg)" should not set the property value — assert_equals: expected "" but got "2px solid color-contrast(42deg)"
+FAIL css/css-backgrounds/parsing/border-style-invalid.html (0/2 pass)
+  FAIL: e.style['border-style'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['border-style'] = "solid double groove ridge none" should not set the property value — assert_equals: expected "" but got "solid double groove ridge none"
+FAIL css/css-backgrounds/parsing/border-valid.html (5/6 pass)
+  FAIL: e.style['border'] = "green double thin" should set the property value — assert_equals: serialization should be canonical expected "thin double green" but got "green double thin"
+FAIL css/css-backgrounds/parsing/border-width-computed.html (8/11 pass)
+  FAIL: Property border-width value '0.5em' — assert_equals: expected "20px" but got "0.5em"
+  FAIL: Property border-width value '2px thin medium thick' — assert_equals: expected "2px 1px 3px 5px" but got "2px thin medium thick"
+  FAIL: Property border-bottom-width value 'calc(-0.5em + 10px)' — assert_equals: expected "0px" but got "-10px"
+FAIL css/css-backgrounds/parsing/border-width-invalid.html (0/3 pass)
+  FAIL: e.style['border-width'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+  FAIL: e.style['border-width'] = "thin medium thick medium thin" should not set the property value — assert_equals: expected "" but got "thin medium thick medium thin"
+  FAIL: e.style['border-width'] = "-1px" should not set the property value — assert_equals: expected "" but got "-1px"
+FAIL css/css-backgrounds/parsing/box-shadow-computed.html (2/4 pass)
+  FAIL: Property box-shadow value '1px 2px' — assert_equals: expected "rgb(0, 0, 255) 1px 2px 0px 0px" but got "1px 2px"
+  FAIL: Property box-shadow value 'currentcolor -1em -2em 3em -4em' — assert_equals: expected "rgb(0, 0, 255) -20px -40px 60px -80px" but got "currentcolor -1em -2em 3em -4em"
+FAIL css/css-backgrounds/parsing/box-shadow-invalid.html (0/40 pass)
+  FAIL: e.style['box-shadow'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['box-shadow'] = "1 2" should not set the property value — assert_equals: expected "" but got "1 2"
+  FAIL: e.style['box-shadow'] = "1% 2%" should not set the property value — assert_equals: expected "" but got "1% 2%"
+FAIL css/css-backgrounds/parsing/box-shadow-valid.html (9/38 pass)
+  FAIL: e.style['box-shadow'] = "inset 1px 2px red" should set the property value — assert_equals: serialization should be canonical expected "red 1px 2px inset" but got "inset 1px 2px red"
+  FAIL: e.style['box-shadow'] = "inset 1px -2px, -3px 4px red" should set the property value — assert_equals: serialization should be canonical expected "1px -2px inset, red -3px 4px" but got "inset 1px -2px, -3px 4px red"
+  FAIL: e.style['box-shadow'] = "4px 4px green" should set the property value — assert_equals: serialization should be canonical expected "green 4px 4px" but got "4px 4px green"
+FAIL css/css-backgrounds/parsing/webkit-border-radius-valid.html (4/25 pass)
+  FAIL: e.style['-webkit-border-radius'] = "1px" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['-webkit-border-radius'] = "1px 5%" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['-webkit-border-radius'] = "1px 2% 3px" should set the property value — assert_not_equals: property should be set got disallowed value ""
+
+===========================================
+  WPT Results: css/css-backgrounds
+===========================================
+  Test files: 121 (pass=44 fail=77 err=0)
+  Subtests: 1041/1848 pass
+  Pass rate: 56.3%
+===========================================

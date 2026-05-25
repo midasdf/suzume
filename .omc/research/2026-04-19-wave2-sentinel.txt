@@ -1,0 +1,27 @@
+=== Wave 2 Sentinel Sweep (team-lead, 2026-04-20) ===
+HEAD: 4cf67ed9c18c65d11864db7dc987454f66f93516
+Binary: 53302200 4月 20 07:29
+
+=== dom/nodes/Element-setAttribute.html ===
+WPT_SUMMARY: PASS=1 FAIL=1 TOTAL=2
+=== dom/nodes/Node-replaceChild.html ===
+WPT_SUMMARY: PASS=20 FAIL=9 TOTAL=29
+=== dom/nodes/Node-normalize.html ===
+WPT_SUMMARY: PASS=3 FAIL=1 TOTAL=4
+=== dom/nodes/Node-contains-1.html ===
+WPT_TIMEOUT_OR_CRASH
+=== dom/events/AddEventListenerOptions-once.any.js ===
+WPT_TIMEOUT_OR_CRASH
+=== dom/events/AddEventListenerOptions-passive.any.js ===
+WPT_TIMEOUT_OR_CRASH
+=== dom/events/EventListenerOptions-capture.html ===
+WPT_SUMMARY: PASS=1 FAIL=3 TOTAL=4
+=== html/dom/reflection-embedded.html ===
+WPT_SUMMARY: PASS=0 FAIL=0 TOTAL=0
+=== css/cssom/computed-style.html ===
+WPT_TIMEOUT_OR_CRASH
+=== css/css-color/parsing/color-valid-rgb.html ===
+WPT_SUMMARY: PASS=0 FAIL=70 TOTAL=70
+
+=== TOTALS ===
+PASS=25 FAIL=84 TOTAL=109

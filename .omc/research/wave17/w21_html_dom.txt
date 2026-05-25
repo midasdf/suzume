@@ -1,0 +1,438 @@
+=== WPT Tests: html/dom (235 files, 2 parallel, engine=kotori) ===
+FAIL html/dom/access-key-label.html (1/2 pass)
+  FAIL: Returns empty string when accesskey is invalid — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL html/dom/aria-element-reflection-disconnected.html (0/2 pass)
+  FAIL: Element references should stay valid when content is disconnected (single element) — Cannot read properties of undefined
+  FAIL: Element references should stay valid when content is disconnected (element array) — Cannot read properties of undefined
+FAIL html/dom/aria-element-reflection-labelledby.html (0/4 pass)
+  FAIL: Setting ariaLabelledByElements should determine the computed label for the labelled element — Cannot read properties of undefined (reading 'get_computed_label')
+  FAIL: Setting ariaLabelledByElements before inserting the elements referred to in the document should cause the label to be updated once elements are inserted — Cannot read properties of undefined (reading 'get_computed_label')
+  FAIL: Setting ariaLabelledByElements on an element before inserting it in the document should cause the label to be updated once the element is inserted — Cannot read properties of undefined (reading 'get_computed_label')
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/aria-attribute-reflection-enumerated.tentative.html (245/1721 pass)
+  FAIL: div.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: div.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: div.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+FAIL html/dom/aria-element-reflection.html (5/27 pass)
+  FAIL: aria-activedescendant element reflection — assert_equals: invalid ID for relationship returns null expected (object) null but got (undefined) undefined
+  FAIL: If the content attribute is set directly, the IDL attribute getter always returns the first element whose ID matches the content attribute. — assert_equals: expected (object) Element node <div role="option" id="option1">Item 1</div> but got (undefined) undefined
+  FAIL: Setting the IDL attribute to an element which is not the first element in DOM order with its ID causes the content attribute to be an empty string — assert_true: expected true got false
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/debug-refl6.html (1278/3104 pass)
+  FAIL: head.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: head.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: head.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/debug-reflection2.html (1278/3104 pass)
+  FAIL: head.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: head.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: head.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/debug-reflection3.html (1279/3105 pass)
+  FAIL: head.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: head.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: head.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+FAIL html/dom/documents/dom-tree-accessors/Document.body.html (2/26 pass)
+  FAIL: Childless html element — HierarchyRequestError
+  FAIL: Body followed by frameset inside the html element — HierarchyRequestError
+  FAIL: Frameset followed by body inside the html element — HierarchyRequestError
+FAIL html/dom/documents/dom-tree-accessors/Document.currentScript.html (0/7 pass)
+  FAIL: Script parse-inline — assert_array_equals: expected property 0 to be Element node <script id="parse-inline">
+  FAIL: Script parse-ext — assert_array_equals: lengths differ, expected array [Element node <script id="parse-ext" src="data:text/plain,verify('parse...] length 1, got [] length 0
+  FAIL: Script dom-inline — assert_array_equals: lengths differ, expected array [Element node <script id="dom-inline">verify('dom-inline');</script>] length 1, got [] length 0
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/debug-reflection4.html (1278/3104 pass)
+  FAIL: head.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: head.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: head.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+FAIL html/dom/documents/dom-tree-accessors/document.embeds-document.plugins-01.html (0/5 pass)
+  FAIL: No plugins — Cannot read properties of undefined (reading 'length')
+  FAIL: One plugin — assert_array_equals: value is undefined, expected array
+  FAIL: Two plugins — assert_array_equals: value is undefined, expected array
+FAIL html/dom/documents/dom-tree-accessors/document.forms.html (0/6 pass)
+  FAIL: document.forms — Cannot read properties of undefined (reading 'length')
+  FAIL: document.forms.item with string arg — Cannot read properties of undefined (reading 'item')
+  FAIL: document.forms with empty string — Cannot read properties of undefined
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-case.html (0/1 pass)
+  FAIL: getElementsByName and case — Cannot read properties of undefined (reading 'length')
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-id.html (0/1 pass)
+  FAIL: getElementsByName and ids — Cannot read properties of undefined (reading 'length')
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-interface.html (0/1 pass)
+  FAIL: Document.getElementsByName: interfaces — assert_class_string: expected "[object NodeList]" but got "[object Undefined]"
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-liveness.html (0/1 pass)
+  FAIL: Document.getElementsByName() should be a live collection — assert_true: expected true got false
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-namespace.html (0/1 pass)
+  FAIL: getElementsByName and foreign namespaces — Cannot read properties of undefined (reading 'length')
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-newelements.html (0/27 pass)
+  FAIL: getElementsByName("section") — Cannot read properties of undefined (reading 'length')
+  FAIL: getElementsByName("article") — Cannot read properties of undefined (reading 'length')
+  FAIL: getElementsByName("aside") — Cannot read properties of undefined (reading 'length')
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-null-undef.html (0/2 pass)
+  FAIL: getElementsByName(null) — Cannot read properties of undefined
+  FAIL: getElementsByName(undefined) — Cannot read properties of undefined
+FAIL html/dom/documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-param.html (0/1 pass)
+  FAIL: getElementsByName and the param element — Cannot read properties of undefined (reading 'length')
+FAIL html/dom/documents/dom-tree-accessors/document.head-02.html (0/1 pass)
+  FAIL: document.head — assert_equals: expected Element node <head></head> but got Element node <head><title>document.head</title>
+FAIL html/dom/documents/dom-tree-accessors/document.images.html (0/11 pass)
+  FAIL: document.images should contain all HTML img elements — Cannot read properties of undefined (reading 'length')
+  FAIL: img with id — Cannot read properties of undefined (reading 'x')
+  FAIL: img with name — Cannot read properties of undefined (reading 'y')
+FAIL html/dom/documents/dom-tree-accessors/document.links.html (0/1 pass)
+  FAIL: Document.links should be a live collection — assert_true: expected true got false
+FAIL html/dom/documents/dom-tree-accessors/document.scripts.html (0/1 pass)
+  FAIL: Document.scripts should be a live collection — assert_true: expected true got false
+FAIL html/dom/documents/dom-tree-accessors/document.title-01.html (0/4 pass)
+  FAIL: document.title with head blown away — assert_equals: expected (string) "document.title with head blown away" but got (undefined) undefined
+  FAIL: document.title with head blown away 1 — assert_equals: expected "" but got "FAIL"
+  FAIL: Untitled 2 — assert_equals: expected "PASS" but got "FAIL"
+FAIL html/dom/documents/dom-tree-accessors/document.title-03.html (1/11 pass)
+  FAIL: document.title initial value — assert_equals: expected (string) "document.title and space normalization" but got (undefined) undefined
+  FAIL: document.title after setting to "two  spaces" — assert_equals: expected "two spaces" but got "two  spaces"
+  FAIL: document.title after setting to "one	tab" — assert_equals: expected "one tab" but got "one	tab"
+FAIL html/dom/documents/dom-tree-accessors/document.title-06.html (0/1 pass)
+  FAIL: document.title and the empty string — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL html/dom/documents/dom-tree-accessors/document.title-07.html (0/9 pass)
+  FAIL: createHTMLDocument test 0: [Array] — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: createHTMLDocument test 1: [Array] — assert_equals: expected (string) "null" but got (undefined) undefined
+  FAIL: createHTMLDocument test 2: [Array] — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL html/dom/documents/dom-tree-accessors/document.title-08.html (0/2 pass)
+  FAIL: No title element — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: title element contains multiple child text nodes — assert_equals: expected (string) "PASS" but got (undefined) undefined
+FAIL html/dom/documents/dom-tree-accessors/document.title-not-in-html-svg.html (0/2 pass)
+  FAIL: Should not be able to set document title in XML document — assert_equals: expected (string) "" but got (undefined) undefined
+  FAIL: Should not be able to set document title in XML document with html:title element — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL html/dom/documents/dom-tree-accessors/nameditem-01.html (0/7 pass)
+  FAIL: img elements that have a name and id attribute, should be accessible by both values. — assert_equals: expected (object) Element node <img id="a" name="b"></img> but got (undefined) undefined
+  FAIL: img elements that have a name and id attribute with same value. — assert_equals: expected (object) Element node <img id="test" name="test"></img> but got (undefined) undefined
+  FAIL: Dynamically removing the name attribute from img elements, should not be accessible. — assert_equals: expected (object) Element node <img id="test2a" name="test2b"></img> but got (undefined) undefined
+FAIL html/dom/documents/dom-tree-accessors/nameditem-02.html (2/12 pass)
+  FAIL: If the only named item is an iframe, the contentWindow should be returned. — assert_true: "test1" in document should be true expected true got false
+  FAIL: If there are two iframes, a collection should be returned. — assert_true: "test2" in document should be true expected true got false
+  FAIL: If there are an iframe and another element (iframe first), a collection should be returned. — assert_true: "test3" in document should be true expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-04.html (3/12 pass)
+  FAIL: If there is one form, it should be returned (name) — assert_true: "test1" in document should be true expected true got false
+  FAIL: If there are two forms, a collection should be returned. (name) — assert_true: "test2" in document should be true expected true got false
+  FAIL: If there are two forms, a collection should be returned. (name and id) — assert_true: "test5" in document should be true expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-05.html (3/12 pass)
+  FAIL: If there is one embed, it should be returned (name) — assert_true: "test1" in document should be true expected true got false
+  FAIL: If there are two embeds, a collection should be returned. (name) — assert_true: "test2" in document should be true expected true got false
+  FAIL: If there are two embeds, a collection should be returned. (name and id) — assert_true: "test5" in document should be true expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-06.html (2/9 pass)
+  FAIL: If there is one img, it should be returned (name) — assert_true: "test1" in document should be true expected true got false
+  FAIL: If there are two imgs, a collection should be returned. (name) — assert_true: "test2" in document should be true expected true got false
+  FAIL: If there are two imgs, the one with a name should be returned. (name and id) — assert_true: "test5" in document should be true expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-07.html (0/11 pass)
+  FAIL: If there is one object, it should be returned (name) — assert_true: "test1" in document should be true expected true got false
+  FAIL: If there are two objects, a collection should be returned. (name) — assert_true: "test2" in document should be true expected true got false
+  FAIL: If there is one object, it should be returned (id) — assert_true: "test3" in document should be true expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-08.html (0/2 pass)
+  FAIL: If there is a div and object with same id, the object should be returned — assert_true: expected true got false
+  FAIL: If there is a div and img with same id, the img should be returned — assert_true: expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-names.html (6/16 pass)
+  FAIL: An embed name appears in a document's property names if the embed is exposed. — assert_true: expected true got false
+  FAIL: A form name appears in a document's property names. — assert_true: expected true got false
+  FAIL: An iframe name appears in a document's property names. — assert_true: expected true got false
+FAIL html/dom/documents/dom-tree-accessors/nameditem-no-shadowing.tentative.html (2/8 pass)
+  FAIL: document.constructor is not shadowed — assert_equals: expected (function) function "[Function]" but got (undefined) undefined
+  FAIL: document.currentScript is not shadowed — assert_equals: expected (object) Element node <script id="this-script">
+  FAIL: document.forms is not shadowed — assert_true: expected true got false
+FAIL html/dom/documents/resource-metadata-management/document-compatmode-01.html (0/1 pass)
+  FAIL: document.compatMode: Standards — assert_equals: expected (string) "CSS1Compat" but got (undefined) undefined
+FAIL html/dom/documents/resource-metadata-management/document-compatmode-02.html (0/1 pass)
+  FAIL: document.compatMode: Almost standards — assert_equals: expected (string) "CSS1Compat" but got (undefined) undefined
+FAIL html/dom/documents/resource-metadata-management/document-compatmode-03.html (0/1 pass)
+  FAIL: document.compatMode: Quirks — assert_equals: expected (string) "BackCompat" but got (undefined) undefined
+FAIL html/dom/documents/resource-metadata-management/document-cookie.html (0/1 pass)
+  FAIL: document has no cookie — assert_equals: expected (string) "" but got (undefined) undefined
+FAIL html/dom/documents/resource-metadata-management/document-lastModified-01.html (0/3 pass)
+  FAIL: Date returned by lastModified is in the form "MM/DD/YYYY hh:mm:ss". — assert_regexp_match: Format should match the pattern "NN/NN/NNNN NN:NN:NN". expected object "[object Object]" but got undefined
+  FAIL: Date returned by lastModified is current at page load — Cannot read properties of null
+  FAIL: Date returned by lastModified is current after timeout. — Cannot read properties of null
+FAIL html/dom/documents/resource-metadata-management/document-lastModified.html (0/1 pass)
+  FAIL: lastModified should return the last modified date and time — assert_equals: expected (string) "01/01/1970 10:23:45" but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/cdata-dir_auto.html (0/4 pass)
+  FAIL: Content of CDATA is ignored for dir=auto in html document — assert_true: expected true got false
+  FAIL: Text in CDATASection is considered when determining auto directionality — Cannot read properties of undefined
+  FAIL: Directionality is updated when removing CDATASection — Cannot read properties of undefined
+FAIL html/dom/elements/global-attributes/classlist-nonstring.html (6/7 pass)
+  FAIL: classList: non-string contains 4 — assert_equals: expected true but got false
+FAIL html/dom/elements/global-attributes/custom-attrs.html (0/1 pass)
+  FAIL: Setting an Element's dataset property should not interfere with namespaced attributes with same name — assert_equals: expected 3 but got 2
+FAIL html/dom/elements/global-attributes/dataset-delete.html (4/9 pass)
+grep: (標準入力): binary file matches
+  FAIL: Deleting element.dataset['fooBar'] should also remove an attribute with name 'data-foo-bar' should it exist. — assert_true: expected true got false
+  FAIL: Deleting element.dataset['Foo'] should also remove an attribute with name 'data--foo' should it exist. — assert_true: expected true got false
+  FAIL: Deleting element.dataset['-foo'] should not remove an attribute with name 'data--foo' should it exist. — assert_equals: expected (undefined) undefined but got (string) "value"
+FAIL html/dom/elements/global-attributes/dataset-enumeration.html (0/2 pass)
+  FAIL: A dataset should be enumeratable. — assert_equals: expected 3 but got 0
+  FAIL: Only attributes who qualify as dataset properties should be enumeratable in the dataset. — assert_equals: expected 2 but got 0
+FAIL html/dom/elements/global-attributes/dataset-get.html (5/10 pass)
+grep: (標準入力): binary file matches
+  FAIL: Getting element.dataset['fooBar'] should return the value of element.getAttribute('data-foo-bar')' — assert_true: expected true got false
+  FAIL: Getting element.dataset['Foo'] should return the value of element.getAttribute('data--foo')' — assert_true: expected true got false
+  FAIL: Getting element.dataset['-Foo'] should return the value of element.getAttribute('data---foo')' — assert_true: expected true got false
+FAIL html/dom/elements/global-attributes/dataset-prototype.html (0/2 pass)
+  FAIL: An elements dataset property is an instance of a DOMStringMap — assert_true: expected true got false
+  FAIL: Properties on Object.prototype should shine through. — assert_true: "toString" in dataset expected true got false
+FAIL html/dom/elements/global-attributes/dataset-set.html (5/11 pass)
+grep: (標準入力): binary file matches
+  FAIL: Setting element.dataset['fooBar'] should also change the value of element.getAttribute('data-foo-bar') — assert_true: expected true got false
+  FAIL: Setting element.dataset['Foo'] should also change the value of element.getAttribute('data--foo') — assert_true: expected true got false
+  FAIL: Setting element.dataset['-Foo'] should also change the value of element.getAttribute('data---foo') — assert_true: expected true got false
+FAIL html/dom/elements/global-attributes/dataset.html (4/7 pass)
+  FAIL: HTML elements should have a .dataset — assert_true: expected true got false
+  FAIL: Should not have a .dataset on random elements — assert_equals: expected (undefined) undefined but got (object) object "[object Object]"
+  FAIL: SVG elements should have a .dataset — assert_true: expected true got false
+FAIL html/dom/elements/global-attributes/dir-auto-div-append-child.html (0/1 pass)
+  FAIL: dir auto: updates on appendChild — assert_equals: expected "ltr" but got ""
+FAIL html/dom/elements/global-attributes/dir-bdi-script.html (0/1 pass)
+  FAIL: BDI test: Directionality — assert_equals: expected "rtl" but got ""
+FAIL html/dom/elements/global-attributes/dir-not-changed-text-input-typing.html (0/1 pass)
+  FAIL: entering LTR text doesn't change directionality of a text input without dir=auto — Cannot read properties of null (reading 'matches')
+FAIL html/dom/elements/global-attributes/dir-slots-directionality.html (0/16 pass)
+  FAIL: Slots: Directionality: dir=rtl on slot — unexpected markup
+  FAIL: Slots: Directionality: dir=rtl on host — unexpected markup
+  FAIL: Slots: Directionality: dir=auto on host with Arabic shadow tree content — unexpected markup
+FAIL html/dom/elements/global-attributes/document-dir.html (0/3 pass)
+  FAIL: Markup attribute — assert_equals: expected (string) "ltr" but got (undefined) undefined
+  FAIL: Setting the idl attribute to a garbage value — assert_equals: expected "" but got "x-garbage"
+  FAIL: Setting the idl attribute to the empty string — assert_equals: expected "" but got "LTR"
+FAIL html/dom/elements/global-attributes/id-attribute.html (11/17 pass)
+  FAIL: User agents must associate the element with an id value for purposes of CSS. — Cannot read properties of undefined (reading 'getComputedStyle')
+  FAIL: Association for CSS is exact and therefore case-sensitive. — Cannot read properties of undefined (reading 'getComputedStyle')
+  FAIL: Spaces are allowed in an id and still make an association. — Cannot read properties of undefined (reading 'getComputedStyle')
+FAIL html/dom/elements/global-attributes/id-name-specialcase.html (0/5 pass)
+  FAIL: id with digits only — assert_equals: expected (string) "123" but got (undefined) undefined
+  FAIL: id start with digits — assert_equals: expected (string) "1test" but got (undefined) undefined
+  FAIL: id start with underscore — assert_equals: expected (string) "_test" but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/lang-attribute-document-element-replacement.html (0/1 pass)
+  FAIL: Disconnected descendants of a replaced document element should resolve lang from their actual ancestor — Cannot read properties of undefined (reading 'documentElement')
+FAIL html/dom/elements/global-attributes/the-lang-attribute-001.html (0/1 pass)
+  FAIL: The browser will recognize a language declared in a lang attribute on the html tag. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-002.html (0/1 pass)
+  FAIL: The browser will NOT recognize a language declared in an xml:lang attribute on the html tag. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-003.html (0/1 pass)
+  FAIL: The browser will recognize a language declared in the HTTP header, when there is no internal language declaration. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-004.html (0/1 pass)
+  FAIL: The browser will recognize a language declared in a meta element in the head using http-equiv='Content-Language' content='..' (with a single language tag value), when there is no other language declaration inside the document. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-005.html (0/1 pass)
+  FAIL: If there is a conflict between the language declarations in the HTTP header and the html element using lang, the browser will recognize the language declared in the html element. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-006.html (0/1 pass)
+  FAIL: If there is a conflict between the language declarations in the HTTP header and the Content-Language meta element, the UA will recognize the language declared in the meta element. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-007.html (0/1 pass)
+  FAIL: If there is a conflict between the language declared using lang in the html element and that in the meta element, the UA will recognize the language declared in the html element. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-008.html (0/1 pass)
+  FAIL: If an element contains a lang attribute with an empty value, the value of a lang attribute higher up the document tree will no longer be applied to the content of that element. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-009.html (0/1 pass)
+  FAIL: If the HTTP header contains a language declaration but the html element uses an empty lang value, the UA will not recognize the language declared in the HTTP header. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-lang-attribute-010.html (0/1 pass)
+  FAIL: If the meta Content-Language element contains a language declaration but the html element uses an empty lang value, the UA will not recognize the language declared in the meta Content-Language element. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL html/dom/elements/global-attributes/the-translate-attribute-007.html (0/1 pass)
+  FAIL: In the default case, ie. with no translate attribute in the page, javascript will detect the translation mode of text as translate-enabled. — assert_true: expected true got ""
+FAIL html/dom/elements/global-attributes/the-translate-attribute-008.html (0/1 pass)
+  FAIL: If the translate attribute is set to yes, javascript will detect the translation mode of text as translate-enabled. — assert_true: expected true got "yes"
+FAIL html/dom/elements/global-attributes/the-translate-attribute-009.html (0/1 pass)
+  FAIL: If the translate attribute is set to no, javascript will detect the translation mode of text as no-translate. — assert_false: expected false got "no"
+FAIL html/dom/elements/global-attributes/the-translate-attribute-010.html (0/1 pass)
+  FAIL: If the translate attribute is set to no, javascript will detect the translation mode of elements inside that element with no translate flag as no-translate. — assert_false: expected false got ""
+FAIL html/dom/elements/global-attributes/the-translate-attribute-011.html (0/1 pass)
+  FAIL: If the translate attribute is set to yes on an element inside an element with the translate attribute set to no, javascript will detect the translation mode of text in the inner element as translate-enabled. — assert_true: expected true got "yes"
+FAIL html/dom/elements/global-attributes/the-translate-attribute-012.html (0/1 pass)
+  FAIL: If the translate attribute is set to a null string, javascript will detect the translation mode of text as translate-enabled. — assert_true: expected true got ""
+FAIL html/dom/elements/global-attributes/translate-enumerated-ascii-case-insensitive.html (0/1 pass)
+  FAIL: keyword yes — assert_equals: lowercase valid expected (boolean) true but got (string) "yes"
+FAIL html/dom/elements/global-attributes/translate-inherit-no-parent-element.html (0/5 pass)
+  FAIL: No parent node — assert_true: expected true got ""
+  FAIL: DocumentFragment parent node — assert_true: expected true got ""
+  FAIL: ShadowRoot parent node whose shadow host has translate=yes — assert_true: expected true got ""
+FAIL html/dom/elements/global-attributes/translate-non-html-translation-mode.html (0/3 pass)
+  FAIL: Non-HTML elements default to translate-enabled — assert_true: expected true got ""
+  FAIL: Non-HTML elements inherit their parent's translation-enabled state — assert_true: expected true got "true"
+  FAIL: Non-HTML elements inherit their parent's no-translation state — assert_false: expected false got "false"
+FAIL html/dom/elements/images/bypass-cache-revalidation.html (0/1 pass)
+  FAIL: Images can bypass no-cache — Cannot read properties of undefined (reading 'drawImage')
+FAIL html/dom/elements/name-content-attribute-and-property.html (123/140 pass)
+  FAIL: a element's name property reflects its content attribute — assert_equals: assignment to .name should change content attribute expected "bar" but got "foo"
+  FAIL: button element's name property reflects its content attribute — assert_equals: assignment to .name should change content attribute expected "bar" but got "foo"
+  FAIL: embed element's name property reflects its content attribute — assert_equals: assignment to .name should change content attribute expected "bar" but got "foo"
+FAIL html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html (0/7 pass)
+  FAIL: text-transform applied to child element ("<div id='target'><div id='child'>abc") — assert_equals: innerText expected (string) "ABC" but got (undefined) undefined
+  FAIL: text-transform applied to parent element ("<div id='parent'><div id='target'>abc") — assert_equals: innerText expected (string) "ABC" but got (undefined) undefined
+  FAIL: display: none applied to child element ("<div id='target'>abc<div id='child'>def") — assert_equals: innerText expected (string) "abc" but got (undefined) undefined
+FAIL html/dom/elements/the-innertext-and-outertext-properties/getter-first-letter-marker-multicol.html (0/1 pass)
+  FAIL: Test innerText/outerText for a combination of a list item with ::first-letter in multicol — assert_equals: innerText expected (string) "PASS" but got (undefined) undefined
+FAIL html/dom/elements/the-innertext-and-outertext-properties/getter.html (2/274 pass)
+  FAIL: Simplest possible test ("<div>abc") — assert_equals: innerText expected (string) "abc" but got (undefined) undefined
+  FAIL: Leading whitespace removed ("<div> abc") — assert_equals: innerText expected (string) "abc" but got (undefined) undefined
+  FAIL: Trailing whitespace removed ("<div>abc ") — assert_equals: innerText expected (string) "abc" but got (undefined) undefined
+FAIL html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html (8/126 pass)
+  FAIL: Simplest possible test — assert_not_equals: Should have a child got disallowed value null
+  FAIL: Simplest possible test, detached — assert_not_equals: Should have a child got disallowed value null
+  FAIL: Newlines convert to <br> in non-white-space:pre elements — assert_equals: expected "abc<br>def" but got ""
+FAIL html/dom/elements/the-innertext-and-outertext-properties/innertext-whitespace-pre-line.html (1/2 pass)
+  FAIL: innerText has collapsed whitespace but preserved newlines with pre-line — Cannot read properties of undefined (reading 'replace')
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html (2/43 pass)
+  FAIL: Replacing a node and merging with the previous text node — assert_equals: expected "A Replaced" but got "A <span id="testReplacePrevious">B</span>"
+  FAIL: Replacing a node and merging with the following text node — assert_equals: expected "Replaced B" but got "<span id="testReplaceFollowing">A</span> B"
+  FAIL: Replacing a node and merging with the previous and following text node — assert_equals: expected "A Replaced C" but got "A <span id="testReplaceBoth">B</span> C"
+FAIL html/dom/historical.html (10/13 pass)
+  FAIL: document.applets is always empty — assert_array_equals: value is undefined, expected array
+  FAIL: document.all cannot find applet — Cannot read properties of undefined (reading 'war')
+  FAIL: applet is not styled — assert_equals: expected "none" but got ""
+FAIL html/dom/partial-updates/tentative/processing-instruction-attributes.html (0/49 pass)
+  FAIL: Processing instruction attribute mutation from DOM — assert_true: expected true got undefined
+  FAIL: Processing instruction attributes with xml-stylesheet from DOM — assert_true: expected true got undefined
+  FAIL: Processing instruction attribute mutation from parser — assert_equals: expected 7 but got 8
+FAIL html/dom/partial-updates/tentative/stream-append-has-invalidation.html (0/1 pass)
+  FAIL: HTML partial updates - :has invalidation with streaming — Cannot read properties of undefined (reading 'getWriter')
+FAIL html/dom/partial-updates/tentative/stream-append-with-template-for.html (0/1 pass)
+  FAIL: streamHTML methods can apply template with for — Cannot read properties of undefined (reading 'getWriter')
+FAIL html/dom/partial-updates/tentative/template-for-append-element.html (0/1 pass)
+  FAIL: <template for> appending element — assert_equals: expected "Some<span> </span><span>content</span>" but got "Some<!--?start name="p"?-->"
+FAIL html/dom/partial-updates/tentative/template-for-append-text-and-element.html (0/1 pass)
+  FAIL: <template for> with text — assert_equals: expected "Some content" but got "Some"
+FAIL html/dom/partial-updates/tentative/template-for-append-to-head.html (0/1 pass)
+  FAIL: HTML partial updates - append to head — assert_equals: expected (string) "added" but got (undefined) undefined
+FAIL html/dom/partial-updates/tentative/template-for-empty-hash.html (0/1 pass)
+  FAIL: empty hash matches marker without name attribute — assert_equals: expected "ab" but got ""
+FAIL html/dom/partial-updates/tentative/template-for-gradual-append.html (0/1 pass)
+  FAIL: Multiple <template for> — assert_array_equals: expected property 1 to be "A" but got "Loading..." (expected array ["Loading...", "A", "AB", "ABC", "ABD", "ABCD"] got ["Loading...", "Loading...", "Loading...", "Loading...", "Loading...", "Loading..."])
+FAIL html/dom/partial-updates/tentative/template-for-html-setters.html (8/28 pass)
+  FAIL: Setter innerHTML should not patch existing target in head — Cannot read properties of undefined (reading 'head')
+  FAIL: Setter innerHTML should patch targets inside the fragment — Cannot read properties of undefined (reading 'head')
+  FAIL: Setter outerHTML should not patch existing target in head — Cannot read properties of undefined (reading 'head')
+FAIL html/dom/partial-updates/tentative/template-for-ignores-case.html (0/1 pass)
+  FAIL: marker/end/start PI targets are parsed as lower case — assert_equals: expected "abc" but got ""
+FAIL html/dom/partial-updates/tentative/template-for-innerHTML-ambiguous.html (0/1 pass)
+  FAIL: <template for> in innerHTML patching inner element — assert_equals: expected "New content" but got "Old content in innerHTML"
+FAIL html/dom/partial-updates/tentative/template-for-innerHTML-within.html (0/1 pass)
+  FAIL: <template for> in innerHTML patching inner element — assert_equals: expected "New content" but got "Old content in innerHTML"
+FAIL html/dom/partial-updates/tentative/template-for-invalid.html (0/1 pass)
+  FAIL: <template for> with a nonexistent ID should attach — assert_not_equals: got disallowed value null
+FAIL html/dom/partial-updates/tentative/template-for-move-end-while-appending.html (0/1 pass)
+  FAIL: Multiple <template for> — assert_array_equals: lengths differ, expected array ["Loading...", "A", "Ab", "Abc", "Abc", "Adbc", "Adbc", "AdbcE", "AdbcE", "AdbcFE", "AdbcFE", "AdbcFEG"] length 12, got ["Loading..."] length 1
+FAIL html/dom/partial-updates/tentative/template-for-move-marker-while-appending.html (0/1 pass)
+  FAIL: Multiple <template for> — assert_array_equals: lengths differ, expected array ["0  1", "0 A 1", "0 Ab 1", "0 Abc 1", "0 Abc 1", "0 Adbc 1", "0 Adbc 1", "0 Adbc 1E", "0 Adbc 1E", "0 Adbc 1FE", "0 Adbc 1FE", "0 Adbc 1FEG"] length 12, got ["0  1"] length 1
+FAIL html/dom/partial-updates/tentative/template-for-move-start-while-appending.html (0/1 pass)
+  FAIL: HTML partial updates - move <?start> while appending has no effect — assert_array_equals: lengths differ, expected array ["0  1", "0 a", "0 ab", "0 abc", "0 abc", "0 abcd", "0 abcd", "0 abcde", "0 abcde", "0 abcdef", "0 abcdef"] length 11, got ["0  1"] length 1
+FAIL html/dom/partial-updates/tentative/template-for-move-while-appending.html (0/1 pass)
+  FAIL: Multiple <template for> — assert_array_equals: lengths differ, expected array ["ref Loading...", "ref A", "Before ref A", "Before ref AB", "Before AB", "Before ABC", "Before ABC", "Before ABCD", "Before ABCD", "Before ABCDE", "Before ABCDEF"] length 11, got ["ref Loading..."] length 1
+FAIL html/dom/partial-updates/tentative/template-for-multiple-cases.html (0/270 pass)
+  FAIL: Simple replacement with only start - innerHTML  — Cannot read properties of undefined (reading 'getWriter')
+  FAIL: Simple replacement with only start - innerHTML with 2 chunks — Cannot read properties of undefined (reading 'getWriter')
+  FAIL: Simple replacement with only start - innerHTML with 4 chunks — Cannot read properties of undefined (reading 'getWriter')
+FAIL html/dom/partial-updates/tentative/template-for-multiple.html (0/1 pass)
+  FAIL: Multiple <template for> — assert_equals: expected "New P1" but got "Old P1"
+FAIL html/dom/partial-updates/tentative/template-for-mutation-records.html (0/1 pass)
+  FAIL: HTML partial updates - mutation records for removal — assert_equals: expected 1 but got 0
+FAIL html/dom/partial-updates/tentative/template-for-only-html-001.html (0/1 pass)
+  FAIL: HTML partial updates: template with contentmethod does not work in XHTML — Cannot read properties of undefined (reading 'querySelector')
+FAIL html/dom/partial-updates/tentative/template-for-prepend-element.html (0/1 pass)
+  FAIL: <template for> prepend element — assert_equals: expected "Some content" but got "content"
+FAIL html/dom/partial-updates/tentative/template-for-prepend-text.html (0/1 pass)
+  FAIL: <template for> prepend text — assert_equals: expected "Some content" but got " content"
+FAIL html/dom/partial-updates/tentative/template-for-preserves-case-for-dom-inserted.html (0/1 pass)
+  FAIL: marker/end/start PI targets are parsed as lower case — assert_equals: expected "<?Start name=a?><?End ?><?MARKER name=b?><?marKER name=c?>def" but got "f"
+FAIL html/dom/partial-updates/tentative/template-for-replace-children-with-element.html (0/1 pass)
+  FAIL: <template for> replace children with element — assert_equals: id expected "stuff" but got ""
+FAIL html/dom/partial-updates/tentative/template-for-replace-children-with-text.html (0/1 pass)
+  FAIL: <template for> replace children with text — assert_equals: expected "New content" but got "Old content"
+FAIL html/dom/partial-updates/tentative/template-for-replace.html (0/3 pass)
+  FAIL: <template for> replace — Cannot read properties of null (reading 'textContent')
+  FAIL: <template for> should work when chunked — Cannot read properties of null (reading 'innerText')
+  FAIL: <template for> should work when elements are sliced in the middle — Cannot read properties of null (reading 'textContent')
+FAIL html/dom/partial-updates/tentative/template-for-reverse.html (0/1 pass)
+  FAIL: HTML partial updates: patch should appear after its target — assert_equals: expected (string) "Old content" but got (undefined) undefined
+FAIL html/dom/partial-updates/tentative/template-for-sanitization.html (0/4 pass)
+  FAIL: <template for> is sanitized away with removeElements when streaming — Cannot read properties of undefined (reading 'getWriter')
+  FAIL: <template for> is sanitized away with removeAttributes when streaming — Cannot read properties of undefined (reading 'getWriter')
+  FAIL: <template for> is sanitized away with removeElements in a fragment — assert_equals: expected "<?marker name=p?>" but got "<!--?start name="p"-->Old content<!--?end-->"
+FAIL html/dom/partial-updates/tentative/template-for-script-children.html (0/1 pass)
+  FAIL: HTML partial updates - a script inside a patch should execute — assert_equals: expected "window.state = 'patched';" but got "
+FAIL html/dom/partial-updates/tentative/template-for-script-eval.html (0/1 pass)
+  FAIL: HTML partial updates - template for can create a new executable script — assert_equals: expected "patched" but got "init"
+FAIL html/dom/partial-updates/tentative/template-for-script-replace.html (0/1 pass)
+  FAIL: HTML partial updates - a script replaced with a patch should execute — assert_equals: expected "window.state = 'patched';" but got "
+FAIL html/dom/partial-updates/tentative/template-for-shadow-nested.html (0/1 pass)
+  FAIL: <template contentmethod> inside a <template shadowrootmode><div> should apply directly to its target — assert_equals: expected (string) "Old content in light DOM" but got (undefined) undefined
+FAIL html/dom/partial-updates/tentative/template-for-shadow-root.html (0/2 pass)
+  FAIL: markers are respected in declarative shadow root — Cannot read properties of null (reading 'textContent')
+  FAIL: markers are respected in imperative shadow root with streaming — Cannot read properties of undefined (reading 'getWriter')
+FAIL html/dom/partial-updates/tentative/template-for-shadow.html (0/1 pass)
+  FAIL: <template contentmethod> inside a <template shadowrootmode> should apply directly to its target — assert_equals: expected (string) "Old content in light DOM" but got (undefined) undefined
+FAIL html/dom/partial-updates/tentative/template-for-style-in-head.html (0/1 pass)
+  FAIL: HTML partial updates - patch updates style with plain text — Cannot read properties of null (reading 'firstElementChild')
+FAIL html/dom/partial-updates/tentative/template-for-style.html (0/1 pass)
+  FAIL: HTML partial updates - patch updates style with plain text — assert_equals: expected "rgb(100, 0, 100)" but got "rgb(0, 0, 0)"
+FAIL html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.html (0/1 pass)
+  FAIL: HTML partial updates: shadowrootmode supersedes for — Cannot read properties of null (reading 'querySelector')
+FAIL html/dom/partial-updates/tentative/template-for-supersedes-invalid-shadowrootmode.html (0/1 pass)
+  FAIL: HTML partial updates: invalid shadowrootmode superseded by for — assert_equals: expected "Inside" but got "Unchanged"
+FAIL html/dom/partial-updates/tentative/template-for-title.html (0/1 pass)
+  FAIL: HTML partial updates - update title — assert_equals: expected (string) "New title" but got (undefined) undefined
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/reflection-forms-weekmonth.html (924/1578 pass)
+  FAIL: input.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: input.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: input.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/reflection-metadata.html (1278/3104 pass)
+  FAIL: head.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: head.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: head.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+environment: 行 5: 警告: コマンド代入: 入力のヌルバイトを無視しました
+FAIL html/dom/reflection-obsolete.html (1283/2616 pass)
+  FAIL: marquee.title: setAttribute() to undefined — assert_equals: getAttribute() expected "undefined" but got ""
+  FAIL: marquee.title: setAttribute() to null — assert_equals: getAttribute() expected "null" but got ""
+  FAIL: marquee.title: IDL set to "" — assert_equals: getAttribute() expected "" but got "[object Object]"
+FAIL html/dom/render-blocking/blocking-idl-attr.html (0/6 pass)
+  FAIL: Supported tokens of the 'blocking' IDL attribute of the link element — Cannot read properties of undefined (reading 'supports')
+  FAIL: Setting the 'blocking' IDL attribute of the link element — assert_equals: expected (string) "asdf" but got (undefined) undefined
+  FAIL: Supported tokens of the 'blocking' IDL attribute of the script element — assert_true: expected true got undefined
+FAIL html/dom/render-blocking/parser-blocking-script.html (1/2 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/parser-inserted-async-inline-module-with-import.html (0/1 pass)
+  FAIL: Parser-inserted async inline module script elements with "blocking=render" are render-blocking — assert_true: Parser-inserted async render-blocking inline module script should execute before rAF callback expected true got false
+FAIL html/dom/render-blocking/parser-inserted-async-script.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/parser-inserted-defer-script.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/parser-inserted-inline-module-with-import.html (0/1 pass)
+  FAIL: Parser-inserted module script elements with "blocking=render" are render-blocking — assert_true: Parser-inserted render-blocking inline module script should execute before rAF callback expected true got false
+FAIL html/dom/render-blocking/parser-inserted-module-script.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/parser-inserted-style-element.html (1/2 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/parser-inserted-stylesheet-link.html (1/2 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/remove-pending-async-render-blocking-script.html (0/1 pass)
+  FAIL: Removed render-blocking script should not indefinitely block rendering — assert_equals: expected (undefined) undefined but got (number) 1
+FAIL html/dom/render-blocking/script-inserted-inline-module-with-import.html (0/1 pass)
+  FAIL: Script-inserted module script elements with "blocking=render" are render-blocking — assert_true: Script-inserted render-blocking inline module script should execute before rAF callback expected true got false
+FAIL html/dom/render-blocking/script-inserted-module-script.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/script-inserted-script.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/script-inserted-style-element.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/render-blocking/script-inserted-stylesheet-link.html (0/1 pass)
+  FAIL: Rendering is blocked before render-blocking resources are loaded — assert_implements: undefined
+FAIL html/dom/self-origin.any.html (0/1 pass)
+  FAIL: self.origin should be correct — Cannot read properties of undefined (reading 'host')
+FAIL html/dom/self-origin.sub.html (0/1 pass)
+  FAIL: Assigning blob url — Cannot read properties of undefined (reading 'createObjectURL')
+FAIL html/dom/usvstring-reflection.https.html (0/19 pass)
+grep: (標準入力): binary file matches
+  FAIL: location.hash : unpaired surrogate codepoint should be replaced with U+FFFD — Cannot set properties of undefined (setting 'hash')
+  FAIL: location.href : unpaired surrogate codepoint should be replaced with U+FFFD — Cannot read properties of undefined (reading 'location')
+  FAIL: window.open : unpaired surrogate codepoint should be replaced with U+FFFD — Cannot read properties of undefined (reading 'location')
+
+===========================================
+  WPT Results: html/dom
+===========================================
+  Test files: 235 (pass=75 fail=152 err=8)
+  Subtests: 9157/22949 pass
+  Pass rate: 39.9%
+===========================================

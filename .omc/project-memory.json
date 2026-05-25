@@ -168,15 +168,21 @@
   },
   "hotPaths": [
     {
+      "path": "src/js/kotori_dom.zig",
+      "accessCount": 338,
+      "lastAccessed": 1778943969395,
+      "type": "directory"
+    },
+    {
       "path": "src/js/kotori/vm.zig",
-      "accessCount": 79,
-      "lastAccessed": 1776348449986,
+      "accessCount": 113,
+      "lastAccessed": 1778944764722,
       "type": "file"
     },
     {
-      "path": "src/js/kotori_dom.zig",
-      "accessCount": 76,
-      "lastAccessed": 1776350456752,
+      "path": "src/js/kotori_runtime.zig",
+      "accessCount": 45,
+      "lastAccessed": 1778944850556,
       "type": "directory"
     },
     {
@@ -192,9 +198,21 @@
       "type": "directory"
     },
     {
+      "path": "src/js/dom_names.zig",
+      "accessCount": 12,
+      "lastAccessed": 1778902034329,
+      "type": "file"
+    },
+    {
+      "path": "src/js/html_reflection.zig",
+      "accessCount": 11,
+      "lastAccessed": 1778871716792,
+      "type": "file"
+    },
+    {
       "path": "src/js/kotori/compiler.zig",
-      "accessCount": 10,
-      "lastAccessed": 1776350429632,
+      "accessCount": 11,
+      "lastAccessed": 1778941618111,
       "type": "directory"
     },
     {
@@ -210,6 +228,12 @@
       "type": "directory"
     },
     {
+      "path": "src/js/kotori/object.zig",
+      "accessCount": 9,
+      "lastAccessed": 1778943385791,
+      "type": "file"
+    },
+    {
       "path": "src/js/dom_style.zig",
       "accessCount": 8,
       "lastAccessed": 1776285240536,
@@ -223,8 +247,8 @@
     },
     {
       "path": "src/js/dom_api.zig",
-      "accessCount": 7,
-      "lastAccessed": 1776307754007,
+      "accessCount": 8,
+      "lastAccessed": 1778942176464,
       "type": "directory"
     },
     {
@@ -232,12 +256,6 @@
       "accessCount": 6,
       "lastAccessed": 1776287363334,
       "type": "file"
-    },
-    {
-      "path": "src/js/kotori_runtime.zig",
-      "accessCount": 5,
-      "lastAccessed": 1776328453561,
-      "type": "directory"
     },
     {
       "path": "src/css/cssom/computed_slice.zig",
@@ -255,6 +273,12 @@
       "path": "tests/wpt/run_wpt_parallel.sh",
       "accessCount": 4,
       "lastAccessed": 1776340746992,
+      "type": "file"
+    },
+    {
+      "path": "src/js/web_api.zig",
+      "accessCount": 4,
+      "lastAccessed": 1778941774011,
       "type": "file"
     },
     {
@@ -318,6 +342,12 @@
       "type": "directory"
     },
     {
+      "path": "deps/lexbor-zig/src/html_ext.zig",
+      "accessCount": 2,
+      "lastAccessed": 1778870662163,
+      "type": "file"
+    },
+    {
       "path": "src/dom/node.zig",
       "accessCount": 1,
       "lastAccessed": 1776285436292,
@@ -334,12 +364,6 @@
       "accessCount": 1,
       "lastAccessed": 1776285943642,
       "type": "directory"
-    },
-    {
-      "path": "src/js/web_api.zig",
-      "accessCount": 1,
-      "lastAccessed": 1776287154454,
-      "type": "file"
     },
     {
       "path": "src/js/dom_element.zig",
@@ -406,6 +430,42 @@
       "accessCount": 1,
       "lastAccessed": 1776350402322,
       "type": "directory"
+    },
+    {
+      "path": "deps/lexbor-zig/lib/lexbor/html/interfaces/template_element.h",
+      "accessCount": 1,
+      "lastAccessed": 1778870608943,
+      "type": "file"
+    },
+    {
+      "path": "src/js/dom_document.zig",
+      "accessCount": 1,
+      "lastAccessed": 1778901185114,
+      "type": "file"
+    },
+    {
+      "path": "deps/lexbor-zig/lib/lexbor/dom/interfaces/processing_instruction.h",
+      "accessCount": 1,
+      "lastAccessed": 1778907383402,
+      "type": "file"
+    },
+    {
+      "path": "deps/lexbor-zig/lib/lexbor/dom/interfaces/character_data.h",
+      "accessCount": 1,
+      "lastAccessed": 1778907434799,
+      "type": "file"
+    },
+    {
+      "path": "deps/lexbor-zig/src/dom_ext.zig",
+      "accessCount": 1,
+      "lastAccessed": 1778907435731,
+      "type": "file"
+    },
+    {
+      "path": "src/js/iframe.zig",
+      "accessCount": 1,
+      "lastAccessed": 1778941860787,
+      "type": "file"
     }
   ],
   "userDirectives": []

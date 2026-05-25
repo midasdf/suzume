@@ -1,0 +1,579 @@
+=== WPT Tests: css/css-values (237 files, 2 parallel, engine=kotori) ===
+FAIL css/css-values/acos-asin-atan-atan2-computed.html (0/45 pass)
+  FAIL: acos(1) should be used-value-equivalent to 0deg — assert_not_equals: acos(1) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+  FAIL: atan(0) should be used-value-equivalent to 0deg — assert_not_equals: atan(0) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+  FAIL: asin(0) should be used-value-equivalent to 0deg — assert_not_equals: asin(0) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/acos-asin-atan-atan2-serialize.html (0/62 pass)
+  FAIL: 'rotate(acos(1))' as a specified value should serialize as 'rotate(calc(0deg))'. — assert_equals: 'rotate(calc(0deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(0deg))" but got (undefined) undefined
+  FAIL: 'rotate(calc(acos(1)))' as a specified value should serialize as 'rotate(calc(0deg))'. — assert_equals: 'rotate(calc(0deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(0deg))" but got (undefined) undefined
+  FAIL: 'rotate(acos(-1))' as a specified value should serialize as 'rotate(calc(180deg))'. — assert_equals: 'rotate(calc(180deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(180deg))" but got (undefined) undefined
+FAIL css/css-values/animations/line-height-lh-transition.html (0/1 pass)
+  FAIL: lh unit length should change with transitioning line-height — Cannot read properties of undefined (reading 'offsetTop')
+FAIL css/css-values/attr-IACVT.html (0/1 pass)
+FAIL css/css-values/attr-all-types.html (93/128 pass)
+  FAIL: CSS Values Test: attr() IACVT — assert_not_equals: got disallowed value "rgb(255, 0, 0)"
+  FAIL: CSS Values and Units Test: attr 17 — assert_equals: Value 'attr(data-foo type(<custom-ident>))', where 'data-foo=anim' should be valid for the property 'animation-name'. expected "anim" but got "attr(data-foo type(<custom-ident>))"
+  FAIL: CSS Values and Units Test: attr 18 — assert_equals: Value 'attr(data-foo type(<custom-ident>), anim-fallback)', where 'data-foo="anim"' should be valid for the property 'animation-name'. expected "anim-fallback" but got "attr(data-foo type(<custom-ident>), anim-fallback)"
+  FAIL: CSS Values and Units Test: attr 19 — assert_equals: Value 'attr(data-foo type(<custom-ident>), anim-fallback)', where 'data-foo=initial' should be valid for the property 'animation-name'. expected "anim-fallback" but got "attr(data-foo type(<custom-ident>), anim-fallback)"
+FAIL css/css-values/attr-container-style-query.html (0/1 pass)
+  FAIL: style query should implement to true — Cannot read properties of null (reading 'color')
+FAIL css/css-values/attr-argument-grammar.html (12/15 pass)
+  FAIL: CSS Values and Units Test: attr() argument grammar 9 — assert_equals: Value 'attr(var(--y), 3px)', where 'data-foo=var(--y)' should be valid for the property '--x'. expected "3px" but got "attr(var(--y), 3px)"
+  FAIL: CSS Values and Units Test: attr() argument grammar 10 — assert_equals: Value 'attr(var(--y))', where 'data-foo=var(--x)' should be valid for the property '--x'. expected "" but got "attr(var(--y))"
+  FAIL: CSS Values and Units Test: attr() argument grammar 11 — assert_equals: Value 'attr(var(--y), 3px)', where 'data-foo=var(--x)' should be valid for the property '--x'. expected "" but got "attr(var(--y), 3px)"
+FAIL css/css-values/attr-cycle.html (1/30 pass)
+  FAIL: CSS Values and Units Test: attr — assert_equals: Setting property '--x' to the value 'attr(data-foo type(<ident>))', where 'data-foo=attr(data-foo)' should not change it's value. expected "" but got "attr(data-foo type(<ident>))"
+  FAIL: CSS Values and Units Test: attr 1 — assert_equals: Setting property '--x' to the value 'attr(data-foo type(<length>))', where 'data-foo=attr(data-foo type(<length>))' should not change it's value. expected "" but got "attr(data-foo type(<length>))"
+  FAIL: CSS Values and Units Test: attr 2 — assert_equals: Setting property '--y' to the value 'attr(data-foo type(*))', where 'data-foo=attr(data-foo type(*))' should not change it's value. expected "" but got "attr(data-foo type(*))"
+FAIL css/css-values/attr-length-specified.html (0/3 pass)
+  FAIL: type(<length>) lowercase — assert_equals: expected "3em" but got ""
+  FAIL: type(<length>) uppercase — assert_equals: expected "3em" but got ""
+  FAIL: Unit (em) number — assert_equals: expected "3em" but got ""
+FAIL css/css-values/attr-pseudo-elem-invalidation.html (0/6 pass)
+  FAIL: CSS Values and Units Test: attr() invalidation of pseudo elements — assert_not_equals: Change of attribute value should lead to invalidation of ::after element style. got disallowed value "16px"
+  FAIL: CSS Values and Units Test: attr() invalidation of pseudo elements 1 — assert_not_equals: Change of attribute value should lead to invalidation of ::backdrop element style. got disallowed value "16px"
+  FAIL: CSS Values and Units Test: attr() invalidation of pseudo elements 2 — assert_not_equals: Change of attribute value should lead to invalidation of ::before element style. got disallowed value "16px"
+FAIL css/css-values/attr-revert-rule.html (0/1 pass)
+  FAIL: The revert-rule works in an attr() fallback — assert_true: expected true got false
+FAIL css/css-values/attr-security.html (29/43 pass)
+  FAIL: '--x: image-set(attr(data-foo))' with data-foo="https://does-not-exist.test/404.png" — assert_equals: expected "image-set("https://does-not-exist.test/404.png")" but got "image-set(attr(data-foo))"
+  FAIL: '--x: src(attr(data-foo))' with data-foo="https://does-not-exist.test/404.png" — assert_equals: expected "src("https://does-not-exist.test/404.png")" but got "src(attr(data-foo))"
+  FAIL: '--x: src(string("https://does-not-exist.test" attr(data-foo)))' with data-foo="/404.png" — assert_equals: expected "src(string("https://does-not-exist.test" "/404.png"))" but got "src(string("https://does-not-exist.test" attr(data-foo)))"
+FAIL css/css-values/attr-serialization.html (0/1 pass)
+  FAIL: 'attr(data-foo type(<length>))' as a computed value should serialize as '10px'. — assert_equals: '10px' should round-trip exactly in computed values. expected (string) "10px" but got (undefined) undefined
+FAIL css/css-values/attr-universal-selector.html (0/1 pass)
+  FAIL: CSS Values and Units Test: attr() security limitations in universal selector  — assert_equals: 'background-image: attr(data-foo)' with data-foo='https://does-not-exist.test/404.png' expected "none" but got ""
+FAIL css/css-values/calc-angle-values.html (0/27 pass)
+  FAIL: addition of 2 angle units: deg plus deg — Cannot read properties of undefined (reading 'replace')
+  FAIL: addition of 2 angle units: deg plus rad — Cannot read properties of undefined (reading 'replace')
+  FAIL: addition of 2 angle units: deg plus grad — Cannot read properties of undefined (reading 'replace')
+FAIL css/css-values/calc-background-position-002.html (0/6 pass)
+  FAIL: testing background-position: calc(2px + 3px) calc(4px + 5px) — assert_equals: expected (string) "5px 9px" but got (undefined) undefined
+  FAIL: testing background-position: calc(18px - 7px) calc(19px - 7px) — assert_equals: expected (string) "11px 12px" but got (undefined) undefined
+  FAIL: testing background-position: calc(4 * 5px) calc(6px * 4) — assert_equals: expected (string) "20px 24px" but got (undefined) undefined
+FAIL css/css-values/calc-background-position-003.html (0/6 pass)
+  FAIL: testing background-position: calc(2px + 3px) calc(4px + 5px) — assert_equals: expected "calc(5px) calc(9px)" but got ""
+  FAIL: testing background-position: calc(18px - 7px) calc(19px - 7px) — assert_equals: expected "calc(11px) calc(12px)" but got ""
+  FAIL: testing background-position: calc(4 * 5px) calc(6px * 4) — assert_equals: expected "calc(20px) calc(24px)" but got ""
+FAIL css/css-values/calc-catch-divide-by-0.html (0/21 pass)
+  FAIL: 'calc(100px * 0 / 0)' as a specified value should serialize as 'calc(NaN * 1px)'. — assert_equals: 'calc(NaN * 1px)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1px)" but got (undefined) undefined
+  FAIL: 'calc(100px / 0)' as a specified value should serialize as 'calc(infinity * 1px)'. — assert_equals: 'calc(infinity * 1px)' should round-trip exactly in specified values. expected (string) "calc(infinity * 1px)" but got (undefined) undefined
+  FAIL: 'calc(100px / (0))' as a specified value should serialize as 'calc(infinity * 1px)'. — assert_equals: 'calc(infinity * 1px)' should round-trip exactly in specified values. expected (string) "calc(infinity * 1px)" but got (undefined) undefined
+FAIL css/css-values/calc-complex-unresolved-serialize.html (0/12 pass)
+  FAIL: 'calc(pow(2, sign(1em - 18px)))' as a specified value should serialize as 'calc(pow(2, sign(1em - 18px)))'. — assert_equals: 'calc(pow(2, sign(1em - 18px)))' should round-trip exactly in specified values. expected (string) "calc(pow(2, sign(1em - 18px)))" but got (undefined) undefined
+  FAIL: 'calc(pow(2, sign(1em - 18px)))' as a computed value should serialize as '2'. — assert_equals: '2' should round-trip exactly in computed values. expected (string) "2" but got (undefined) undefined
+  FAIL: 'calc(pow(sign(1em - 18px), 2))' as a specified value should serialize as 'calc(pow(sign(1em - 18px), 2))'. — assert_equals: 'calc(pow(sign(1em - 18px), 2))' should round-trip exactly in specified values. expected (string) "calc(pow(sign(1em - 18px), 2))" but got (undefined) undefined
+FAIL css/css-values/calc-in-color-001.html (0/1 pass)
+  FAIL: calc() in color functions — assert_equals: rgb(calc(0), calc(255 + 0), calc(140 - 139 - 1)) expected "rgb(0, 255, 0)" but got "rgb(calc(0), calc(255 + 0), calc(140 - 139 - 1))"
+FAIL css/css-values/calc-in-font-feature-settings.html (0/1 pass)
+  FAIL: calc() in font-feature-settings — assert_in_array: value "" not in array ["'vert' 2", ""vert" 2"]
+FAIL css/css-values/calc-infinity-nan-serialize-angle.html (0/30 pass)
+FAIL css/css-values/calc-infinity-nan-computed.html (0/48 pass)
+  FAIL: 'rotate(calc(1deg * NaN))' as a specified value should serialize as 'rotate(calc(NaN * 1deg))'. — assert_equals: 'rotate(calc(NaN * 1deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(NaN * 1deg))" but got (undefined) undefined
+  FAIL: 'rotate(calc(1rad * NaN))' as a specified value should serialize as 'rotate(calc(NaN * 1deg))'. — assert_equals: 'rotate(calc(NaN * 1deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(NaN * 1deg))" but got (undefined) undefined
+  FAIL: 'rotate(calc(1turn * NaN))' as a specified value should serialize as 'rotate(calc(NaN * 1deg))'. — assert_equals: 'rotate(calc(NaN * 1deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(NaN * 1deg))" but got (undefined) undefined
+  FAIL: Property width value 'calc(NaN * 1px)' — assert_equals: expected (string) "0px" but got (undefined) undefined
+  FAIL: Property width value 'calc(NaN * 1%)' — assert_equals: expected (string) "0px" but got (undefined) undefined
+  FAIL: Property width value 'calc(infinity * 1px)' — assert_true: calc(infinity * 1px) expected finite value but got  expected true got false
+FAIL css/css-values/calc-infinity-nan-serialize-length.html (0/41 pass)
+  FAIL: 'calc(1px * NaN)' as a specified value should serialize as 'calc(NaN * 1px)'. — assert_equals: 'calc(NaN * 1px)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1px)" but got (undefined) undefined
+  FAIL: 'calc(1% * NaN)' as a specified value should serialize as 'calc(NaN * 1%)'. — assert_equals: 'calc(NaN * 1%)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1%)" but got (undefined) undefined
+  FAIL: 'calc(1in * NaN)' as a specified value should serialize as 'calc(NaN * 1px)'. — assert_equals: 'calc(NaN * 1px)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1px)" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-number.html (0/31 pass)
+  FAIL: 'calc(NaN)' as a specified value should serialize as 'calc(NaN)'. — assert_equals: 'calc(NaN)' should round-trip exactly in specified values. expected (string) "calc(NaN)" but got (undefined) undefined
+  FAIL: 'calc(infinity)' as a specified value should serialize as 'calc(infinity)'. — assert_equals: 'calc(infinity)' should round-trip exactly in specified values. expected (string) "calc(infinity)" but got (undefined) undefined
+  FAIL: 'calc(-infinity)' as a specified value should serialize as 'calc(-infinity)'. — assert_equals: 'calc(-infinity)' should round-trip exactly in specified values. expected (string) "calc(-infinity)" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-resolution.html (0/29 pass)
+  FAIL: 'image-set(url("") calc(1x * NaN))' as a specified value should serialize as 'image-set(url("") calc(NaN * 1dppx))'. — assert_equals: 'image-set(url("") calc(NaN * 1dppx))' should round-trip exactly in specified values. expected (string) "image-set(url("") calc(NaN * 1dppx))" but got (undefined) undefined
+  FAIL: 'image-set(url("") calc(1x * nan))' as a specified value should serialize as 'image-set(url("") calc(NaN * 1dppx))'. — assert_equals: 'image-set(url("") calc(NaN * 1dppx))' should round-trip exactly in specified values. expected (string) "image-set(url("") calc(NaN * 1dppx))" but got (undefined) undefined
+  FAIL: 'image-set(url("") calc(1dppx * NaN))' as a specified value should serialize as 'image-set(url("") calc(NaN * 1dppx))'. — assert_equals: 'image-set(url("") calc(NaN * 1dppx))' should round-trip exactly in specified values. expected (string) "image-set(url("") calc(NaN * 1dppx))" but got (undefined) undefined
+FAIL css/css-values/calc-infinity-nan-serialize-time.html (0/29 pass)
+  FAIL: 'calc(1s * NaN)' as a specified value should serialize as 'calc(NaN * 1s)'. — assert_equals: 'calc(NaN * 1s)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1s)" but got (undefined) undefined
+  FAIL: 'calc(1s * nan)' as a specified value should serialize as 'calc(NaN * 1s)'. — assert_equals: 'calc(NaN * 1s)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1s)" but got (undefined) undefined
+  FAIL: 'calc(1ms * NaN)' as a specified value should serialize as 'calc(NaN * 1s)'. — assert_equals: 'calc(NaN * 1s)' should round-trip exactly in specified values. expected (string) "calc(NaN * 1s)" but got (undefined) undefined
+FAIL css/css-values/calc-letter-spacing.html (0/6 pass)
+  FAIL: testing letter-spacing: calc(1 + 1px) — assert_equals: calc(1 + 1px) should compute to 20px expected (string) "20px" but got (undefined) undefined
+  FAIL: testing letter-spacing: calc(1 + 100%) — assert_equals: calc(1 + 100%) should compute to 20px expected (string) "20px" but got (undefined) undefined
+  FAIL: testing letter-spacing: calc(100%) — assert_equals: calc(100%) should compute to 100% expected (string) "100%" but got (undefined) undefined
+FAIL css/css-values/calc-linear-radial-conic-gradient-001.html (0/8 pass)
+  FAIL: testing background-image: linear-gradient(rgb(0, 128, 0) calc(0%), rgb(0, 0, 255)) — assert_equals: expected (string) "linear-gradient(rgb(0, 128, 0) 0%, rgb(0, 0, 255))" but got (undefined) undefined
+  FAIL: testing background-image: linear-gradient(calc(90deg), rgb(0, 128, 0), rgb(0, 0, 255)) — assert_equals: expected (string) "linear-gradient(90deg, rgb(0, 128, 0), rgb(0, 0, 255))" but got (undefined) undefined
+  FAIL: testing background-image: linear-gradient(calc(90deg), rgb(0, 128, 0) calc(0%), rgb(0, 0, 255)) — assert_equals: expected (string) "linear-gradient(90deg, rgb(0, 128, 0) 0%, rgb(0, 0, 255))" but got (undefined) undefined
+FAIL css/css-values/calc-nesting-002.html (0/11 pass)
+  FAIL: testing calc(20px + calc(80px)) — assert_equals: expected "calc(100px)" but got "calc(20px + calc(80px))"
+  FAIL: testing calc(calc(100px)) — assert_equals: expected "calc(100px)" but got "calc(calc(100px))"
+  FAIL: testing calc(calc(2) * calc(50px) — assert_equals: expected "calc(100px)" but got "calc(calc(100px))"
+FAIL css/css-values/calc-nesting.html (0/8 pass)
+  FAIL: e.style['left'] = "calc(20px + calc(80px))" should set the property value — assert_equals: serialization should be canonical expected "calc(100px)" but got "auto"
+  FAIL: e.style['left'] = "calc(calc(100px))" should set the property value — assert_equals: serialization should be canonical expected "calc(100px)" but got "auto"
+  FAIL: e.style['left'] = "calc(calc(2) * calc(50px))" should set the property value — assert_equals: serialization should be canonical expected "calc(100px)" but got "auto"
+FAIL css/css-values/calc-numbers.html (0/12 pass)
+  FAIL: testing tab-size: calc(2 * 3) — assert_equals: calc(2 * 3) should compute to 6 expected (string) "6" but got (undefined) undefined
+  FAIL: testing tab-size: calc(2 * -4) — assert_equals: calc(2 * -4) should compute to 0 expected (string) "0" but got (undefined) undefined
+  FAIL: testing opacity: calc(2 / 4) — assert_equals: calc(2 / 4) should compute to 0.5 expected (string) "0.5" but got (undefined) undefined
+FAIL css/css-values/calc-rgb-percent-001.html (0/1 pass)
+  FAIL: testing rgb(calc(5% + 15%), calc(40% / 2), calc(5% * 4)) — assert_equals: expected "rgb(51, 51, 51)" but got ""
+FAIL css/css-values/calc-serialization-002.html (2/24 pass)
+  FAIL: testing calc(1vh + 2px + 3%) — assert_equals: expected "calc(3% + 2px + 1vh)" but got "calc(1vh + 2px + 3%)"
+  FAIL: testing calc(5px + 6em + 1vh) — assert_equals: expected "calc(6em + 5px + 1vh)" but got "calc(5px + 6em + 1vh)"
+  FAIL: testing calc(-8px + 9em + 1vh) — assert_equals: expected "calc(9em - 8px + 1vh)" but got "calc(-8px + 9em + 1vh)"
+FAIL css/css-values/calc-serialization.html (0/1 pass)
+  FAIL: calc() serialization — assert_equals: Serialization of calc(10px + 1vmin + 10%) expected "calc(10% + 10px + 1vmin)" but got "calc(10px + 1vmin + 10%)"
+FAIL css/css-values/calc-size/animation/calc-size-interpolation-expansion.html (0/11 pass)
+  FAIL: value at progress 0.75 in animation of "height" from "auto" to "calc-size(any, 0px)" — Cannot read properties of undefined (reading 'get')
+  FAIL: value at progress 0.75 in animation of "height" from "0px" to "calc-size(calc-size(min-content, size + 20px), 2 * size)" — Cannot read properties of undefined (reading 'get')
+  FAIL: value at progress 0.75 in animation of "height" from "calc-size(min-content, size * 4)" to "calc-size(calc-size(min-content, size + 20px), 2 * size)" — Cannot read properties of undefined (reading 'get')
+FAIL css/css-values/calc-size/animation/interpolate-size-height-composition.html (0/20 pass)
+  FAIL: Compositing CSS Animations: property <height> underlying [fit-content] from add [100px] to add [200px] at (-0.3) should be [120px] — assert_equals: expected "$1 " but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <height> underlying [fit-content] from add [100px] to add [200px] at (0) should be [150px] — assert_equals: expected "$1 " but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <height> underlying [fit-content] from add [100px] to add [200px] at (0.5) should be [200px] — assert_equals: expected "$1 " but got "$1 $1 $1 "
+FAIL css/css-values/calc-size/animation/interpolate-size-max-height-composition.html (4/20 pass)
+  FAIL: Compositing CSS Animations: property <max-height> underlying [fit-content] from add [100px] to add [200px] at (-0.3) should be [calc-size(fit-content, (100px + size) * 1.3 + (200px + size) * -0.3)] — assert_equals: expected "" but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <max-height> underlying [fit-content] from add [100px] to add [200px] at (0) should be [calc-size(fit-content, (100px + size) * 1 + (200px + size) * 0)] — assert_equals: expected "" but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <max-height> underlying [fit-content] from add [100px] to add [200px] at (0.5) should be [calc-size(fit-content, (100px + size) * 0.5 + (200px + size) * 0.5)] — assert_equals: expected "" but got "$1 $1 $1 "
+FAIL css/css-values/calc-size/animation/interpolate-size-max-width-composition.html (6/30 pass)
+  FAIL: Compositing CSS Animations: property <max-width> underlying [100px] from add [100px] to add [fit-content] at (-0.3) should be [calc-size(fit-content, 260px + (100px + size) * -0.3)] — assert_equals: expected "" but got "$1 "
+  FAIL: Compositing CSS Animations: property <max-width> underlying [100px] from add [100px] to add [fit-content] at (0) should be [calc-size(fit-content, 200px + (100px + size) * 0)] — assert_equals: expected "" but got "$1 "
+  FAIL: Compositing CSS Animations: property <max-width> underlying [100px] from add [100px] to add [fit-content] at (0.5) should be [calc-size(fit-content, 100px + (100px + size) * 0.5)] — assert_equals: expected "" but got "$1 "
+FAIL css/css-values/calc-size/animation/interpolate-size-min-height-composition.html (6/20 pass)
+  FAIL: Compositing CSS Animations: property <min-height> underlying [fit-content] from add [100px] to add [200px] at (-0.3) should be [calc-size(fit-content, (100px + size) * 1.3 + (200px + size) * -0.3)] — assert_equals: expected "" but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <min-height> underlying [fit-content] from add [100px] to add [200px] at (0) should be [calc-size(fit-content, (100px + size) * 1 + (200px + size) * 0)] — assert_equals: expected "" but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <min-height> underlying [fit-content] from add [100px] to add [200px] at (0.5) should be [calc-size(fit-content, (100px + size) * 0.5 + (200px + size) * 0.5)] — assert_equals: expected "" but got "$1 $1 $1 "
+FAIL css/css-values/calc-size/animation/interpolate-size-min-width-composition.html (16/30 pass)
+  FAIL: Compositing CSS Animations: property <min-width> underlying [100px] from add [max-content] to add [100px] at (-0.3) should be [calc-size(max-content, (100px + size) * 1.3 + -60px)] — assert_equals: expected "" but got "$1 "
+  FAIL: Compositing CSS Animations: property <min-width> underlying [100px] from add [max-content] to add [100px] at (0) should be [calc-size(max-content, (100px + size) * 1 + 0px)] — assert_equals: expected "" but got "$1 "
+  FAIL: Compositing CSS Animations: property <min-width> underlying [100px] from add [max-content] to add [100px] at (0.5) should be [calc-size(max-content, (100px + size) * 0.5 + 100px)] — assert_equals: expected "" but got "$1 "
+FAIL css/css-values/calc-size/animation/interpolate-size-which-value.html (0/8 pass)
+  FAIL: Use the after-change value of interpolate-size: numeric-only when starting CSS transition from 100px to min-content — assert_equals: width before change expected "100px" but got ""
+  FAIL: Use the non-animation value of interpolate-size: numeric-only when starting CSS animation from 100px to min-content — assert_equals: width with animation expected "100px" but got ""
+  FAIL: Use the after-change value of interpolate-size: numeric-only when starting CSS transition from min-content to 100px — assert_equals: width before change expected "0px" but got ""
+FAIL css/css-values/calc-size/animation/interpolate-size-width-composition.html (20/30 pass)
+  FAIL: Compositing CSS Animations: property <width> underlying [max-content] from add [200px] to add [auto] at (-0.3) should be [300px] — assert_equals: expected "$1 " but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <width> underlying [max-content] from add [200px] to add [auto] at (0) should be [300px] — assert_equals: expected "$1 " but got "$1 $1 $1 "
+  FAIL: Compositing CSS Animations: property <width> underlying [max-content] from add [200px] to add [auto] at (0.5) should be [200px] — assert_equals: expected "$1 " but got "$1 $1 $1 "
+FAIL css/css-values/calc-size/calc-size-height-box-sizing.html (0/15 pass)
+  FAIL: resolved height with styles {"height":"auto"} — assert_equals: getComputedStyle(target).height expected "7px" but got "auto"
+  FAIL: resolved height with styles {"height":"auto","box-sizing":"border-box"} — assert_equals: getComputedStyle(target).height expected "19px" but got "auto"
+  FAIL: resolved height with styles {"height":"calc-size(auto, size)"} — assert_equals: getComputedStyle(target).height expected "7px" but got ""
+FAIL css/css-values/calc-size/calc-size-height.html (0/37 pass)
+  FAIL: resolved height for height in auto height container: calc-size(any, 357px) — assert_equals: expected "357px" but got ""
+  FAIL: resolved height for height in definite height container: calc-size(any, 357px) — assert_equals: expected "357px" but got ""
+  FAIL: resolved height for height in auto height container: calc-size(any, 31%) — assert_equals: expected "0px" but got ""
+FAIL css/css-values/calc-size/calc-size-parsing.html (56/94 pass)
+  FAIL: e.style['width'] = "calc-size(auto, size)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['min-width'] = "calc-size(auto, size)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['height'] = "calc-size(auto, size)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/calc-size/calc-size-typed-om.html (0/19 pass)
+  FAIL: computedStyleMap serialization of width: calc-size(auto, size) — Cannot read properties of undefined (reading 'get')
+  FAIL: computedStyleMap serialization of width: calc-size(fit-content, size) — Cannot read properties of undefined (reading 'get')
+  FAIL: computedStyleMap serialization of height: calc-size(min-content, size * 2) — Cannot read properties of undefined (reading 'get')
+FAIL css/css-values/calc-size/calc-size-width-box-sizing.html (0/15 pass)
+  FAIL: resolved width with styles {"width":"auto"} — assert_equals: getComputedStyle(target).width expected "7px" but got "auto"
+  FAIL: resolved width with styles {"width":"auto","box-sizing":"border-box"} — assert_equals: getComputedStyle(target).width expected "19px" but got "auto"
+  FAIL: resolved width with styles {"width":"calc-size(auto, size)"} — assert_equals: getComputedStyle(target).width expected "7px" but got ""
+FAIL css/css-values/calc-size/interpolate-size-computed.html (0/2 pass)
+  FAIL: Property interpolate-size value 'numeric-only' — assert_true: 'numeric-only' is a supported value for interpolate-size. expected true got false
+  FAIL: Property interpolate-size value 'allow-keywords' — assert_true: 'allow-keywords' is a supported value for interpolate-size. expected true got false
+FAIL css/css-values/calc-size/interpolate-size-parsing.html (3/5 pass)
+  FAIL: e.style['interpolate-size'] = "numeric-only" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['interpolate-size'] = "allow-keywords" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/calc-unit-analysis.html (1/10 pass)
+  FAIL: unitless_zero_in_calc_is_a_numeric_type_not_length — assert_equals: expected "inherit" but got "0px"
+  FAIL: addition_of_length_and_number — assert_equals: expected "inherit" but got "0px"
+  FAIL: addition_of_number_and_length — assert_equals: expected "inherit" but got "0px"
+FAIL css/css-values/calc-z-index-fractions-001.html (0/6 pass)
+  FAIL: testing z-index: calc(2.5 / 2) — assert_equals: expected (string) "1" but got (undefined) undefined
+  FAIL: testing z-index: calc(3 / 2) — assert_equals: expected (string) "2" but got (undefined) undefined
+  FAIL: testing z-index: calc(3.5 / 2) — assert_equals: expected (string) "2" but got (undefined) undefined
+FAIL css/css-values/ch-empty-pseudo-recalc-on-font-load.html (0/3 pass)
+  FAIL: ch in pseudo-element ::before should be recalculated after loading a web font — Cannot read properties of undefined (reading 'endsWith')
+  FAIL: ch in pseudo-element ::after should be recalculated after loading a web font — Cannot read properties of undefined (reading 'endsWith')
+  FAIL: ch in pseudo-element ::backdrop should be recalculated after loading a web font — Cannot read properties of undefined (reading 'endsWith')
+FAIL css/css-values/ch-pseudo-recalc-on-font-load.html (0/5 pass)
+  FAIL: ch in pseudo-element ::before should be recalculated after loading a web font — assert_less_than: expected a number but got a "undefined"
+  FAIL: ch in pseudo-element ::after should be recalculated after loading a web font — assert_less_than: expected a number but got a "undefined"
+  FAIL: ch in pseudo-element ::first-letter should be recalculated after loading a web font — assert_less_than: expected a number but got a "undefined"
+FAIL css/css-values/ch-recalc-on-font-load.html (0/3 pass)
+  FAIL: ch in a normal div should be recalculated after loading a web font — assert_less_than: expected a number but got a "undefined"
+  FAIL: ch in display:contents should be recalculated after loading a web font — assert_less_than: expected a number but got a "undefined"
+  FAIL: ch in display:none should be recalculated after loading a web font — assert_less_than: expected a number but got a "undefined"
+FAIL css/css-values/clamp-color-computed.html (0/15 pass)
+  FAIL: Property color value 'rgb(clamp(10, 20, 30) 0 0)' — assert_true: 'rgb(clamp(10, 20, 30) 0 0)' is a supported value for color. expected true got false
+  FAIL: Property color value 'rgb(clamp(none, 30, 33) 0 0)' — assert_true: 'rgb(clamp(none, 30, 33) 0 0)' is a supported value for color. expected true got false
+  FAIL: Property color value 'rgb(clamp(none, 33, 30) 0 0)' — assert_true: 'rgb(clamp(none, 33, 30) 0 0)' is a supported value for color. expected true got false
+FAIL css/css-values/clamp-integer-computed.html (0/6 pass)
+  FAIL: Property z-index value 'clamp(10, 20, 30)' — assert_equals: expected (string) "20" but got (undefined) undefined
+  FAIL: Property z-index value 'clamp(none, 30, 33)' — assert_equals: expected (string) "30" but got (undefined) undefined
+  FAIL: Property z-index value 'clamp(none, 33, 30)' — assert_equals: expected (string) "30" but got (undefined) undefined
+FAIL css/css-values/clamp-length-computed.html (0/24 pass)
+  FAIL: Property letter-spacing value 'clamp(10px, 20px, 30px)' — assert_equals: expected (string) "clamp(10px, 20px, 30px)" but got (undefined) undefined
+  FAIL: Property letter-spacing value 'clamp(10px, 5px, 30px)' — assert_equals: expected (string) "clamp(10px, 5px, 30px)" but got (undefined) undefined
+  FAIL: Property letter-spacing value 'clamp(10px, 35px, 30px)' — assert_equals: expected (string) "clamp(10px, 35px, 30px)" but got (undefined) undefined
+FAIL css/css-values/clamp-length-serialize.html (0/50 pass)
+  FAIL: e.style['margin-top'] = "clamp(1px, 2px, 3px)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['margin-top'] = "calc(clamp(1px, 2px, 3px))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['margin-top'] = "clamp(1px, 2px, clamp(2px, 3px, 4px))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/clamp-partial-serialize.tentative.html (0/16 pass)
+  FAIL: e.style['margin-top'] = "clamp(none, 2px, 3em)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['margin-top'] = "calc(clamp(none, 2px, 3em))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['margin-top'] = "clamp(1em, 2px, none)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/dynamic-viewport-units-rule-cache.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'addEventListener')
+FAIL css/css-values/exp-log-compute.html (0/19 pass)
+  FAIL: log(1) should be used-value-equivalent to 0 — assert_not_equals: log(1) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: log(10, 10) should be used-value-equivalent to 1 — assert_not_equals: log(10, 10) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: exp(0) should be used-value-equivalent to 1 — assert_not_equals: exp(0) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/exp-log-serialize.html (0/19 pass)
+  FAIL: 'exp(0)' as a specified value should serialize as 'calc(1)'. — assert_equals: 'calc(1)' should round-trip exactly in specified values. expected (string) "calc(1)" but got (undefined) undefined
+  FAIL: 'scale(exp(0))' as a specified value should serialize as 'scale(calc(1))'. — assert_equals: 'scale(calc(1))' should round-trip exactly in specified values. expected (string) "scale(calc(1))" but got (undefined) undefined
+  FAIL: 'exp(0)' as a computed value should serialize as '1'. — assert_equals: '1' should round-trip exactly in computed values. expected (string) "1" but got (undefined) undefined
+FAIL css/css-values/getComputedStyle-border-radius-001.html (0/5 pass)
+  FAIL: testing border-top-left-radius: calc(25% + 10px) calc(25% + 20px) — assert_equals: expected (string) "calc(25% + 10px) calc(25% + 20px)" but got (undefined) undefined
+  FAIL: testing border-top-right-radius: calc(25% + 16px) — assert_equals: expected (string) "calc(25% + 16px)" but got (undefined) undefined
+  FAIL: testing border-bottom-right-radius: 25% — assert_equals: expected (string) "25%" but got (undefined) undefined
+FAIL css/css-values/getComputedStyle-border-radius-003.html (0/1 pass)
+  FAIL: testing border-radius: calc(1% + 1px) calc(2% + 2px) calc(3% + 3px) calc(4% + 4px) / calc(5% + 5px) calc(6% + 6px) calc(7% + 7px) calc(8% + 8px) — assert_equals: expected (string) "calc(1% + 1px) calc(2% + 2px) calc(3% + 3px) calc(4% + 4px) / calc(5% + 5px) calc(6% + 6px) calc(7% + 7px) calc(8% + 8px)" but got (undefined) undefined
+FAIL css/css-values/getComputedStyle-calc-mixed-units-001.html (0/3 pass)
+  FAIL: testing background-size: calc(67% - 54% + 4em) 50% — assert_equals: expected (string) "calc(13% + 64px) 50%" but got (undefined) undefined
+  FAIL: testing background-position: calc(100% - 100% + 20em) — assert_equals: expected (string) "calc(0% + 320px) 50%" but got (undefined) undefined
+  FAIL: testing height: calc(60% - 50% + 3em) — assert_equals: expected (string) "105px" but got (undefined) undefined
+FAIL css/css-values/getComputedStyle-calc-mixed-units-002.html (0/8 pass)
+  FAIL: testing width: calc(10% + 2em) — assert_equals: expected (string) "84px" but got (undefined) undefined
+  FAIL: testing width: calc(5% + 4rem) — assert_equals: expected (string) "146px" but got (undefined) undefined
+  FAIL: testing width: calc(8lh + 7px) — assert_equals: expected (string) "167px" but got (undefined) undefined
+FAIL css/css-values/getComputedStyle-calc-mixed-units-003.html (0/7 pass)
+  FAIL: testing width: calc(5px * 10lh / 1px) — assert_equals: expected (string) "1000px" but got (undefined) undefined
+  FAIL: testing width: calc(20% * 0.5em / 1px) — assert_equals: expected (string) "832px" but got (undefined) undefined
+  FAIL: testing width: calc(4px * 4em / 1px) — assert_equals: expected (string) "256px" but got (undefined) undefined
+FAIL css/css-values/hypot-pow-sqrt-computed.html (0/47 pass)
+  FAIL: pow(1,1) should be used-value-equivalent to 1 — assert_not_equals: pow(1,1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: sqrt(1) should be used-value-equivalent to 1 — assert_not_equals: sqrt(1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: hypot(1) should be used-value-equivalent to 1 — assert_not_equals: hypot(1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/hypot-pow-sqrt-serialize.html (0/25 pass)
+  FAIL: 'pow(1,1)' as a specified value should serialize as 'calc(1)'. — assert_equals: 'calc(1)' should round-trip exactly in specified values. expected (string) "calc(1)" but got (undefined) undefined
+  FAIL: 'scale(pow(1,1))' as a specified value should serialize as 'scale(calc(1))'. — assert_equals: 'scale(calc(1))' should round-trip exactly in specified values. expected (string) "scale(calc(1))" but got (undefined) undefined
+  FAIL: 'pow(1,1)' as a computed value should serialize as '1'. — assert_equals: '1' should round-trip exactly in computed values. expected (string) "1" but got (undefined) undefined
+FAIL css/css-values/ident-function-computed.html (0/11 pass)
+  FAIL: Property view-transition-name value 'ident(myident)' — assert_equals: expected (string) "myident" but got (undefined) undefined
+  FAIL: Property view-transition-name value 'ident("myident")' — assert_equals: expected (string) "myident" but got (undefined) undefined
+  FAIL: Property view-transition-name value 'ident("myident" 3)' — assert_equals: expected (string) "myident3" but got (undefined) undefined
+FAIL css/css-values/ident-function-parsing.html (4/17 pass)
+  FAIL: e.style['view-transition-name'] = "ident(myident)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['view-transition-name'] = "ident( myident)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['view-transition-name'] = "ident(myident )" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/if-conditionals.html (2/202 pass)
+  FAIL: CSS Values and Units Test: CSS inline if() function — assert_equals: "if(style(--x: 3): true_value)" should be substituted to "true_value". expected "true_value" but got "if(style(--x: 3): true_value)"
+  FAIL: CSS Values and Units Test: CSS inline if() function 1 — assert_equals: "if( style( --x : 3 ) : true_value )" should be substituted to "true_value ". expected "true_value " but got "if( style( --x : 3 ) : true_value )"
+  FAIL: CSS Values and Units Test: CSS inline if() function 2 — assert_equals: "if(style(--x): true_value;)" should be substituted to "true_value". expected "true_value" but got "if(style(--x): true_value"
+FAIL css/css-values/if-cycle.html (0/46 pass)
+  FAIL: CSS Values and Units Test: CSS if() function cycles — assert_equals: "if(style(--x: 3): var(--prop); else: value)" should be substituted to "". expected "" but got "if(style(--x: 3): var(--prop)"
+  FAIL: CSS Values and Units Test: CSS if() function cycles 1 — assert_equals: "if(style(--x: 3): value; else: var(--prop))" should be substituted to "". expected "" but got "if(style(--x: 3): value"
+  FAIL: CSS Values and Units Test: CSS if() function cycles 2 — assert_equals: "if(style(--x: 3): attr(data-foo type(*)); else: value)" should be substituted to "". expected "" but got "if(style(--x: 3): attr(data-foo type(*))"
+FAIL css/css-values/if-function-revert-rule.html (0/2 pass)
+  FAIL: The revert-rule works as a branch in if() — assert_true: expected true got false
+  FAIL: The revert-rule works as a branch in if(), earlier return — assert_true: expected true got false
+FAIL css/css-values/if-initial-unregistered.html (0/1 pass)
+  FAIL: if-testing the initial keyword without any property registrations — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+FAIL css/css-values/if-media-invalidation.html (0/1 pass)
+  FAIL: CSS Values and Units Test: if() media() condition invalidation — Cannot read properties of undefined (reading 'contentDocument')
+FAIL css/css-values/inherit-function-basic.html (0/6 pass)
+  FAIL: inherit() on value set on parent — Cannot read properties of undefined (reading 'append')
+  FAIL: inherit() on value set on ancestor — Cannot read properties of undefined (reading 'append')
+  FAIL: inherit(), no value set on parent — Cannot read properties of undefined (reading 'append')
+FAIL css/css-values/inherit-function-invalidation.html (0/3 pass)
+  FAIL: inherit() invalidates when values changes on parent element, inherited — Cannot read properties of undefined (reading 'append')
+  FAIL: inherit() invalidates when values changes on parent element, inherited, deeper — Cannot read properties of undefined (reading 'append')
+  FAIL: inherit() invalidates when values changes on parent element, non-inherited — Cannot read properties of undefined (reading 'append')
+FAIL css/css-values/inherit-function-parsing.html (2/8 pass)
+  FAIL: e.style['left'] = "inherit(--x)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['left'] = "calc(inherit(--x) + 1px)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['left'] = "inherit(--x,)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/integer_interpolation_round_half_001.html (0/1 pass)
+  FAIL: Integer interpolation should be rounded towards positive infinity — assert_equals: Interpolation result for order should be rounded towards positive infinity expected -1 but got 0
+FAIL css/css-values/integer_interpolation_round_half_002.html (0/1 pass)
+  FAIL: Integer interpolation should be rounded towards positive infinity — assert_equals: Interpolation result for z-index should be rounded towards positive infinity expected -1 but got 0
+FAIL css/css-values/integer_interpolation_round_half_towards_positive_infinity_order.html (0/1 pass)
+  FAIL: Integer interpolation should be rounded towards positive infinity — assert_equals: Interpolation result for order should be rounded towards positive infinity expected -1 but got 0
+FAIL css/css-values/integer_interpolation_round_half_towards_positive_infinity_z_index.html (0/1 pass)
+  FAIL: Integer interpolation should be rounded towards positive infinity — assert_equals: Interpolation result for z-index should be rounded towards positive infinity expected -1 but got 0
+FAIL css/css-values/lh-rlh-on-root-001.html (0/8 pass)
+  FAIL: lh in line-height on root — assert_approx_equals: the lh unit on the root element's line-height property uses font metrics corresponding to the initial values of the font or line-height properties expected a number but got a "undefined"
+  FAIL: rlh in line-height on root — assert_approx_equals: the rlh unit on the root element's line-height property uses font metrics corresponding to the initial values of the font or line-height properties expected a number but got a "undefined"
+  FAIL: lh in font-size on root — assert_approx_equals: the lh unit on the root element's font-size property uses font metrics corresponding to the initial values of the font or line-height properties expected a number but got a "undefined"
+FAIL css/css-values/lh-rlh-percentage-line-height-with-zoom.html (0/6 pass)
+  FAIL: 1lh in outside — Cannot read properties of undefined (reading 'height')
+  FAIL: 1lh in zoomed — Cannot read properties of undefined (reading 'height')
+  FAIL: 1lh in inside — Cannot read properties of undefined (reading 'height')
+FAIL css/css-values/lh-unit-003.html (0/1 pass)
+  FAIL: Line-height and lh before @font-face loads — Cannot read properties of undefined (reading 'offsetWidth')
+FAIL css/css-values/lh-unit-004.html (0/1 pass)
+  FAIL: lh must be relative to computed line-height before select element fixup — Cannot read properties of null (reading 'width')
+FAIL css/css-values/lh-unit-005.html (0/1 pass)
+  FAIL: lh relative to line-height inherited from parent — Cannot read properties of null (reading 'height')
+FAIL css/css-values/line-break-ch-unit.html (0/97 pass)
+  FAIL: 3ch should wrap — assert_approx_equals: expected a number but got a "undefined"
+  FAIL: 4ch should wrap — assert_approx_equals: expected a number but got a "undefined"
+  FAIL: 5ch should wrap — assert_approx_equals: expected a number but got a "undefined"
+FAIL css/css-values/minmax-angle-computed.html (0/32 pass)
+  FAIL: min(1deg) should be used-value-equivalent to 1deg — assert_not_equals: min(1deg) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+  FAIL: min(1grad) should be used-value-equivalent to 1grad — assert_not_equals: min(1grad) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+  FAIL: min(1rad) should be used-value-equivalent to 1rad — assert_not_equals: min(1rad) isn't valid in 'rotate'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-angle-serialize.html (0/38 pass)
+  FAIL: 'rotate(min(90deg))' as a specified value should serialize as 'rotate(calc(90deg))'. — assert_equals: 'rotate(calc(90deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(90deg))" but got (undefined) undefined
+  FAIL: 'rotate(min(90deg))' as a computed value should serialize as ''. — assert_equals: '' should round-trip exactly in computed values. expected (string) "" but got (undefined) undefined
+  FAIL: 'rotate(min(.25turn))' as a specified value should serialize as 'rotate(calc(90deg))'. — assert_equals: 'rotate(calc(90deg))' should round-trip exactly in specified values. expected (string) "rotate(calc(90deg))" but got (undefined) undefined
+FAIL css/css-values/minmax-integer-computed.html (0/10 pass)
+  FAIL: min(1) should be used-value-equivalent to 1 — assert_not_equals: min(1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: max(1) should be used-value-equivalent to 1 — assert_not_equals: max(1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: min(0.4) should be used-value-equivalent to 0 — assert_not_equals: min(0.4) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-length-computed.html (0/80 pass)
+  FAIL: min(1px) should be used-value-equivalent to 1px — assert_not_equals: min(1px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: min(1cm) should be used-value-equivalent to 1cm — assert_not_equals: min(1cm) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: min(1mm) should be used-value-equivalent to 1mm — assert_not_equals: min(1mm) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-length-percent-computed.html (0/50 pass)
+  FAIL: min(1px + 1%) should be used-value-equivalent to calc(1px + 1%) — assert_not_equals: min(1px + 1%) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: min(1cm + 1%) should be used-value-equivalent to calc(1cm + 1%) — assert_not_equals: min(1cm + 1%) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: min(1mm + 1%) should be used-value-equivalent to calc(1mm + 1%) — assert_not_equals: min(1mm + 1%) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-length-percent-serialize.html (0/57 pass)
+  FAIL: 'min(1px)' as a specified value should serialize as 'calc(1px)'. — assert_equals: 'calc(1px)' should round-trip exactly in specified values. expected (string) "calc(1px)" but got (undefined) undefined
+  FAIL: 'min(1px)' as a computed value should serialize as '1px'. — assert_equals: '1px' should round-trip exactly in computed values. expected (string) "1px" but got (undefined) undefined
+  FAIL: 'min(1px)' as a used value should serialize as '1px'. — assert_equals: '1px' should round-trip exactly in used values. expected (string) "1px" but got (undefined) undefined
+FAIL css/css-values/minmax-length-serialize.html (0/24 pass)
+  FAIL: 'min(1px)' as a specified value should serialize as 'calc(1px)'. — assert_equals: 'calc(1px)' should round-trip exactly in specified values. expected (string) "calc(1px)" but got (undefined) undefined
+  FAIL: 'min(1px)' as a computed value should serialize as '1px'. — assert_equals: '1px' should round-trip exactly in computed values. expected (string) "1px" but got (undefined) undefined
+  FAIL: 'min(1in)' as a specified value should serialize as 'calc(96px)'. — assert_equals: 'calc(96px)' should round-trip exactly in specified values. expected (string) "calc(96px)" but got (undefined) undefined
+FAIL css/css-values/minmax-number-computed.html (0/14 pass)
+  FAIL: min(1) should be used-value-equivalent to 1 — assert_not_equals: min(1) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: max(1) should be used-value-equivalent to 1 — assert_not_equals: max(1) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: min(0.2, max(0.1, 0.15)) should be used-value-equivalent to 0.15 — assert_not_equals: min(0.2, max(0.1, 0.15)) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-number-serialize.html (0/40 pass)
+  FAIL: 'min(.1)' as a specified value should serialize as 'calc(0.1)'. — assert_equals: 'calc(0.1)' should round-trip exactly in specified values. expected (string) "calc(0.1)" but got (undefined) undefined
+  FAIL: 'scale(min(.1))' as a specified value should serialize as 'scale(calc(0.1))'. — assert_equals: 'scale(calc(0.1))' should round-trip exactly in specified values. expected (string) "scale(calc(0.1))" but got (undefined) undefined
+  FAIL: 'min(.1)' as a computed value should serialize as '0.1'. — assert_equals: '0.1' should round-trip exactly in computed values. expected (string) "0.1" but got (undefined) undefined
+FAIL css/css-values/minmax-percentage-computed.html (0/14 pass)
+  FAIL: min(1%) should be used-value-equivalent to 1% — assert_not_equals: min(1%) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: max(1%) should be used-value-equivalent to 1% — assert_not_equals: max(1%) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: min(20%, max(10%, 15%)) should be used-value-equivalent to 15% — assert_not_equals: min(20%, max(10%, 15%)) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-percentage-serialize.html (0/35 pass)
+  FAIL: 'min(1%)' as a specified value should serialize as 'calc(1%)'. — assert_equals: 'calc(1%)' should round-trip exactly in specified values. expected (string) "calc(1%)" but got (undefined) undefined
+  FAIL: 'min(1%)' as a computed value should serialize as '1%'. — assert_equals: '1%' should round-trip exactly in computed values. expected (string) "1%" but got (undefined) undefined
+  FAIL: 'min(1%)' as a used value should serialize as '1px'. — assert_equals: '1px' should round-trip exactly in used values. expected (string) "1px" but got (undefined) undefined
+FAIL css/css-values/minmax-time-computed.html (0/24 pass)
+  FAIL: min(1s) should be used-value-equivalent to 1s — assert_not_equals: min(1s) isn't valid in 'transition-delay'; got the default value instead. got disallowed value undefined
+  FAIL: min(1ms) should be used-value-equivalent to 1ms — assert_not_equals: min(1ms) isn't valid in 'transition-delay'; got the default value instead. got disallowed value undefined
+  FAIL: max(1s) should be used-value-equivalent to 1s — assert_not_equals: max(1s) isn't valid in 'transition-delay'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/minmax-time-serialize.html (0/22 pass)
+  FAIL: 'min(1ms)' as a specified value should serialize as 'calc(0.001s)'. — assert_equals: 'calc(0.001s)' should round-trip exactly in specified values. expected (string) "calc(0.001s)" but got (undefined) undefined
+  FAIL: 'min(1ms)' as a computed value should serialize as '0.001s'. — assert_equals: '0.001s' should round-trip exactly in computed values. expected (string) "0.001s" but got (undefined) undefined
+  FAIL: 'min(1s)' as a specified value should serialize as 'calc(1s)'. — assert_equals: 'calc(1s)' should round-trip exactly in specified values. expected (string) "calc(1s)" but got (undefined) undefined
+FAIL css/css-values/percentage-without-context.html (10/12 pass)
+  FAIL: e.style['font-style'] = "oblique calc(sign(50%) * 1deg)" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['color'] = "hsl(calc(sign(50%) * 1deg) 82% 43%)" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+FAIL css/css-values/position/position-computed.tentative.html (40/68 pass)
+  FAIL: Property object-position value '10% center' — assert_equals: expected (string) "10% 50%" but got (undefined) undefined
+  FAIL: Property object-position value 'right 30% top 60px' — assert_equals: expected (string) "70% 60px" but got (undefined) undefined
+  FAIL: Property object-position value '-20% -30px' — assert_equals: expected (string) "-20% -30px" but got (undefined) undefined
+FAIL css/css-values/position/position-valid.tentative.html (0/34 pass)
+  FAIL: e.style['object-position'] = "10%" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['object-position'] = "right 30% top 60px" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['object-position'] = "-20% -30px" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/progress-computed.html (0/22 pass)
+  FAIL: progress(1, 0, 1) should be used-value-equivalent to 1 — assert_not_equals: progress(1, 0, 1) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: progress(progress(1, 0, 1), progress(0px, 0px, 1px), progress(1deg, 0deg, 1deg)) should be used-value-equivalent to 1 — assert_not_equals: progress(progress(1, 0, 1), progress(0px, 0px, 1px), progress(1deg, 0deg, 1deg)) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: progress(sign(-10px) * 10px, (10px - 10px), 10px * progress(1deg, 0deg, 1deg)) should be used-value-equivalent to 0 — assert_not_equals: progress(sign(-10px) * 10px, (10px - 10px), 10px * progress(1deg, 0deg, 1deg)) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/progress-serialize.html (0/34 pass)
+  FAIL: 'progress(100px, 0px, 100px)' as a specified value should serialize as 'calc(1)'. — assert_equals: 'calc(1)' should round-trip exactly in specified values. expected (string) "calc(1)" but got (undefined) undefined
+  FAIL: 'scale(progress(100px, 0px, 100px))' as a specified value should serialize as 'scale(calc(1))'. — assert_equals: 'scale(calc(1))' should round-trip exactly in specified values. expected (string) "scale(calc(1))" but got (undefined) undefined
+  FAIL: 'progress(100px, 0px, 100px)' as a computed value should serialize as '1'. — assert_equals: '1' should round-trip exactly in computed values. expected (string) "1" but got (undefined) undefined
+FAIL css/css-values/random-computed.tentative.html (42/151 pass)
+  FAIL: Property scale value 'random(1, 11)' — assert_true: scale doesn't seem to be supported in the computed style expected true got false
+  FAIL: Property scale value 'random(--foo element-scoped, 2, 12)' — assert_true: scale doesn't seem to be supported in the computed style expected true got false
+  FAIL: Property scale value 'random(--foo, 3, 13)' — assert_true: scale doesn't seem to be supported in the computed style expected true got false
+FAIL css/css-values/random-in-animations.tentative.html (0/2 pass)
+  FAIL: Test custom property animation with random() endpoints — Cannot read properties of undefined (reading 'forEach')
+  FAIL: Test font-weight animation with random() endpoints — Cannot read properties of undefined (reading 'forEach')
+FAIL css/css-values/random-in-container-query.tentative.html (0/9 pass)
+  FAIL: Query condition should be valid but unknown: (width: random(--foo, 10px, 30px)) — Cannot read properties of undefined (reading 'rules')
+  FAIL: Query condition should be valid but unknown: (height: random(10px, 30px)) — Cannot read properties of undefined (reading 'rules')
+  FAIL: random() should be disallowed in @container style() query — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/css-values/random-in-keyframe.html (0/1 pass)
+  FAIL: random() is not ignored in keyframe — Cannot read properties of null (reading 'translate')
+FAIL css/css-values/random-in-media.tentative.html (0/4 pass)
+  FAIL: Should be parseable: '(width > random(10px, 30px))' — Cannot read properties of undefined (reading 'media')
+  FAIL: Should be unknown: '(width > random(10px, 30px))' — Cannot read properties of undefined (reading 'matches')
+  FAIL: Should be parseable: '(width > random(--foo, 10px, 30px))' — Cannot read properties of undefined (reading 'media')
+FAIL css/css-values/random-serialize.tentative.html (0/42 pass)
+  FAIL: e.style['width'] = "random(0px, 100px)" should set the property value — assert_equals: serialization should be canonical expected "random(0px, 100px)" but got "auto"
+  FAIL: e.style['width'] = "random(fixed 0.5, 0px, 100px)" should set the property value — assert_equals: serialization should be canonical expected "random(fixed 0.5, 0px, 100px)" but got "auto"
+  FAIL: e.style['width'] = "random(auto, 0px, 100px)" should set the property value — assert_equals: serialization should be canonical expected "random(0px, 100px)" but got "auto"
+FAIL css/css-values/rem-unit-root-element.html (0/4 pass)
+  FAIL: rem based margin. — assert_equals: expected "100px" but got ""
+  FAIL: rem based padding. — assert_equals: expected "100px" but got ""
+  FAIL: rem based line-height. — assert_equals: expected "100px" but got ""
+FAIL css/css-values/rlh-on-root-lengths.html (0/1 pass)
+  FAIL: Non font or line-height properties on :root should resolve rlh against :root line-height — assert_equals: expected "146px" but got ""
+FAIL css/css-values/round-function.html (0/191 pass)
+  FAIL: round(23px, 10px) should be used-value-equivalent to 20px — assert_not_equals: round(23px, 10px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: round(18px, 10px) should be used-value-equivalent to 20px — assert_not_equals: round(18px, 10px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: round(15px, 10px) should be used-value-equivalent to 20px — assert_not_equals: round(15px, 10px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/round-mod-rem-computed.html (0/243 pass)
+  FAIL: round(10,10) should be used-value-equivalent to 10 — assert_not_equals: round(10,10) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: mod(1,1) should be used-value-equivalent to 0 — assert_not_equals: mod(1,1) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: mod(0,-2) should be used-value-equivalent to 0 — assert_not_equals: mod(0,-2) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/round-mod-rem-serialize.html (0/24 pass)
+  FAIL: 'round(1.1,1)' as a specified value should serialize as 'calc(1)'. — assert_equals: 'calc(1)' should round-trip exactly in specified values. expected (string) "calc(1)" but got (undefined) undefined
+  FAIL: 'scale(round(1.1,1))' as a specified value should serialize as 'scale(calc(1))'. — assert_equals: 'scale(calc(1))' should round-trip exactly in specified values. expected (string) "scale(calc(1))" but got (undefined) undefined
+  FAIL: 'round(1.1,1)' as a computed value should serialize as '1'. — assert_equals: '1' should round-trip exactly in computed values. expected (string) "1" but got (undefined) undefined
+FAIL css/css-values/sign-in-keyframes-with-relative-units.html (0/2 pass)
+  FAIL: Initially, the font-size is 8px for #target, so the result is 0.75 — Cannot read properties of null (reading 'scale')
+  FAIL: Changing the font-size of #target changes the start point, so the result should be 1.75 — Cannot read properties of undefined (reading 'style')
+FAIL css/css-values/signed-zero.html (0/162 pass)
+  FAIL: sign(calc(-0)) should be used-value-equivalent to 0 — assert_not_equals: sign(calc(-0)) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: clamp(-1, 1 / sign(calc(-0)), 1) should be used-value-equivalent to -1 — assert_not_equals: clamp(-1, 1 / sign(calc(-0)), 1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: sign(calc( 0)) should be used-value-equivalent to 0 — assert_not_equals: sign(calc( 0)) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/signs-abs-computed.html (0/233 pass)
+  FAIL: abs(1) should be used-value-equivalent to 1 — assert_not_equals: abs(1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: sign(1) should be used-value-equivalent to 1 — assert_not_equals: sign(1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+  FAIL: abs(-1) should be used-value-equivalent to 1 — assert_not_equals: abs(-1) isn't valid in 'z-index'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/signs-abs-serialize.html (0/16 pass)
+  FAIL: 'scale(abs(1))' as a specified value should serialize as 'scale(calc(1))'. — assert_equals: 'scale(calc(1))' should round-trip exactly in specified values. expected (string) "scale(calc(1))" but got (undefined) undefined
+  FAIL: 'scale(sign(.1))' as a specified value should serialize as 'scale(calc(1))'. — assert_equals: 'scale(calc(1))' should round-trip exactly in specified values. expected (string) "scale(calc(1))" but got (undefined) undefined
+  FAIL: 'scale(abs(1 + 2 + 3))' as a specified value should serialize as 'scale(calc(6))'. — assert_equals: 'scale(calc(6))' should round-trip exactly in specified values. expected (string) "scale(calc(6))" but got (undefined) undefined
+FAIL css/css-values/sin-cos-tan-computed.html (0/26 pass)
+  FAIL: cos(0) should be used-value-equivalent to 1 — assert_not_equals: cos(0) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: sin(0) should be used-value-equivalent to 0 — assert_not_equals: sin(0) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+  FAIL: tan(0) should be used-value-equivalent to 0 — assert_not_equals: tan(0) isn't valid in 'scale'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/tree-counting/calc-sibling-function-in-shadow-dom.html (0/1 pass)
+  FAIL: Host children have sibling-index() and sibling-count() based on the DOM tree order — Cannot read properties of undefined (reading 'attachShadow')
+FAIL css/css-values/tree-counting/calc-sibling-function-parsing.html (4/10 pass)
+  FAIL: e.style['left'] = "calc(1px * sibling-index())" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['left'] = "calc(1px * sibling-index( ))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['z-index'] = "sibling-index()" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/tree-counting/calc-sibling-function.html (0/6 pass)
+  FAIL: basic sibling-index() test — assert_equals: expected "2" but got ""
+  FAIL: basic sibling-count() test — assert_equals: expected "foo 5" but got ""
+  FAIL: sibling-index() in calc() with percentage — assert_equals: expected "calc(10% + 200px)" but got ""
+FAIL css/css-values/tree-counting/sibling-function-container-query-invalidation.html (0/4 pass)
+  FAIL: sibling-index() in @container width query initially not matching — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: sibling-count() in @container width query initially not matching — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: sibling-index() in @container style() query initially not matching — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/css-values/tree-counting/sibling-function-container-query.html (0/4 pass)
+  FAIL: sibling-index() in @container width query — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: sibling-count() in @container width query — Cannot read properties of null (reading 'backgroundColor')
+  FAIL: sibling-index() in @container style() query — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/css-values/tree-counting/sibling-function-invalidation.html (0/4 pass)
+  FAIL: Initially 6th sibling — Cannot read properties of undefined (reading 'offsetWidth')
+  FAIL: 5th sibling after removal — Cannot read properties of undefined (reading 'remove')
+  FAIL: Initially 6 siblings — Cannot read properties of undefined (reading 'offsetHeight')
+FAIL css/css-values/tree-counting/sibling-function-media-query.tentative.html (0/4 pass)
+  FAIL: Should be parseable: '(width > calc(0px * sibling-index()))' — Cannot read properties of undefined (reading 'media')
+  FAIL: Should be unknown: '(width > calc(0px * sibling-index()))' — Cannot read properties of undefined (reading 'matches')
+  FAIL: Should be parseable: '(width > calc(0px * sibling-count()))' — Cannot read properties of undefined (reading 'media')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-font-style-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'fontStyle')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-font-variation-settings-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'fontVariationSettings')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-font-weight-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'fontWeight')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-length-value-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 2 for #target — Cannot read properties of null (reading 'top')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-palette-mix-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 4 for #target — Cannot read properties of null (reading 'fontPalette')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-percent-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'textSizeAdjust')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-registered-properties-dynamic.html (0/10 pass)
+  FAIL: Initially, the sibling-index() is 3 for --time — Cannot read properties of null (reading 'getPropertyValue')
+  FAIL: Initially, the sibling-index() is 3 for --angle — Cannot read properties of null (reading 'getPropertyValue')
+  FAIL: Initially, the sibling-index() is 3 for --resolution — Cannot read properties of null (reading 'getPropertyValue')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-rotate-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'rotate')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-scale-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'scale')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-transform-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'transform')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-keyframe-value-dynamic.html (0/2 pass)
+  FAIL: Initially, the sibling-index() is 3 for #target — Cannot read properties of null (reading 'zIndex')
+  FAIL: Removing a preceding sibling of #target reduces the sibling-index() — Cannot read properties of undefined (reading 'remove')
+FAIL css/css-values/tree-counting/sibling-index-linear-gradient-gcs.html (0/3 pass)
+  FAIL: Check that sibling-index() is resolved in serialization of computed value of linear-gradient() — Cannot read properties of null (reading 'backgroundImage')
+  FAIL: Check that sibling-index() is resolved in serialization of computed value of linear-gradient() inside cross-fade() — Cannot read properties of null (reading 'backgroundImage')
+  FAIL: Check that sibling-index() is resolved in serialization of computed value of linear-gradient() inside image-set() — Cannot read properties of null (reading 'backgroundImage')
+FAIL css/css-values/tree-counting/tree-scoped-sibling-function.html (0/2 pass)
+  FAIL: sibling-index() and sibling-count() evaluates to 0 from outer tree with ::part — Cannot read properties of undefined (reading 'shadowRoot')
+  FAIL: sibling-index() and sibling-count() evaluate as normal from inner tree — Cannot read properties of null (reading 'zIndex')
+FAIL css/css-values/typed_arithmetic.html (0/35 pass)
+  FAIL: min(1em, 110px / 10px * 1px) should be used-value-equivalent to 10px — assert_not_equals: min(1em, 110px / 10px * 1px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: max(10px, 110px / 10px * 1px) should be used-value-equivalent to 11px — assert_not_equals: max(10px, 110px / 10px * 1px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+  FAIL: max(1em + 2px, 110px / 10px * 1px) should be used-value-equivalent to 12px — assert_not_equals: max(1em + 2px, 110px / 10px * 1px) isn't valid in 'margin-left'; got the default value instead. got disallowed value undefined
+FAIL css/css-values/typed_arithmetic_cycle.html (0/1 pass)
+  FAIL: CSS Values: typed arithmetic with custom property and cycle tests — Cannot read properties of null (reading 'fontSize')
+FAIL css/css-values/update-subpixel-rem-unit.html (0/1 pass)
+  FAIL: Check that a 0.1px change in root font-size affect rem units. — Cannot read properties of null (reading 'width')
+FAIL css/css-values/urls/cross-origin/url-font-cross-origin-anonymous-negative.sub.html (0/1 pass)
+  FAIL: cross-origin(anonymous) blocks cross-origin font loading without CORS headers — Cannot read properties of undefined (reading 'ready')
+FAIL css/css-values/urls/cross-origin/url-font-cross-origin-anonymous.sub.html (0/1 pass)
+  FAIL: cross-origin(anonymous) allows cross-origin font loading with CORS headers — Cannot read properties of undefined (reading 'ready')
+FAIL css/css-values/urls/empty.html (0/4 pass)
+  FAIL: empty URL: inline-unquoted — assert_equals: expected (string) "url("")" but got (undefined) undefined
+  FAIL: empty URL: inline-quoted — assert_equals: expected (string) "url("")" but got (undefined) undefined
+  FAIL: empty URL: external-unquoted — assert_equals: expected (string) "url("")" but got (undefined) undefined
+FAIL css/css-values/urls/fragment-only.html (0/5 pass)
+  FAIL: empty URL: inline-unquoted — assert_equals: expected (string) "url("#foo")" but got (undefined) undefined
+  FAIL: empty URL: inline-quoted — assert_equals: expected (string) "url("#foo")" but got (undefined) undefined
+  FAIL: empty URL: external-unquoted — assert_equals: expected (string) "url("#foo")" but got (undefined) undefined
+FAIL css/css-values/urls/resolve-relative-to-base.sub.html (0/2 pass)
+  FAIL: base-relative URL: relative-image-url — Cannot read properties of undefined (reading 'href')
+  FAIL: base-relative URL: relative-image-variable-url — Cannot read properties of undefined (reading 'href')
+FAIL css/css-values/urls/resolve-relative-to-stylesheet.html (0/3 pass)
+  FAIL: stylesheet-relative URL: stylesheet-relative-image — Cannot read properties of undefined (reading 'href')
+  FAIL: stylesheet-relative URL: stylesheet-relative-variable-image — Cannot read properties of undefined (reading 'href')
+  FAIL: stylesheet-relative URL: stylesheet-relative-document-variable-image — Cannot read properties of undefined (reading 'href')
+FAIL css/css-values/urls/url-request-modifiers-computed.sub.html (0/23 pass)
+  FAIL: Property background-image value 'url("http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png")' — assert_true: 'url("http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png")' is a supported value for background-image. expected true got false
+  FAIL: Property background-image value 'url("http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png" cross-origin(anonymous))' — assert_true: 'url("http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png" cross-origin(anonymous))' is a supported value for background-image. expected true got false
+  FAIL: Property background-image value 'url("http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png" cross-origin(use-credentials))' — assert_true: 'url("http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png" cross-origin(use-credentials))' is a supported value for background-image. expected true got false
+FAIL css/css-values/urls/url-request-modifiers-font-face-parsing.html (0/7 pass)
+  FAIL: cross-origin(anonymous) in @font-face src — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: referrer-policy(no-referrer) in @font-face src — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: integrity() in @font-face src — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/css-values/urls/url-request-modifiers-serialize.sub.html (0/23 pass)
+  FAIL: e.style['background-image'] = "url(\"http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png\")" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['background-image'] = "url(\"http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png\" cross-origin(anonymous))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['background-image'] = "url(\"http://{{hosts[][]}}:{{ports[http][0]}}/css/support/1x1-green.png\" cross-origin(use-credentials))" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/various-values-important.html (0/4 pass)
+  FAIL: CSS Values: !important flag parsing — Cannot read properties of null (reading 'fontVariant')
+  FAIL: CSS Values: !important flag parsing 1 — Cannot read properties of null (reading 'initialLetter')
+  FAIL: CSS Values: !important flag parsing 2 — Cannot read properties of null (reading 'textBoxEdge')
+FAIL css/css-values/viewport-relative-lengths-scaled-viewport.html (0/1 pass)
+  FAIL: viewport relative units in scaled viewport — Cannot read properties of undefined (reading 'createElement')
+FAIL css/css-values/viewport-units-invalidation.html (0/24 pass)
+  FAIL: 100vw computes to 400px after frame resize — Cannot read properties of undefined (reading 'append')
+  FAIL: 100vi computes to 400px after frame resize — Cannot read properties of undefined (reading 'append')
+  FAIL: 100vmax computes to 400px after frame resize — Cannot read properties of undefined (reading 'append')
+FAIL css/css-values/viewport-units-modify.html (0/1 pass)
+  FAIL: Crash when going from non-viewport to viewport units — Cannot read properties of null (reading 'paddingLeft')
+FAIL css/css-values/viewport-units-parsing.html (0/24 pass)
+  FAIL: e.style['width'] = "1vw" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['width'] = "1vh" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['width'] = "1vi" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-values/viewport-units-scroll-no-cycles-001.tentative.html (0/1 pass)
+  FAIL: CSS Values and Units Test: Viewport units and scrollbars — Cannot read properties of undefined (reading 'contentDocument')
+FAIL css/css-values/viewport-units-scrollbars-root-properties-001.html (0/1 pass)
+  FAIL: vw has had the overflow-y scrollbar width removed — Cannot read properties of undefined (reading 'getBoundingClientRect')
+
+===========================================
+  WPT Results: css/css-values
+===========================================
+  Test files: 237 (pass=74 fail=163 err=0)
+  Subtests: 1203/4536 pass
+  Pass rate: 26.5%
+===========================================

@@ -1,0 +1,26 @@
+=== PHASE 0b SWEEP START [23:55:54] ===
+=== WAVE 1 (webidl + dom/events) ===
+[23:55:54] START webidl port=9876
+[23:55:54] START dom/events port=9877
+[23:57:09] DONE  webidl exit=0 elapsed=75s
+[00:00:31] DONE  dom/events exit=0 elapsed=277s
+=== WAVE 1 DONE [00:00:31] ===
+=== WAVE 2 (css/cssom + dom/nodes) ===
+[00:00:31] START dom/nodes port=9879
+[00:00:31] START css/cssom port=9878
+[00:05:09] DONE  css/cssom exit=0 elapsed=278s
+[00:06:35] DONE  dom/nodes exit=0 elapsed=364s
+=== WAVE 2 DONE [00:06:35] ===
+=== WAVE 3 (css/css-color + css/css-values) ===
+[00:06:35] START css/css-color port=9880
+[00:06:35] START css/css-values port=9881
+[00:10:22] DONE  css/css-color exit=0 elapsed=227s
+[00:18:41] DONE  css/css-values exit=0 elapsed=726s
+=== WAVE 3 DONE [00:18:41] ===
+=== WAVE 4 (html/dom + css/selectors) ===
+[00:18:41] START html/dom port=9882
+[00:18:41] START css/selectors port=9883
+[00:24:18] DONE  html/dom exit=0 elapsed=337s
+[00:24:18] DONE  css/selectors exit=0 elapsed=337s
+=== WAVE 4 DONE [00:24:18] ===
+=== PHASE 0b SWEEP ALL DONE [00:24:18] ===

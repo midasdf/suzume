@@ -1,0 +1,382 @@
+=== WPT Tests: css/cssom (182 files, 2 parallel, engine=kotori) ===
+FAIL css/cssom/CSSConditionRule-conditionText.html (0/1 pass)
+  FAIL: CSSConditionRule.conditionText — Cannot read properties of undefined
+FAIL css/cssom/CSS-namespace-object-class-string.html (0/4 pass)
+  FAIL: @@toStringTag exists on the namespace object with the appropriate descriptor — assert_own_property: expected property symbol "" missing
+  FAIL: Object.prototype.toString applied to the namespace object — assert_equals: expected "[object CSS]" but got "[object Object]"
+  FAIL: Object.prototype.toString applied after modifying the namespace object's @@toStringTag — assert_own_property: Precondition: @@toStringTag on the namespace object expected property symbol "" missing
+FAIL css/cssom/CSSCounterStyleRule.html (0/1 pass)
+  FAIL: CSSCounterStyleRule.cssText doesn't serialize with newlines — Cannot read properties of undefined
+FAIL css/cssom/CSSFontFeatureValuesRule.html (0/8 pass)
+  FAIL: CSSFontFeatureValuesRule is correctly parsed and accessible via CSSOM. — Cannot read properties of undefined
+  FAIL: CSSFontFeatureValuesRule family is settable and readable. — Cannot read properties of undefined
+  FAIL: CSSFontFeatureValuesMap entries are settable to single values. — Cannot read properties of undefined
+FAIL css/cssom/CSSFontFaceRule.html (0/1 pass)
+  FAIL: CSSFontFaceRule.cssText doesn't serialize with newlines — Cannot read properties of undefined
+FAIL css/cssom/CSSGroupingRule-cssRules.html (0/1 pass)
+  FAIL: [SameObject] is honored — assert_true: setup - sheet defined expected true got false
+FAIL css/cssom/CSSGroupingRule-insertRule.html (0/7 pass)
+  FAIL: index before first — assert_true: setup - sheet defined expected true got false
+  FAIL: index after final — assert_true: setup - sheet defined expected true got false
+  FAIL: index not specified — assert_true: setup - sheet defined expected true got false
+FAIL css/cssom/CSSKeyframesRule.html (0/2 pass)
+  FAIL: name, cssRules, appendRule, findRule, deleteRule — Cannot read properties of undefined
+  FAIL: indexed getter, length — Cannot read properties of undefined
+FAIL css/cssom/CSSNamespaceRule.html (0/1 pass)
+  FAIL: CSSOM - CSSNamespaceRule interface — Cannot read properties of undefined
+FAIL css/cssom/CSSRuleList.html (0/1 pass)
+  FAIL: CSSOM - CSSRuleList interface — Cannot read properties of undefined
+FAIL css/cssom/CSSStyleDeclaration-iterator.html (0/1 pass)
+  FAIL: CSSStyleDeclaration should expose Symbol.iterator — Cannot read properties of undefined (reading 'prototype')
+FAIL css/cssom/CSSStyleSheet-constructable-baseURL.html (0/3 pass)
+  FAIL: Constructing sheet with custom base URL ueses that URL for CSS rules — Cannot read properties of undefined (reading 'appendChild')
+  FAIL: Constructing sheet with relative URL adds to the constructor document's base URL — Cannot read properties of undefined (reading 'appendChild')
+  FAIL: Constructing sheet with invalid base URL throws a NotAllowedError — assert_throws_dom: function "[Function]" did not throw
+FAIL css/cssom/CSSStyleSheet-constructable-cssRules.html (0/1 pass)
+  FAIL: cssRules doesn't change on replace / replaceSync — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/CSSStyleSheet-constructable-disabled-regular-sheet-insertion.html (0/1 pass)
+  FAIL: Shouldn't crash / assert when inserting a stylesheet after there are disabled constructable sheets — Cannot read properties of undefined (reading 'replaceSync')
+FAIL css/cssom/CSSStyleSheet-constructable-disallow-import.tentative.html (0/4 pass)
+  FAIL: Inserting an @import rule through insertRule on a constructed stylesheet throws an exception — assert_throws_dom: function "[Function]" threw object "[object Object]" that is not a DOMException SyntaxError: property "code" is equal to undefined, expected 12
+  FAIL: @import rules are not parsed in CSSStyleSheet.replaceSync — Cannot read properties of undefined (reading 'appendChild')
+  FAIL: @import rules should not trigger any loads. — Cannot read properties of undefined (reading 'replaceSync')
+FAIL css/cssom/CSSStyleSheet-constructable-duplicate.html (0/4 pass)
+  FAIL: Duplicate stylesheets have the right cascade position in the Document — Cannot read properties of undefined (reading 'replaceSync')
+  FAIL: Appending duplicate stylesheets yields the correct cascade position in the Document — Cannot read properties of undefined (reading 'replaceSync')
+  FAIL: Duplicate stylesheets have the right cascade position in the ShadowRoot — Cannot read properties of undefined (reading 'replaceSync')
+FAIL css/cssom/CSSStyleSheet-constructable-invalidation.html (0/3 pass)
+  FAIL: mutating constructed CSSStyleSheet applied to root invalidates styles — Cannot read properties of undefined (reading 'replaceSync')
+  FAIL: mutating constructed CSSStyleSheet applied to shadowdom invalidates styles — Cannot read properties of undefined (reading 'attachShadow')
+  FAIL: mutating dependent constructed CSSStyleSheet applied to shadowdom invalidates styles — Cannot read properties of undefined (reading 'attachShadow')
+FAIL css/cssom/CSSStyleSheet-constructable-replace-cssRules.html (0/2 pass)
+  FAIL: cssRules tests (sync: true) — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: cssRules tests (sync: false) — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/CSSStyleSheet-constructable-replace-on-regular-sheet.html (0/3 pass)
+  FAIL: CSSStyleSheet.replaceSync throws NotAllowedError for non-constructed sheets — assert_equals: precondition expected "rgb(0, 255, 0)" but got ""
+  FAIL: CSSStyleSheet.replace returns a rejected promise for non-constructed sheets — assert_equals: precondition expected "rgb(0, 255, 0)" but got ""
+  FAIL: CSSStyleSheet.replace returns a rejected promise for non-constructed sheets that have no associated document — assert_equals: precondition expected "rgb(0, 255, 0)" but got ""
+FAIL css/cssom/CSSStyleSheet-constructable-replace-thenable.html (0/1 pass)
+  FAIL: CSSStyleSheet.replace/replaceSync() when stylesheet is a thenable — Cannot read properties of undefined (reading 'prototype')
+FAIL css/cssom/CSSStyleSheet-modify-after-removal.html (0/2 pass)
+  FAIL: Modify sheet from removed iframe — Cannot read properties of undefined (reading 'contentDocument')
+  FAIL: Modify constructed sheet from removed iframe — Cannot read properties of undefined (reading 'contentWindow')
+FAIL css/cssom/CSSStyleSheet-template-adoption.html (0/1 pass)
+  FAIL: adoptedStyleSheets won'te be cleared when adopting into/from <template>s — Cannot read properties of undefined (reading 'replaceSync')
+FAIL css/cssom/HTMLLinkElement-disabled-001.html (0/2 pass)
+  FAIL: <link disabled> prevents the stylesheet from being in document.styleSheets (from parser) — Cannot read properties of undefined (reading 'length')
+  FAIL: HTMLLinkElement.disabled reflects the <link disabled> attribute, and behaves consistently — Cannot read properties of null (reading 'disabled')
+FAIL css/cssom/HTMLLinkElement-disabled-002.html (0/1 pass)
+  FAIL: HTMLLinkElement.disabled reflects the <link disabled> attribute, and behaves consistently, when the sheet is an alternate — Cannot read properties of null (reading 'disabled')
+FAIL css/cssom/HTMLLinkElement-disabled-003.html (0/1 pass)
+  FAIL: HTMLLinkElement.disabled's explicitly enabled state persists when disconnected and connected again — Cannot read properties of null (reading 'disabled')
+FAIL css/cssom/HTMLLinkElement-disabled-004.html (0/1 pass)
+  FAIL: HTMLLinkElement.disabled's explicitly enabled state doesn't persist on clones — Cannot read properties of null (reading 'remove')
+FAIL css/cssom/HTMLLinkElement-disabled-005.html (0/1 pass)
+  FAIL: HTMLLinkElement.disabled's explicitly enabled state persists regardless of rel — Cannot set properties of null (setting 'onload')
+FAIL css/cssom/HTMLLinkElement-load-event.html (0/1 pass)
+  FAIL: Link element load event doesn't block the parser. — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/HTMLLinkElement-load-event-002.html (0/2 pass)
+  FAIL: Load event doesn't fire on removed link — promise_test: test body must return a 'thenable' object (received an object with no `then` method)
+  FAIL: Load event doesn't fire for removed sheet — assert_true: Should've seen the load event only once expected true got false
+FAIL css/cssom/MediaList.html (0/1 pass)
+  FAIL: CSSOM - MediaList interface — Cannot read properties of undefined
+FAIL css/cssom/HTMLStyleElement-load-event.html (0/1 pass)
+  FAIL: style elements fire load events properly — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/StyleSheetList-constructable-with-style-recalc.html (0/1 pass)
+  FAIL: document.styleSheets does not include adopted style sheets — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/MutationObserver-style.html (0/2 pass)
+  FAIL: Updating style property with the same value does not trigger an observation callback — assert_equals: times callback called expected 1 but got 0
+  FAIL: Updating cssText triggers an observation callback even if the value is the same — assert_equals: times callback called expected 1 but got 0
+FAIL css/cssom/StyleSheetList-constructable.html (0/1 pass)
+  FAIL: document.styleSheets does not include adopted style sheets — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/StyleSheetList.html (0/1 pass)
+  FAIL: CSSOM - StyleSheetList interface — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/at-namespace.html (0/1 pass)
+  FAIL: CSS Test: @namespace in CSSOM is not severely broken — assert_throws_dom: function "[Function]" threw object "[object Object]" that is not a DOMException InvalidStateError: property "code" is equal to undefined, expected 11
+FAIL css/cssom/base-uri.html (0/3 pass)
+  FAIL: setProperty — assert_true: expected true got false
+  FAIL: KeyframeEffect constructor — Cannot read properties of undefined (reading 'play')
+  FAIL: KeyframeEffect.setKeyframes — Cannot read properties of undefined (reading 'setKeyframes')
+FAIL css/cssom/border-shorthand-serialization.html (0/3 pass)
+  FAIL: Declaration with border longhands is not serialized to a border shorthand declaration. — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Declaration with border longhands and border-image is not serialized to a border shorthand declaration. — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Border shorthand is serialized correctly if all border-image-* are set to their initial specified values. — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/caretPositionFromPoint-audioVideo.html (0/2 pass)
+  FAIL: document.caretPositionFromPoint() should return a CaretPosition over audio elements — Cannot read properties of undefined (reading 'setHTMLUnsafe')
+  FAIL: document.caretPositionFromPoint() should return a CaretPosition over video elements — Cannot read properties of undefined (reading 'setHTMLUnsafe')
+FAIL css/cssom/caretPositionFromPoint-with-transformation.html (0/1 pass)
+  FAIL: iframe's with equal content should report the same caret offset — assert_equals: expected (undefined) undefined but got (string) "caret offset"
+FAIL css/cssom/caretPositionFromPoint-in-flex-container.html (0/3 pass)
+  FAIL: caretPositionFromPoint just inside a tall flex child resolves to that child — Cannot read properties of undefined (reading 'left')
+  FAIL: caretPositionFromPoint well inside a tall flex child resolves to that child — Cannot read properties of undefined (reading 'left')
+  FAIL: caretPositionFromPoint inside the short flex child resolves correctly — Cannot read properties of undefined (reading 'left')
+FAIL css/cssom/caretPositionFromPoint.html (0/7 pass)
+  FAIL: document.caretPositionFromPoint() throws when called without the correct parameters — Cannot read properties of undefined (reading 'setHTMLUnsafe')
+  FAIL: document.caretPositionFromPoint() should return null for a document with no viewport — Cannot read properties of undefined (reading 'setHTMLUnsafe')
+  FAIL: document.caretPositionFromPoint() should return null if given coordinates outside of the viewport — Cannot read properties of undefined (reading 'setHTMLUnsafe')
+FAIL css/cssom/caretRangeFromPoint-replace-document.tentative.html (0/1 pass)
+  FAIL: document.caretRangeFromPoint(0, 0) — assert_true: expected true got false
+FAIL css/cssom/caretRangeFromPoint-textarea-transform.tentative.html (0/2 pass)
+  FAIL: document.caretRangeFromPoint(0, 0) — assert_true: expected true got false
+  FAIL: document.caretRangeFromPoint(10, 10) — assert_true: expected true got false
+FAIL css/cssom/caretRangeFromPoint.tentative.html (0/8 pass)
+  FAIL: document.caretRangeFromPoint() (no supplied coordinates) returns Range with 0 0 values — assert_true: expected true got false
+  FAIL: document.caretRangeFromPoint() should return null for a document with no viewport — assert_equals: expected (object) null but got (undefined) undefined
+  FAIL: document.caretRangeFromPoint() should return null if given coordinates outside of the viewport — assert_equals: expected (object) null but got (undefined) undefined
+FAIL css/cssom/computed-style-001.html (3/4 pass)
+  FAIL: read_only — assert_throws_dom: do not allow setting cssText on a readonly CSSStyleDeclaration function "[Function]" did not throw
+FAIL css/cssom/computed-style-002.html (0/1 pass)
+  FAIL: Check that a percent width in an iframe is resolved against iframe width for getComputedStyle. — Cannot read properties of undefined (reading 'contentWindow')
+FAIL css/cssom/computed-style-005.html (3/4 pass)
+  FAIL: relative_computed_left_and_right — assert_equals: expected "0px" but got "auto"
+FAIL css/cssom/computed-style-set-property.html (0/5 pass)
+  FAIL: Computed style parent (should be null) — Cannot read properties of undefined (reading 'getComputedStyle')
+  FAIL: Exception thrown when trying to change a computed style declaration via property — assert_throws_dom: function "[Function]" threw object "[object Object]" that is not a DOMException NoModificationAllowedError: property "code" is equal to undefined, expected 7
+  FAIL: Exception thrown when trying to change a computed style declaration via setProperty — assert_throws_dom: function "[Function]" threw object "[object Object]" that is not a DOMException NoModificationAllowedError: property "code" is equal to undefined, expected 7
+FAIL css/cssom/css-style-attr-decl-block.html (1/7 pass)
+  FAIL: Changes to style attribute should reflect on CSS declaration block — Cannot read properties of undefined (reading 'cssText')
+  FAIL: Changes to CSS declaration block should reflect on style attribute — Cannot read properties of undefined (reading 'getAttribute')
+  FAIL: Changes to CSS declaration block should queue mutation record for style attribute — Cannot read properties of undefined (reading 'takeRecords')
+FAIL css/cssom/css-style-reparse.html (0/2 pass)
+  FAIL: style.textContent modification — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: style.innerHTML modification — Cannot read properties of undefined (reading 'insertRule')
+FAIL css/cssom/cssom-getPropertyValue-common-checks.html (10/11 pass)
+  FAIL: All properties (except 'all') can serialize their initial value (computed) — Cannot read properties of undefined (reading 'next')
+FAIL css/cssom/cssstyledeclaration-all-shorthand.html (3/27 pass)
+  FAIL: getPropertyValue('all') returns empty string when single property overriden — assert_equals: expected "" but got "revert"
+  FAIL: setProperty('all') sets all property values — assert_equals: expected "revert" but got ""
+  FAIL: removeProperty('all') removes all declarations affected by 'all' — assert_equals: expected "" but got "50px"
+FAIL css/cssom/cssom-setProperty-shorthand.html (38/76 pass)
+  FAIL: shorthand 0 can be set with setProperty — assert_true: can setPropertyValue with shorthand expected true got false
+  FAIL: shorthand 0 can be set with setProperty and priority !important — assert_true: can setPropertyValue with shorthand expected true got false
+  FAIL: shorthand 0 can be set with setProperty — assert_true: can setPropertyValue with shorthand expected true got false
+FAIL css/cssom/cssstyledeclaration-csstext-all-shorthand.html (1/6 pass)
+  FAIL: 'all' shorthand alone — assert_equals: expected "all: inherit;" but got "all: inherit"
+  FAIL: 'all' shorthand with 'width' and 'height' — assert_equals: expected "all: inherit;" but got "width: 100px; all: inherit; height: inherit"
+  FAIL: 'all' shorthand with 'direction' and 'unicode-bidi' — assert_equals: expected "direction: ltr; all: inherit; unicode-bidi: plaintext;" but got "direction: ltr; all: inherit; unicode-bidi: plaintext"
+FAIL css/cssom/cssstyledeclaration-csstext-important.html (0/1 pass)
+  FAIL: padding-left should be taken from the !important property — assert_equals: expected "10px" but got "0px"
+FAIL css/cssom/cssstyledeclaration-csstext-final-delimiter.html (1/3 pass)
+  FAIL: inline style - text - delimiters - one declaration — assert_equals: expected "left: 10px;" but got "left: 10px"
+  FAIL: inline style - text - delimiters - two declarations — assert_equals: expected "left: 10px; right: 20px;" but got "left: 10px; right: 20px"
+FAIL css/cssom/cssstyledeclaration-custom-properties.html (0/1 pass)
+  FAIL: Custom properties are included in computed style — Cannot read properties of null (reading 'length')
+FAIL css/cssom/cssstyledeclaration-csstext.html (7/11 pass)
+  FAIL: whitespaces in value — assert_equals: expected "color: red; font-size: 10pt;" but got "color: red; font-size: 10pt   ;"
+  FAIL: Shorthands aren't serialized if there are other properties with different logical groups in between — assert_equals: expected "margin-top: 10px; margin-right: 10px; margin-left: 10px; margin-inline-start: 10px; margin-block: 10px; margin-inline-end: 10px; margin-bottom: 10px;" but got "margin: 10px; margin-inline: 10px; margin-block: 10px; margin-inline-end: 10px; margin-bottom: 10px;"
+  FAIL: Shorthands _are_ serialized if there are no other properties with different logical groups in between — assert_equals: expected "margin: 10px; margin-inline: 10px; margin-block: 10px;" but got "margin-top: 10px; margin-left: 10px; margin-right: 10px; margin-bottom: 10px; margin-inline-start: 10px; margin-inline-end: 10px; margin-block-start: 10px; margin-block-end: 10px;"
+FAIL css/cssom/cssstyledeclaration-mutability.html (1/3 pass)
+  FAIL: getComputedStyle's CSSStyleDeclaration is not mutable — assert_throws_dom: function "[Function]" did not throw
+  FAIL: StyleSheet's CSSStyleDeclaration is mutable — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/cssstyledeclaration-properties.html (0/1 pass)
+  FAIL: CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames() — assert_true: Should be a CSStyleDeclaration expected true got false
+FAIL css/cssom/cssstyledeclaration-nested.html (0/1 pass)
+  FAIL: CSSNestedDeclarationBlock cssom interactions — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/cssstyledeclaration-removeProperty-all.html (1/2 pass)
+  FAIL: CSSStyleDeclaration.removeProperty("all") — assert_equals: setter should work as expected expected (number) 1 but got (function) function "[Function]"
+FAIL css/cssom/cssstyledeclaration-registered-custom-properties.html (0/2 pass)
+  FAIL: Registered custom properties are included in CSSComputedStyleDeclaration — assert_not_equals: got disallowed value -1
+  FAIL: Only relevant custom properties are included — assert_not_equals: got disallowed value -1
+FAIL css/cssom/cssstyledeclaration-setter-declarations.html (0/4 pass)
+  FAIL: setProperty with longhand should update only the declaration being set — Cannot read properties of undefined (reading 'next')
+  FAIL: property setter should update only the declaration being set — Cannot read properties of undefined (reading 'next')
+  FAIL: setProperty with shorthand should update only the declarations being set — Cannot read properties of undefined (reading 'next')
+FAIL css/cssom/cssstyledeclaration-setter-logical.html (0/1 pass)
+  FAIL: newly set declaration should be after all declarations in the same logical property group but have different logical kind — Cannot read properties of undefined (reading 'next')
+FAIL css/cssom/delete-namespace-rule-when-child-rule-exists.html (0/1 pass)
+  FAIL: Deleting a @namespace rule when list contains anything other than @import or @namespace rules should throw InvalidStateError. — Cannot read properties of undefined
+FAIL css/cssom/escape.html (7/10 pass)
+grep: (標準入力): binary file matches
+  FAIL: Number of arguments — assert_equals: expected (number) 1 but got (undefined) undefined
+FAIL css/cssom/font-family-serialization-001.html (9/24 pass)
+  FAIL: Serialization of <generic-family> — assert_equals: expected "serif" but got "sans-serif"
+  FAIL: Serialization of quoted "<generic-family>" — assert_equals: expected ""serif"" but got "sans-serif"
+  FAIL: Serialization of prefixed -webkit-<generic-family> — assert_equals: expected "-webkit-serif" but got "sans-serif"
+FAIL css/cssom/font-shorthand-serialization.html (0/1 pass)
+  FAIL: The font shorthand should be serialized just like any other shorthand. — assert_equals: expected "font: 10px / 1 Ahem;" but got "font: 10px/1 Ahem;"
+FAIL css/cssom/font-variant-shorthand-serialization.html (1/3 pass)
+  FAIL: font-variant: normal serialization — Cannot read properties of undefined (reading 'style')
+  FAIL: font-variant: none serialization — Cannot read properties of undefined (reading 'style')
+FAIL css/cssom/getComputedStyle-animations-replaced-into-ib-split.html (0/1 pass)
+  FAIL: getComputedStyle() should return animation styles for nodes just inserted into the document, even if they're in an IB-split — assert_equals: Should take color from the animation expected "rgb(0, 128, 0)" but got ""
+FAIL css/cssom/getComputedStyle-display-none-001.html (0/2 pass)
+  FAIL: getComputedStyle gets invalidated in display: none subtrees due to inherited changes to an ancestor — Cannot read properties of null (reading 'color')
+  FAIL: getComputedStyle gets invalidated in display: none subtrees due to inherited changes to an ancestor shadow host — Cannot read properties of undefined (reading 'attachShadow')
+FAIL css/cssom/getComputedStyle-display-none-002.html (0/1 pass)
+  FAIL: getComputedStyle gets invalidated in display: none subtrees due to rule matching changes — Cannot read properties of null (reading 'color')
+FAIL css/cssom/getComputedStyle-display-none-003.html (0/1 pass)
+  FAIL: getComputedStyle gets invalidated in display: none subtrees due to attribute mutations — Cannot read properties of null (reading 'color')
+FAIL css/cssom/getComputedStyle-dynamic-subdoc.html (0/1 pass)
+  FAIL: getComputedStyle cross-doc properly reflects media query changes — Cannot read properties of undefined (reading 'document')
+FAIL css/cssom/getComputedStyle-getter-v-properties.tentative.html (6/10 pass)
+  FAIL: margin-top — assert_true: getComputedStyle indexed getter expected true got false
+  FAIL: font-size — assert_true: getComputedStyle indexed getter expected true got false
+  FAIL: max-width — assert_true: getComputedStyle indexed getter expected true got false
+FAIL css/cssom/getComputedStyle-insets-absolute-roundtrip.html (0/4 pass)
+  FAIL: Fixed-length left property value should roundtrip — Cannot read properties of null (reading 'left')
+  FAIL: Fixed-length right property value should roundtrip — Cannot read properties of null (reading 'right')
+  FAIL: Fixed-length top property value should roundtrip — Cannot read properties of null (reading 'top')
+FAIL css/cssom/getComputedStyle-layout-dependent-removed-ib-sibling.html (0/1 pass)
+  FAIL: getComputedStyle() should return the correct used value for nodes that have had an IB-split sibling removed — Cannot read properties of null (reading 'width')
+FAIL css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html (0/1 pass)
+  FAIL: getComputedStyle() should return used value correctly for nodes just inserted into the document, even if they're in an IB-split — assert_true: Should return the used value for width expected true got false
+FAIL css/cssom/getComputedStyle-line-height.html (2/4 pass)
+  FAIL: line-height: 1 — assert_equals: 1 should compute to 16px expected "16px" but got "1"
+  FAIL: line-height: 10% — assert_equals: 10% should compute to 1.6px expected "1.6px" but got "10%"
+FAIL css/cssom/getComputedStyle-logical-enumeration.html (0/1 pass)
+  FAIL: Logical properties in enumeration of computed style — assert_true: Logical longhands should be enumerated in computed style expected true got false
+FAIL css/cssom/getComputedStyle-margins-roundtrip.html (0/4 pass)
+  FAIL: Fixed-length margin-left property value should roundtrip — Cannot read properties of null (reading 'marginLeft')
+  FAIL: Fixed-length margin-right property value should roundtrip — Cannot read properties of null (reading 'marginRight')
+  FAIL: Fixed-length margin-top property value should roundtrip — Cannot read properties of null (reading 'marginTop')
+FAIL css/cssom/getComputedStyle-pseudo-checkmark.html (1/3 pass)
+  FAIL: Resolution of width is correct when pseudo-element argument is ignored (due to no colon) — assert_equals: expected "321px" but got ""
+  FAIL: Resolution of width is correct for pseudo-element (due to double-colon) — assert_equals: expected "13px" but got ""
+FAIL css/cssom/getComputedStyle-pseudo-picker-icon.html (1/3 pass)
+  FAIL: Resolution of width is correct when pseudo-element argument is ignored (due to no colon) — assert_equals: expected "321px" but got ""
+  FAIL: Resolution of width is correct for pseudo-element (due to double-colon) — assert_equals: expected "13px" but got ""
+FAIL css/cssom/getComputedStyle-pseudo-picker.html (0/9 pass)
+  FAIL: ::picker(select) returns picker element style — assert_equals: expected "rgb(0, 128, 0)" but got ""
+  FAIL: ::picker(select) on non-select element resolves the style — assert_equals: expected "rgb(0, 0, 255)" but got ""
+  FAIL: ::picker(select) on non-select element with no rules resolves the style — assert_equals: expected "rgba(0, 0, 0, 0)" but got ""
+FAIL css/cssom/getComputedStyle-pseudo-with-argument.html (0/22 pass)
+  FAIL: This pseudo-element should not parse: ::before(test) — assert_equals: expected (number) 0 but got (string) ""
+  FAIL: This pseudo-element should not parse: ::highlight — assert_equals: expected (number) 0 but got (string) ""
+  FAIL: This pseudo-element should not parse: ::highlight( — assert_equals: expected (number) 0 but got (string) ""
+FAIL css/cssom/getComputedStyle-pseudo.html (1/28 pass)
+  FAIL: Resolution of width is correct when pseudo-element argument is ignored (due to no colon) — assert_equals: expected "100px" but got ""
+  FAIL: Resolution of width is correct for ::before and ::after pseudo-elements (single-colon) — assert_equals: expected "50px" but got ""
+  FAIL: Resolution of width is correct for ::before and ::after pseudo-elements (double-colon) — assert_equals: expected "50px" but got ""
+FAIL css/cssom/getComputedStyle-resolved-colors.html (6/13 pass)
+  FAIL: The resolved value for 'border-block-end-color' is the used value — assert_regexp_match: expected object "[object Object]" but got ""
+  FAIL: The resolved value for 'border-block-start-color' is the used value — assert_regexp_match: expected object "[object Object]" but got ""
+  FAIL: The resolved value for 'border-inline-end-color' is the used value — assert_regexp_match: expected object "[object Object]" but got ""
+FAIL css/cssom/getComputedStyle-sticky-pos-percent.html (0/1 pass)
+  FAIL: Sticky element's top property percentage value should be resolved against the div with overflow: hidden — Cannot read properties of null (reading 'top')
+FAIL css/cssom/historical.html (17/20 pass)
+  FAIL: Historical CSSStyleDeclaration member: getPropertyCSSValue — assert_false: expected false got true
+  FAIL: Historical CSSStyleDeclaration member: setPropertyValue — assert_false: expected false got true
+  FAIL: Historical CSSStyleDeclaration member: setPropertyPriority — assert_false: expected false got true
+FAIL css/cssom/inline-style-001.html (0/5 pass)
+  FAIL: CSSStyleDeclaration_accessible — Cannot read properties of undefined (reading 'name')
+  FAIL: read — Cannot read properties of undefined (reading 'cssText')
+  FAIL: csstext_write — Cannot set properties of undefined (setting 'cssText')
+FAIL css/cssom/insertRule-across-context.html (0/2 pass)
+  FAIL: The constructor of inserted rule object must be from iframe — Cannot read properties of undefined (reading 'contentDocument')
+  FAIL: The constructor of inserted rule object must be from iframe for new CSSStyleSheet() — Cannot read properties of undefined (reading 'contentWindow')
+FAIL css/cssom/insertRule-charset-no-index.html (0/2 pass)
+  FAIL: insertRule with charset and omitted index argument — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: insertRule with charset and undefined index argument — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/insertRule-import-no-index.html (0/2 pass)
+  FAIL: insertRule with import and omitted index argument — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: insertRule with import and undefined index argument — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/insertRule-namespace-no-index.html (0/3 pass)
+  FAIL: insertRule with namespace and omitted index argument — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: insertRule with namespace and undefined index argument — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: insertRule with namespace and omitted index argument should insert import — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/insertRule-no-index.html (0/2 pass)
+  FAIL: insertRule with omitted index argument — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: insertRule with undefined index argument — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/insertRule-syntax-error-01.html (0/1 pass)
+  FAIL: A syntax error in insertRule should throw and not affect the style of the page — assert_throws_dom: function "[Function]" threw object "[object Object]" that is not a DOMException SyntaxError: property "code" is equal to undefined, expected 12
+FAIL css/cssom/invalid-pseudo-elements.html (0/1 pass)
+  FAIL: CSSOM: Test that rules with invalid pseudo elements are not found — Cannot read properties of undefined
+FAIL css/cssom/link-element-stylesheet-title.html (0/2 pass)
+  FAIL: StyleSheet.title — assert_equals: expected 3 but got 0
+  FAIL: Executing setAttribute('title', '') results in the title being set to null — Cannot read properties of undefined (reading 'title')
+FAIL css/cssom/medialist-interfaces-001.html (0/4 pass)
+  FAIL: mediatest_medialist_serialize_element — Cannot read properties of undefined (reading 'media')
+  FAIL: mediatest_medialist_serialize_comma — Cannot read properties of undefined (reading 'media')
+  FAIL: mediatest_medialist_serialize_empty — Cannot read properties of undefined (reading 'media')
+FAIL css/cssom/medialist-interfaces-002.html (0/3 pass)
+  FAIL: deleteMedium_called_without_argument — Cannot read properties of undefined (reading 'media')
+  FAIL: deleteMedium_removes_correct_medium — Cannot read properties of undefined (reading 'media')
+  FAIL: deleteMedium_no_matching_medium_to_remove — Cannot read properties of undefined (reading 'media')
+FAIL css/cssom/medialist-interfaces-004.html (0/2 pass)
+  FAIL: appendMedium_correctly_appends_medium_to_empty_MediaList — Cannot read properties of undefined (reading 'media')
+  FAIL: appendMedium_correctly_appends_medium_to_nonempty_MediaList — Cannot read properties of undefined (reading 'media')
+FAIL css/cssom/mediaquery-sort-dedup.html (0/2 pass)
+  FAIL: Media queries are not sorted lexicographically — Cannot read properties of undefined (reading 'media')
+  FAIL: Media queries are not deduplicated — Cannot read properties of undefined (reading 'media')
+FAIL css/cssom/preferred-stylesheet-order.html (0/1 pass)
+  FAIL: Preferred stylesheet where insertion order is reversed tree order — Cannot read properties of null (reading 'color')
+FAIL css/cssom/preferred-stylesheet-reversed-order.html (0/1 pass)
+  FAIL: Preferred stylesheet where insertion order is tree order — Cannot read properties of null (reading 'color')
+FAIL css/cssom/resolved-border-width.html (0/2 pass)
+  FAIL: checkbox — assert_equals: border-width expected "5px" but got ""
+  FAIL: radio — assert_equals: border-width expected "5px" but got ""
+FAIL css/cssom/rule-restrictions.html (0/2 pass)
+  FAIL: @page — Cannot read properties of undefined
+  FAIL: @keyframe — Cannot read properties of undefined
+FAIL css/cssom/selectorSerialize.html (0/23 pass)
+  FAIL: :nth-child serialization produces canonical form — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: single universal selector shows '*' when serialized. — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: single type (simple) selector in the sequence of simple selectors that is not a universal selector — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/serialization-CSSDeclaration-with-important.html (2/4 pass)
+  FAIL: Inline style declaration with whitespace between '!' and 'important'. — assert_equals: expected "background-color: blue !important; color: red !important;" but got "background-color: blue !important; color: red ! important;"
+  FAIL: Style set dynamically via cssText with whitespace between '!' and 'important'. — assert_equals: expected "color: black !important;" but got "color: black ! important;"
+FAIL css/cssom/serialize-all-longhands.html (0/2 pass)
+  FAIL: Specified style — assert_greater_than: Should have longhands expected a number but got a "function"
+  FAIL: Computed style — assert_greater_than: Should have longhands expected a number but got a "string"
+FAIL css/cssom/serialize-custom-props.html (15/20 pass)
+  FAIL: z-index can take a custom property set to a 4-digit integer — assert_equals: expected "1111" but got "var(--three)"
+  FAIL: z-index can take a custom property set to a 6-digit integer — assert_equals: expected "111111" but got "var(--three)"
+  FAIL: z-index can take a custom property set to a 8-digit integer — assert_equals: expected "11111111" but got "var(--three)"
+FAIL css/cssom/serialize-media-rule.html (0/12 pass)
+  FAIL: empty media query list — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: type - no features — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: type - no features - negation — Cannot read properties of undefined (reading 'insertRule')
+FAIL css/cssom/serialize-namespaced-type-selectors.html (0/60 pass)
+  FAIL: Simple type selector — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Type selector without a namespace — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: Type selector with any namespace — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/serialize-values.html (0/22 pass)
+  FAIL: alignment-baseline: baseline — Cannot read properties of undefined (reading 'toUpperCase')
+  FAIL: alignment-baseline: text-bottom — Cannot read properties of undefined (reading 'toUpperCase')
+  FAIL: alignment-baseline: alphabetic — Cannot read properties of undefined (reading 'toUpperCase')
+FAIL css/cssom/serialize-variable-reference.html (2/4 pass)
+  FAIL: Longhand with variable preserves original serialization but trims whitespace: without whitespace — assert_equals: expected "font-size: var(--a);" but got "font-size:var(--a);"
+  FAIL: Shorthand with variable preserves original serialization but trims whitespace: without whitespace — assert_equals: expected "font: var(--a);" but got "font:var(--a);"
+FAIL css/cssom/set-selector-text-attachment.html (0/1 pass)
+  FAIL: Modifying property value invalidates style, even after selectorText mutation — Cannot read properties of undefined (reading 'sheet')
+FAIL css/cssom/setproperty-null-undefined.html (3/4 pass)
+  FAIL: Verify that setting a CSS property to undefined has no effect. — assert_equals: expected "white" but got ""
+FAIL css/cssom/shorthand-serialization.html (3/7 pass)
+  FAIL: Shorthand serialization with shorthand and longhands mixed. — assert_true: expected true got false
+  FAIL: Shorthand serialization with just longhands. — assert_equals: expected "margin: 10px;" but got "margin-right: 10px; margin-left: 10px; margin-top: 10px; margin-bottom: 10px;"
+  FAIL: Shorthand serialization after setting — assert_equals: expected "20px" but got "20px 20px 20px 20px"
+FAIL css/cssom/shorthand-values.html (6/20 pass)
+  FAIL: The serialization of border: 1px; border-top: 1px; should be canonical. — assert_equals: expected "border: 1px;" but got "border: 1px; border-top: 1px;"
+  FAIL: The serialization of border-top: 1px; border-right: 1px; border-bottom: 1px; border-left: 1px; border-image: none; should be canonical. — assert_equals: expected "border: 1px;" but got "border-top: 1px; border-right: 1px; border-bottom: 1px; border-left: 1px; border-image: none;"
+  FAIL: The serialization of border-top: 1px; border-right: 1px; border-bottom: 1px; border-left: 1px; should be canonical. — assert_equals: expected "border-width: 1px; border-style: none; border-color: currentcolor;" but got "border-top: 1px; border-right: 1px; border-bottom: 1px; border-left: 1px;"
+FAIL css/cssom/style-sheet-interfaces-001.html (0/7 pass)
+  FAIL: sheet_property — Cannot read properties of undefined (reading 'name')
+  FAIL: disabled attribute getter/setter — assert_false: expected false got true
+  FAIL: sheet_property_updates — Cannot read properties of undefined (reading 'cssRules')
+FAIL css/cssom/style-sheet-interfaces-002.html (0/2 pass)
+  FAIL: add_rule — Cannot read properties of undefined (reading 'cssRules')
+  FAIL: delete_rule — Cannot read properties of undefined (reading 'deleteRule')
+FAIL css/cssom/stylesheet-same-origin.sub.html (0/6 pass)
+  FAIL: Origin-clean check in cross-origin CSSOM Stylesheets — assert_throws_dom: stylesheet.cssRules should throw SecurityError. function "[Function]" threw object "[object Object]" that is not a DOMException SecurityError: property "code" is equal to undefined, expected 18
+  FAIL: Origin-clean check in cross-origin CSSOM Stylesheets (redirect from same-origin to cross-origin) — assert_throws_dom: stylesheet.cssRules should throw SecurityError. function "[Function]" threw object "[object Object]" that is not a DOMException SecurityError: property "code" is equal to undefined, expected 18
+  FAIL: Origin-clean check in cross-origin CSSOM Stylesheets (redirect from cross-origin to same-origin) — assert_throws_dom: stylesheet.cssRules should throw SecurityError. function "[Function]" threw object "[object Object]" that is not a DOMException SecurityError: property "code" is equal to undefined, expected 18
+FAIL css/cssom/stylesheet-title.html (0/2 pass)
+  FAIL: Preferred style sheet name — assert_equals: Preferred style should apply expected "rgb(0, 128, 0)" but got ""
+  FAIL: StyleSheet.title — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/ttwf-cssom-doc-ext-load-count.html (0/2 pass)
+  FAIL: stylesheet.css should be loaded and styleSheets.length === 1 — Cannot read properties of undefined (reading 'length')
+  FAIL: stylesheet.css should be unloaded and styleSheets.length === 0 — Cannot read properties of undefined (reading 'item')
+FAIL css/cssom/ttwf-cssom-document-extension.html (0/1 pass)
+  FAIL: CSSOM - Extensions to the Document Interface: StyleSheetList length is 0 when no sheets loaded — Cannot read properties of undefined (reading 'length')
+FAIL css/cssom/variable-names.html (0/6 pass)
+  FAIL: custom property '--a' — assert_equals: appears on specified style (before serialization/re-parsing) expected (number) 1 but got (function) function "[Function]"
+  FAIL: custom property '--a;b' — assert_equals: appears on specified style (before serialization/re-parsing) expected (number) 1 but got (function) function "[Function]"
+  FAIL: custom property '---' — assert_equals: appears on specified style (before serialization/re-parsing) expected (number) 1 but got (function) function "[Function]"
+
+===========================================
+  WPT Results: css/cssom
+===========================================
+  Test files: 182 (pass=55 fail=127 err=0)
+  Subtests: 168/701 pass
+  Pass rate: 24.0%
+===========================================

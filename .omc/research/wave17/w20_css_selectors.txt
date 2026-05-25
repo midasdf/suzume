@@ -1,0 +1,556 @@
+=== WPT Tests: css/selectors (262 files, 2 parallel, engine=kotori) ===
+FAIL css/selectors/attribute-selectors/attribute-case/cssom.html (27/72 pass)
+  FAIL: [foo="bar"] /* sanity check */ setting CSSStyleRule#selectorText — assert_equals: expected "[foo="bar"]" but got "[foo="bar"] /* sanity check */"
+  FAIL: [foo="bar"] /* sanity check */ insertRule in @media — Cannot read properties of undefined (reading 'insertRule')
+  FAIL: [foo="bar"] /* sanity check */ getting CSSRule#cssText in @media — Cannot read properties of undefined (reading 'insertRule')
+FAIL css/selectors/attribute-selectors/style-attribute-selector.html (8/11 pass)
+  FAIL: Match style attribute with no value — assert_equals: expected "100px" but got "16px"
+  FAIL: Dynamically change style with Element.style — assert_equals: expected "rgb(0, 255, 0)" but got "rgba(0, 0, 0, 0)"
+  FAIL: Dynamically remove style with Element.style — assert_equals: expected "rgba(0, 0, 0, 0)" but got "rgb(0, 255, 0)"
+FAIL css/selectors/child-indexed-pseudo-class.html (22/54 pass)
+  FAIL: Expected HTML element to match :first-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+  FAIL: Expected HTML element to match :last-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+  FAIL: Expected HTML element to match :only-child with matches, querySelector(), and querySelectorAll() — assert_equals: expected false but got true
+FAIL css/selectors/dir-pseudo-on-bdi-element.html (2/5 pass)
+  FAIL: bdi element without dir content attribute — assert_false: expected false got true
+  FAIL: bdi element with invalid dir content attribute — assert_false: expected false got true
+  FAIL: bdi element with dir=auto content attribute — assert_false: expected false got true
+FAIL css/selectors/dir-pseudo-on-input-element.html (8/20 pass)
+  FAIL: input element whose type attribute is in the telephone state — assert_false: expected false got true
+  FAIL: input element whose type attribute is in the telephone state in a RTL block — assert_true: expected true got false
+  FAIL: input element whose type attribute is in the password state — assert_false: expected false got true
+FAIL css/selectors/dir-selector-auto.html (0/22 pass)
+  FAIL: Initial  directionality of element div1 is ltr — assert_true: expected true got false
+  FAIL: Initial  directionality of element div1_1 is ltr — assert_true: expected true got false
+  FAIL: Initial  directionality of element div2 is rtl — assert_true: expected true got false
+FAIL css/selectors/dir-selector-querySelector.html (1/4 pass)
+  FAIL: :dir() requires exactly an ident argument — assert_throws_dom: function "[Function]" did not throw
+  FAIL: :dir() works in compound selectors — assert_equals: expected Element node <div id="div2_3" dir="rtl"></div> but got null
+  FAIL: :dir() works in complex selectors — assert_equals: expected Element node <div id="div2_1"></div> but got null
+FAIL css/selectors/first-child.html (0/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is the second child element. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/first-of-type.html (1/9 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Thre is another child element of the same type. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is a prior child element of another type. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/focus-visible-005.html (0/1 pass)
+  FAIL: Programmatic focus after click should not match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-006.html (0/1 pass)
+  FAIL: Focus should always match :focus-visible on content editable divs — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-007.html (0/1 pass)
+  FAIL: Using keyboard while element is focused should trigger :focus-visible; using mouse without moving focus should not cancel it; moving focus using mouse should cancel it. — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-008.html (0/1 pass)
+  FAIL: Programmatic focus after keypress should match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-009.html (0/1 pass)
+  FAIL: Autofocus should match :focus-visible — assert_equals: Should have correct focused element expected (object) Element node <button id="button" autofocus="" tabindex="-1">I will be ... but got (undefined) undefined
+FAIL css/selectors/focus-visible-011.html (0/1 pass)
+  FAIL: :focus-visible matches even if preventDefault() is called — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-013.html (0/1 pass)
+  FAIL: :focus-visible does not match after mouse click even if previous focused element was matching :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-015.html (0/1 pass)
+  FAIL: :focus-visible does not match after script focus move — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-016.html (0/1 pass)
+  FAIL: :focus-visible always match on text inputs — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-017-2.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/focus-visible-017.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/focus-visible-020.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/focus-visible-021.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/focus-visible-022.tentative.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-023.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/focus-visible-028.html (0/1 pass)
+  FAIL: Programmatic focus after click and keyboard interaction should match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-001.html (0/1 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/focus-visible-script-focus-002.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click does match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-003.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after mouse click does match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-004.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after keyboard event does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-005.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after keyboard event does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-006.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click on a NOT focusable element does match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-007.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after mouse click on a NOT focusable element does match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-008-b.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click on a button that does not match :focus-visible, does NOT match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-008.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click on a focusable element that does not match :focus-visible, does NOT match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-009.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after mouse click on a focusable element that does not match :focus-visible, does NOT match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-010.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click on a focusable element that matches :focus-visible, does NOT match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-011.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after mouse click on a focusable element that matches :focus-visible, does NOT match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-visible-script-focus-012.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after keyboard focus does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-013.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after keyboard focus does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-014.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after keyboard input does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-015.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after keyboard input does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-016.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click on a NOT focusable element after editing an input does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-017.tentative.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after mouse click on a NOT focusable element after editing an input does match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-018.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after mouse click on a focusable element after editing an input does NOT match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-019.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Script focus after blur after mouse click on a focusable element after editing an input does NOT match :focus-visible — Cannot read properties of undefined (reading 'send_keys')
+FAIL css/selectors/focus-visible-script-focus-020.html (0/2 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: Double script focus after mouse click on a focusable element that does not match :focus-visible, does NOT match :focus-visible — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/focus-within-009.html (4/12 pass)
+  FAIL: Focus 'target1' — assert_array_equals: lengths differ, expected array ["html", "body", "test", "container1", "sibling2", "target1"] length 6, got [] length 0
+  FAIL: Focus 'target2' — assert_array_equals: lengths differ, expected array ["html", "body", "test", "container2", "sibling5", "target2"] length 6, got [] length 0
+  FAIL: Focus 'target1' again — assert_array_equals: lengths differ, expected array ["html", "body", "test", "container1", "sibling2", "target1"] length 6, got [] length 0
+FAIL css/selectors/focus-within-toplayer-001.html (0/3 pass)
+  FAIL: Focusing inside a modal dialog should not propagate :focus-within beyond the dialog. — assert_true: input should be focused expected true got false
+  FAIL: Focusing inside a popover should not propagate :focus-within beyond the popover. — assert_true: input should be focused expected true got false
+  FAIL: With nested top layer elements, :focus-within should stop at the innermost top layer boundary. — assert_true: input should be focused expected true got false
+FAIL css/selectors/has-argument-with-explicit-scope.html (11/13 pass)
+  FAIL: .a:has(:scope) .c matches expected elements on scope1 — assert_equals: expected "d02,d03" but got ""
+  FAIL: .c:has(:is(:scope .d)) matches expected elements on scope1 — assert_equals: expected "d02,d03" but got ""
+FAIL css/selectors/has-basic.html (3/18 pass)
+  FAIL: :has(.ancestor) matches expected elements — assert_equals: expected "a" but got ""
+  FAIL: :has(.target) matches expected elements — assert_equals: expected "a,b,f,h" but got ""
+  FAIL: :has(.descendant) matches expected elements — assert_equals: expected "a,b,c,f,h,j" but got ""
+FAIL css/selectors/has-matches-to-uninserted-elements.html (11/12 pass)
+  FAIL: :has(~ indirect_sibling) matches expectedly — assert_equals: expected true but got false
+FAIL css/selectors/has-relative-argument.html (0/35 pass)
+  FAIL: .x:has(.a) matches expected elements — assert_equals: expected "d02,d06,d07,d09,d12" but got ""
+  FAIL: .x:has(.a > .b) matches expected elements — assert_equals: expected "d09" but got ""
+  FAIL: .x:has(.a .b) matches expected elements — assert_equals: expected "d09,d12" but got ""
+FAIL css/selectors/has-specificity.html (0/8 pass)
+  FAIL: :has(#foo) wins over :has(.foo) — assert_equals: expected "PASS" but got ""
+  FAIL: :has(span#foo) wins over :has(#foo) — assert_equals: expected "PASS" but got ""
+  FAIL: :has(.bar, #foo) has same specificity as :has(#foo, .bar) — assert_equals: expected "PASS" but got ""
+FAIL css/selectors/hash-collision.html (0/1 pass)
+  FAIL: Test string hash collision in bucketing — assert_equals: expected "" but got "a"
+FAIL css/selectors/i18n/css3-selectors-lang-001.html (0/1 pass)
+  FAIL: A :lang value that matches an identical lang attribute value on the same element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-002.html (0/1 pass)
+  FAIL: A :lang value that matches an identical lang attribute value on a parent element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-004.html (0/1 pass)
+  FAIL: A :lang value will match a lang attribute value regardless of case differences. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-005.html (0/1 pass)
+  FAIL: A :lang value will match a lang attribute value when the latter contains additional subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-006.html (0/1 pass)
+  FAIL: A :lang value will NOT match a lang attribute value when the former contains more subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-007.html (0/1 pass)
+  FAIL: When the :lang value uses a single subtag, it will NOT match against an attribute value where it appears in a different position. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-008.html (0/1 pass)
+  FAIL: A :lang value with language and region subtags will match a lang attribute value with the same subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-009.html (0/1 pass)
+  FAIL: A :lang value with a multiple subtags will match a lang attribute value with multiple subtags as long as the first part is the same. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-010.html (0/1 pass)
+  FAIL: A :lang value and a lang attribute value will NOT match if their region subtags differ. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-011.html (0/1 pass)
+  FAIL: A :lang value with language, script and region subtags will match a lang attribute value with the same language, script and region subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-012.html (0/1 pass)
+  FAIL: A :lang value with language, script and region subtags will NOT match a lang attribute value with the script subtag missing. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-014.html (0/1 pass)
+  FAIL: A :lang value with language and region subtags will match a lang attribute value with language, script and region subtags under CSS Selectors 4, but not Selectors 3. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-015.html (0/1 pass)
+  FAIL: A :lang value will match a lang attribute value regardless of case differences in the script tag. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-016.html (0/1 pass)
+  FAIL: A :lang value that matches an identical xml:lang attribute value will NOT produce styling in pages served as HTML. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-021.html (0/1 pass)
+  FAIL: A lang|= value that matches an identical lang attribute value on the same element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-022.html (0/1 pass)
+  FAIL: A lang|= value that matches an identical lang attribute value on the parent element will NOT produce styling. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-024.html (0/1 pass)
+  FAIL: A lang|= value will match a lang attribute value regardless of case differences. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-025.html (0/1 pass)
+  FAIL: A lang|= value will match a lang attribute value when the latter contains additional subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-026.html (0/1 pass)
+  FAIL: A lang|= value will NOT match a lang attribute value when the former contains more subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-027.html (0/1 pass)
+  FAIL: When the lang|= value uses a single subtag, it will NOT match against an attribute value where it appears in a different position. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-028.html (0/1 pass)
+  FAIL: A lang|= value with language and region subtags will match a lang attribute value with the same subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-029.html (0/1 pass)
+  FAIL: A lang|= value with a multiple subtags will match a lang attribute value with multiple subtags as long as the first part is the same. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-030.html (0/1 pass)
+  FAIL: A lang|= value and a lang attribute value will NOT match if their region subtags differ. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-031.html (0/1 pass)
+  FAIL: A lang|= value with language, script and region subtags will match a lang attribute value with the same language, script and region subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-032.html (0/1 pass)
+  FAIL: A lang|= value with language, script and region subtags will NOT match a lang attribute value with the script subtag missing. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-034.html (0/1 pass)
+  FAIL: A lang|= value with language and region subtags will NOT match a lang attribute value with language, script and region subtags. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-035.html (0/1 pass)
+  FAIL: A lang|= value will match a lang attribute value regardless of case differences in the script tag. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-036.html (0/1 pass)
+  FAIL: A [lang|='es'] value that matches an identical xml:lang attribute value will NOT produce styling in pages served as HTML. — assert_equals: expected (number) 0 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-041.html (0/1 pass)
+  FAIL: A lang= value that matches an identical lang attribute value on the same element will produce styling. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-042.html (0/1 pass)
+  FAIL: A lang|= value that matches an identical lang attribute value on the parent element will NOT produce styling. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-044.html (0/1 pass)
+  FAIL: A lang= value will match a lang attribute value regardless of case differences. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-045.html (0/1 pass)
+  FAIL: A lang= value will NOT match a lang attribute value when the latter contains additional subtags. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-046.html (0/1 pass)
+  FAIL: A lang= value will NOT match a lang attribute value when the former contains more subtags. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-047.html (0/1 pass)
+  FAIL: When the lang= value uses a single subtag, it will NOT match against an attribute value where it appears in a different position. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-048.html (0/1 pass)
+  FAIL: A lang= value with language and region subtags will match a lang attribute value with the same subtags. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-049.html (0/1 pass)
+  FAIL: A lang= value with multiple subtags will NOT match a lang attribute value with multiple subtags if the latter has more subtags, even if the first two subtags are the same. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-050.html (0/1 pass)
+  FAIL: A lang= value and a lang attribute value will NOT match if their region subtags differ. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-051.html (0/1 pass)
+  FAIL: A lang= value with language, script and region subtags will match a lang attribute value with the same language, script and region subtags. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-052.html (0/1 pass)
+  FAIL: A lang= value with language, script and region subtags will NOT match a lang attribute value with the script subtag missing. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-054.html (0/1 pass)
+  FAIL: A lang= value with language and region subtags will NOT match a lang attribute value with language, script and region subtags. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-055.html (0/1 pass)
+  FAIL: A lang= value will match a lang attribute value regardless of case differences in the script tag. — assert_equals: expected (number) 100 but got (undefined) undefined
+FAIL css/selectors/i18n/css3-selectors-lang-056.html (0/1 pass)
+  FAIL: A [lang='es'] value that matches an identical xml:lang attribute value will NOT produce styling in pages served as HTML. — assert_equals: expected (number) 50 but got (undefined) undefined
+FAIL css/selectors/invalidation/attribute.html (5/6 pass)
+  FAIL: [att=val] selector is effective — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/defined-in-has.html (0/1 pass)
+  FAIL: Test :has() invalidation with :defined pseudo-class — Cannot read properties of undefined (reading 'define')
+FAIL css/selectors/invalidation/defined.html (0/1 pass)
+  FAIL: :defined selector is effective — Cannot read properties of undefined (reading 'define')
+FAIL css/selectors/invalidation/empty-pseudo-in-has.html (4/6 pass)
+  FAIL: Insert div to div.#child — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(0, 128, 0)"
+  FAIL: Insert text into div.#child — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(255, 0, 0)"
+FAIL css/selectors/invalidation/first-child-last-child.html (0/2 pass)
+  FAIL: Adding multiple nodes at once should invalidate :first-child correctly. — assert_equals: expected "rgb(0, 0, 0)" but got "rgb(0, 0, 255)"
+  FAIL: Adding multiple nodes at once should invalidate :last-child correctly. — assert_equals: expected "rgb(0, 0, 0)" but got "rgb(255, 0, 0)"
+FAIL css/selectors/invalidation/fullscreen-pseudo-class-in-has.html (0/2 pass)
+  FAIL: :fullscreen pseudo-class invalidation with requestFullscreen + exitFullscreen — Cannot read properties of undefined (reading 'bless')
+  FAIL: :fullscreen pseudo-class invalidation with requestFullscreen + remove — Cannot read properties of undefined (reading 'bless')
+FAIL css/selectors/invalidation/has-css-nesting-shared.html (10/12 pass)
+  FAIL: add .test to trigger3 - check subject3_1 — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(128, 128, 128)"
+  FAIL: add .test to trigger3 - check subject3_2 — assert_equals: expected "rgb(135, 206, 235)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-invalidation-first-in-sibling-chain.html (8/12 pass)
+  FAIL: #subject1 invalidated after adding first sibling — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+  FAIL: #subject2 invalidated after adding first sibling — assert_equals: expected "rgb(255, 69, 0)" but got "rgb(128, 128, 128)"
+  FAIL: #subject3 invalidated after adding first sibling — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-sibling-insertion-removal.html (17/28 pass)
+  FAIL: subject1: color after #sibling1_1 inserted should be rgb(255, 0, 0) — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+  FAIL: subject3: color after #sibling3_1 inserted should be rgb(0, 0, 255) — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(128, 128, 128)"
+  FAIL: subject4: color after #sibling4_1 removed should be rgb(255, 255, 0) — assert_equals: expected "rgb(255, 255, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-sibling.html (59/71 pass)
+  FAIL: add .test to first_sibling_child — assert_equals: expected "rgb(255, 192, 203)" but got "rgb(255, 255, 0)"
+  FAIL: add .test to third_sibling_child — assert_equals: expected "rgb(128, 0, 128)" but got "rgb(0, 0, 255)"
+  FAIL: insert element div.test before first_sibling_child — assert_equals: expected "rgb(255, 192, 203)" but got "rgb(255, 255, 0)"
+FAIL css/selectors/invalidation/has-side-effect.html (2/3 pass)
+  FAIL: Matches after #blocks_match removed — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-unstyled.html (7/9 pass)
+  FAIL: add test_inner to subject_child — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(128, 128, 128)"
+  FAIL: add test_inner to sibling_child — assert_equals: expected "rgb(255, 255, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-with-is-child-combinator.html (7/10 pass)
+  FAIL: add .child to direct_child — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(128, 128, 128)"
+  FAIL: add .descendant to direct_child — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(128, 128, 128)"
+  FAIL: add .deep-parent to direct_child — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-with-not.html (11/21 pass)
+  FAIL: remove .test to subject_child — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(128, 128, 128)"
+  FAIL: remove .test to subject_descendant — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+  FAIL: insert element div before subject_child — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/has-with-nth-child.html (4/5 pass)
+  FAIL: Initially red — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/has-with-pseudo-class.html (2/3 pass)
+  FAIL: Set checked on checkbox, testing subject — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/heading-pseudo-class-in-has.html (55/72 pass)
+  FAIL: Append h1 to #ancestor: #has_heading_1 — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+  FAIL: Append h1 to #ancestor: #has_heading_1_2 — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(128, 128, 128)"
+  FAIL: Append h2 to #ancestor: #has_heading_1 — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/host-context-pseudo-class-in-has.html (0/6 pass)
+  FAIL: Before adding 'a' to #host_parent: Check #subject1 color — Cannot read properties of null (reading 'color')
+  FAIL: Before adding 'a' to #host_parent: Check #subject2 color — Cannot read properties of null (reading 'color')
+  FAIL: After adding 'a' to #host_parent: Check #subject1 color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/host-pseudo-class-in-has.html (0/4 pass)
+  FAIL: Before adding 'a' to #host: Check #subject1 color — Cannot read properties of null (reading 'color')
+  FAIL: Before adding 'a' to #host: Check #subject2 color — Cannot read properties of null (reading 'color')
+  FAIL: After adding 'a' to #host: Check #subject1 color — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/input-in-range-in-has-with-readonly.html (0/4 pass)
+  FAIL: :in-range in :has() invalidation when setting readonly — assert_equals: ancestor should be black (readonly input is not in-range) expected "rgb(0, 0, 0)" but got "rgb(0, 128, 0)"
+  FAIL: :in-range in :has() invalidation when removing readonly — assert_equals: ancestor should be black (readonly input is not in-range) expected "rgb(0, 0, 0)" but got "rgb(0, 128, 0)"
+  FAIL: :out-of-range in :has() invalidation when setting readonly — assert_equals: ancestor should be black (readonly input is not out-of-range) expected "rgb(0, 0, 0)" but got "rgb(0, 0, 255)"
+FAIL css/selectors/invalidation/input-pseudo-classes-in-has.html (6/10 pass)
+  FAIL: :checked & :indeterminate invalidation on <input> — assert_equals: ancestor should be green expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+  FAIL: :indeterminate invalidation on <progress> — assert_equals: ancestor should be orange expected "rgb(255, 165, 0)" but got "rgb(0, 0, 0)"
+  FAIL: :valid invalidation — assert_equals: ancestor should be lightgreen expected "rgb(144, 238, 144)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/invalidation/is-pseudo-containing-sibling-relationship-in-has.html (20/21 pass)
+  FAIL: Initially red — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/is-where-pseudo-containing-hard-pseudo-and-never-matching.html (8/12 pass)
+  FAIL: subject1 color after focus is red — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(128, 128, 128)"
+  FAIL: subject2 color after focus is orangered — assert_equals: expected "rgb(255, 69, 0)" but got "rgb(128, 128, 128)"
+  FAIL: subject3 color after focus is darkred — assert_equals: expected "rgb(139, 0, 0)" but got "rgb(128, 128, 128)"
+FAIL css/selectors/invalidation/is-where-pseudo-containing-hard-pseudo.html (12/20 pass)
+  FAIL: subject1 is orangered when .parent added to parent — assert_equals: expected "rgb(255, 69, 0)" but got "rgb(255, 0, 0)"
+  FAIL: subject2 is pink when .parent added to parent — assert_equals: expected "rgb(255, 192, 203)" but got "rgb(139, 0, 0)"
+  FAIL: subject3 initial color is grey — assert_equals: expected "rgb(128, 128, 128)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/is.html (3/7 pass)
+  FAIL: Invalidate :is() for complex selector arguments. — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(0, 0, 0)"
+  FAIL: Invalidate nested :is(). — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(0, 0, 0)"
+  FAIL: Test specificity of :is(). — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/invalidation/link-pseudo-in-has.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: :link, :visited :any-link, pseudo-class in :has() argument — assert_equals: grandparent should be grey after parent added expected "rgb(128, 128, 128)" but got "rgb(0, 0, 255)"
+FAIL css/selectors/invalidation/location-pseudo-classes-in-has.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: location pseudo classes in :has() argument — Cannot read properties of undefined (reading 'replaceState')
+FAIL css/selectors/invalidation/media-loading-pseudo-classes-in-has.sub.html (0/2 pass)
+  FAIL: Test :has(:stalled) invalidation — assert_implements: :stalled is not supported undefined
+  FAIL: Test :has(:buffering) invalidation — assert_implements: :buffering is not supported undefined
+FAIL css/selectors/invalidation/media-pseudo-classes-in-has.html (0/3 pass)
+  FAIL: Test :playing pseudo-class — assert_implements: :playing is not supported undefined
+  FAIL: Test :seeking pseudo-class — assert_implements: :seeking is not supported undefined
+  FAIL: Test :muted pseudo-class — assert_implements: :muted is not supported undefined
+FAIL css/selectors/invalidation/modal-pseudo-class-in-has.html (1/5 pass)
+  FAIL: :modal pseudo-class invalidation with showModal + close — assert_equals: ancestor should be green since dialog is shown modally expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+  FAIL: :modal pseudo-class invalidation with showModal + remove — assert_equals: ancestor should be green since dialog is shown modally expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+  FAIL: :modal pseudo-class invalidation with requestFullscreen + exitFullscreen — Cannot read properties of undefined (reading 'bless')
+FAIL css/selectors/invalidation/not-001.html (1/2 pass)
+  FAIL: Invalidation of sibling combinators in :not() — assert_equals: expected "rgb(255, 255, 0)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/not-002.html (3/6 pass)
+  FAIL: Invalidate :not() for simple selector arguments. — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(0, 128, 0)"
+  FAIL: Invalidate :not() for complex selector arguments. — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(0, 128, 0)"
+  FAIL: Test specificity of :not(). — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/not-pseudo-containing-sibling-relationship-in-has.html (2/3 pass)
+  FAIL: Initially red — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(0, 128, 0)"
+FAIL css/selectors/invalidation/open-pseudo-class-in-has.html (0/9 pass)
+  FAIL: :open pseudo-class invalidation with dialog.show() + dialog.close() — assert_equals: ancestor should be green since dialog is open expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+  FAIL: :open pseudo-class invalidation with dialog.show() + dialog.requestClose() — assert_equals: ancestor should be green since dialog is open expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+  FAIL: :open pseudo-class invalidation with dialog.show() + dialog.open = false — assert_equals: ancestor should be green since dialog is open expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/invalidation/quirks-mode-stylesheet-dynamic-add-001.html (0/1 pass)
+  FAIL: Style should've changed to a green background — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(255, 0, 0)"
+FAIL css/selectors/invalidation/state-in-has.html (0/1 pass)
+  FAIL: Test :has() invalidation with :state() pseudo-classes — Cannot read properties of undefined (reading 'define')
+FAIL css/selectors/invalidation/subject-has-invalidation-with-display-none-anchor-element.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: subject :has() invalidation with display: none anchor element — assert_equals: target display should be none expected "none" but got "block"
+FAIL css/selectors/invalidation/target-pseudo-in-has.html (0/1 pass)
+  FAIL: CSS Selectors Invalidation: :target pseudo-class in :has() argument — Cannot set properties of undefined (setting 'hash')
+FAIL css/selectors/invalidation/user-valid-user-invalid.html (0/1 pass)
+  FAIL: :user-valid and :user-invalid should invalidate after user input. — Cannot read properties of null (reading 'color')
+FAIL css/selectors/invalidation/where.html (3/5 pass)
+  FAIL: Invalidate :where() for complex selector arguments. — assert_equals: expected "rgb(255, 255, 0)" but got "rgb(0, 0, 0)"
+  FAIL: Invalidate nested :where(). — assert_equals: expected "rgb(0, 0, 255)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/is-nested.html (0/2 pass)
+  FAIL: Test nested :is() chooses highest specificity for class outside :is(). — assert_equals: expected "20px" but got "10px"
+  FAIL: Test nested :is() specificity for class within arguments. — assert_equals: expected "rgb(255, 0, 0)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/is-where-basic.html (2/15 pass)
+  FAIL: :is(#a) matches expected elements — assert_equals: expected "a" but got ""
+  FAIL: :is(#a, #f) matches expected elements — assert_equals: expected "a,f" but got ""
+  FAIL: :is(#a, #c) :where(#a #d, #c #f) matches expected elements — assert_equals: expected "d,f" but got ""
+FAIL css/selectors/is-where-error-recovery.html (0/1 pass)
+  FAIL: CSS Selectors: :is() and :where() error recovery — assert_equals: Should correctly match expected Element node <div id="test-div"></div> but got null
+FAIL css/selectors/is-where-not.html (5/18 pass)
+  FAIL: :not(:is(#a)) matches expected elements — assert_equals: expected "b,c,d,e,f" but got ""
+  FAIL: :not(:where(#b)) matches expected elements — assert_equals: expected "a,c,d,e,f" but got ""
+  FAIL: :not(:where(:root #c)) matches expected elements — assert_equals: expected "a,b,d,e,f" but got ""
+FAIL css/selectors/is-where-pseudo-classes.html (0/1 pass)
+  FAIL: :is() combined with pseudo-classes — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/is-where-shadow.html (0/3 pass)
+  FAIL: :is() inside :host() — Cannot read properties of null (reading 'color')
+  FAIL: :is() inside :host-context() — Cannot read properties of null (reading 'color')
+  FAIL: :is() inside ::slotted() — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/last-child.html (0/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is a prior child element. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/last-of-type.html (1/9 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Thre is another child element of the same type. — Cannot read properties of undefined (reading 'expected')
+  FAIL: There is a posterior child element of another type. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/media/media-loading-state-timing.sub.html (0/1 pass)
+  FAIL: Test :stalled timing relative to waiting and timeupdate events — assert_implements: :stalled is not supported undefined
+FAIL css/selectors/media/media-playback-state-timing.html (0/3 pass)
+  FAIL: Test :playing and :paused timing without media resource — assert_implements: :playing is not supported undefined
+  FAIL: Test :playing and :paused timing with a media resource — assert_implements: :playing is not supported undefined
+  FAIL: Test :seeking timing when setting currentTime — assert_implements: :seeking is not supported undefined
+FAIL css/selectors/media/media-playback-state.html (1/5 pass)
+  FAIL: Test that non-media elements do not match :playing, :paused, or :seeking — assert_implements: :playing is not supported undefined
+  FAIL: Test :playing pseudo-class — assert_implements: :playing is not supported undefined
+  FAIL: Test :paused pseudo-class — assert_implements: :paused is not supported undefined
+FAIL css/selectors/missing-right-token.html (0/1 pass)
+  FAIL: attribute selectors with missing right tokens succeed — assert_equals: expected Element node <meta id="expected" charset="utf-8"></meta> but got null
+FAIL css/selectors/modal-pseudo-class.html (0/2 pass)
+  FAIL: Test that :modal matches modal <dialog> — assert_true: dialog should match :modal after showModal() call expected true got false
+  FAIL: Test that :modal matches the fullscreen element — Cannot read properties of undefined (reading 'click')
+FAIL css/selectors/not-complex.html (2/20 pass)
+  FAIL: :not(#a) matches expected elements — assert_equals: expected "b,c,d,e,f" but got ""
+  FAIL: :not(#a #d) matches expected elements — assert_equals: expected "a,b,c,e,f" but got ""
+  FAIL: :not(#b div) matches expected elements — assert_equals: expected "a,b,c,d,f" but got ""
+FAIL css/selectors/not-specificity.html (0/8 pass)
+  FAIL: :not(#foo) wins over :not(.foo) — assert_equals: expected "PASS" but got ""
+  FAIL: :not(div#foo) wins over :not(#foo) — assert_equals: expected "PASS" but got ""
+  FAIL: :not(.bar, #foo) has same specificity as :not(#foo, .bar) — assert_equals: expected "PASS" but got ""
+FAIL css/selectors/nth-last-child-invalid.html (0/1 pass)
+  FAIL: CSS Selectors: :nth-last-child() with no argument — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(255, 0, 0)"
+FAIL css/selectors/only-child.html (1/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Non-whitespace text node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/only-of-type.html (1/5 pass)
+  FAIL: Whitespace nodes should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: A comment node should be ignored. — Cannot read properties of undefined (reading 'expected')
+  FAIL: Non-whitespace text node should be ignored. — Cannot read properties of undefined (reading 'expected')
+FAIL css/selectors/open-pseudo.html (0/3 pass)
+  FAIL: The dialog element should support :open. — assert_equals: :open style should not be applied when the dialog is closed expected "auto" but got ""
+  FAIL: The details element should support :open. — assert_equals: :open style should not be applied when the details is closed expected "auto" but got ""
+  FAIL: The select element should support :open. — assert_equals: :open style should not be applied when the select is closed expected "auto" but got ""
+FAIL css/selectors/parsing/invalid-pseudos.html (0/12 pass)
+  FAIL: ":-internal-animating-full-screen-transition" should be an invalid selector — assert_throws_dom: ":-internal-animating-full-screen-transition" should throw in querySelector function "[Function]" did not throw
+  FAIL: ":-internal-fullscreen-document" should be an invalid selector — assert_throws_dom: ":-internal-fullscreen-document" should throw in querySelector function "[Function]" did not throw
+  FAIL: ":-internal-html-document" should be an invalid selector — assert_throws_dom: ":-internal-html-document" should throw in querySelector function "[Function]" did not throw
+FAIL css/selectors/parsing/parse-anplusb.html (8/112 pass)
+  FAIL: :nth-child(1n+0) should be parsed and serialized correctly — assert_equals: expected ":nth-child(n)" but got ":nth-child(1n+0)"
+  FAIL: :nth-child(n+0) should be parsed and serialized correctly — assert_equals: expected ":nth-child(n)" but got ":nth-child(n+0)"
+  FAIL: :nth-child(-n+0) should be parsed and serialized correctly — assert_equals: expected ":nth-child(-n)" but got ":nth-child(-n+0)"
+FAIL css/selectors/parsing/parse-attribute.html (0/16 pass)
+  FAIL: "[att]" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "[att=val]" should be a valid selector — assert_equals: serialization should be canonical expected "[att="val"]" but got "[att=val]"
+  FAIL: "[att~=val]" should be a valid selector — assert_equals: serialization should be canonical expected "[att~="val"]" but got "[att~=val]"
+FAIL css/selectors/parsing/parse-child.html (0/2 pass)
+  FAIL: "body > p" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "div ol>li p" should be a valid selector — assert_equals: serialization should be canonical expected "div ol > li p" but got "div ol>li p"
+FAIL css/selectors/parsing/parse-class.html (0/4 pass)
+  FAIL: "*.pastoral" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ".pastoral" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "h1.pastoral" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-descendant.html (0/3 pass)
+  FAIL: "h1 em" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "div * p" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "div p *[href]" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-focus-visible.html (0/3 pass)
+  FAIL: ":focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "a:focus-visible" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":focus:not(:focus-visible)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-has-disallow-nesting-has-inside-has.html (0/2 pass)
+  FAIL: ".a:has(.b:has(.c))" should be an invalid selector — assert_throws_dom: ".a:has(.b:has(.c))" should throw in querySelector function "[Function]" did not throw
+  FAIL: CSS Selectors: The relational pseudo-class (disallow nesting :has() inside :has()) — assert_false: expected false got true
+FAIL css/selectors/parsing/parse-has-slotted.tentative.html (0/23 pass)
+  FAIL: ":has-slotted(bar)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":has-slotted([attr=\"foo\"])" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":has-slotted(*)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-has.html (0/29 pass)
+  FAIL: ":has(a)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":has(#a)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":has(.a)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-heading.html (0/28 pass)
+  FAIL: ":heading" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":heading(2)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":heading(99999)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-id.html (0/3 pass)
+  FAIL: "h1#chapter1" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "#chapter1" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "*#z98y" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-is-where.html (6/33 pass)
+  FAIL: ":is(div )" should be a valid selector — assert_equals: serialization should be canonical expected ":is(div)" but got ":is(div )"
+  FAIL: ":where(div )" should be a valid selector — assert_equals: serialization should be canonical expected ":where(div)" but got ":where(div )"
+  FAIL: ":is(div + bar, div ~ .baz)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-is.html (0/6 pass)
+  FAIL: ":is(ul,ol,.list) > [hidden]" should be a valid selector — assert_equals: serialization should be canonical expected ":is(ul, ol, .list) > [hidden]" but got ":is(ul,ol,.list) > [hidden]"
+  FAIL: ":is(:hover,:focus)" should be a valid selector — assert_equals: serialization should be canonical expected ":is(:hover, :focus)" but got ":is(:hover,:focus)"
+  FAIL: "a:is(:not(:hover))" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-not.html (0/26 pass)
+  FAIL: "button:not([disabled])" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "*:not(foo)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":not(:link):not(:visited)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-part.html (4/32 pass)
+  FAIL: "::part(--foo)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "::part(bar)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "::part(--)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-sibling.html (0/3 pass)
+  FAIL: "math + p" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "h1.opener + h2" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "h1 ~ pre" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-slotted.html (0/19 pass)
+  FAIL: "::slotted(bar)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "::slotted([attr=\"foo\"])" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "::slotted(*)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-state.html (0/24 pass)
+  FAIL: ":state(--foo)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":state(bar)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: ":state(--)" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-universal.html (0/3 pass)
+  FAIL: "*" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "div :first-child" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+  FAIL: "div *:first-child" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/parsing/parse-where.html (0/6 pass)
+  FAIL: ":where(ul,ol,.list) > [hidden]" should be a valid selector — assert_equals: serialization should be canonical expected ":where(ul, ol, .list) > [hidden]" but got ":where(ul,ol,.list) > [hidden]"
+  FAIL: ":where(:hover,:focus)" should be a valid selector — assert_equals: serialization should be canonical expected ":where(:hover, :focus)" but got ":where(:hover,:focus)"
+  FAIL: "a:where(:not(:hover))" should be a valid selector — assert_equals: CSS.supports() reports the expected value expected true but got false
+FAIL css/selectors/placeholder-shown.html (6/7 pass)
+  FAIL: CSS Selectors Test: :placeholder-shown matching 1 — assert_equals: Placeholder attribute without value expected "rgb(0, 128, 0)" but got "rgb(0, 0, 0)"
+FAIL css/selectors/query/query-is.html (0/6 pass)
+  FAIL: Selector '.a :is(.b, .c)" should find the expected elements — assert_equals: expected 5 but got 0
+  FAIL: Selector '.a :is(.c#d, .e)" should find the expected elements — assert_equals: expected 2 but got 0
+  FAIL: Selector '.a :is(.e+.f, .g>.b, .h)" should find the expected elements — assert_equals: expected 3 but got 0
+FAIL css/selectors/query/query-where.html (0/6 pass)
+  FAIL: Selector '.a :where(.b, .c)" should find the expected elements — assert_equals: expected 5 but got 0
+  FAIL: Selector '.a :where(.c#d, .e)" should find the expected elements — assert_equals: expected 2 but got 0
+  FAIL: Selector '.a :where(.e+.f, .g>.b, .h)" should find the expected elements — assert_equals: expected 3 but got 0
+FAIL css/selectors/scope-selector.html (1/3 pass)
+  FAIL: Untitled 1 — Cannot read properties of undefined (reading 'length')
+  FAIL: querySelector() with ":scope" should return the document element, if present in the subtree — assert_equals: should return null expected (object) null but got (undefined) undefined
+FAIL css/selectors/selector-placeholder-shown-emptify-placeholder.html (0/2 pass)
+  FAIL: input:placeholder-shown should not be matched — assert_false: expected false got true
+  FAIL: textarea:placeholder-shown should not be matched — assert_false: expected false got true
+FAIL css/selectors/selectors-4/lang-singleton-subtag-matching.html (2/10 pass)
+  FAIL: :lang(fr-x) matches lang="fr-x" and lang="fr-x-standard" (singleton "x" matches) — assert_equals: expected 2 but got 0
+  FAIL: :lang(fr-x) matches the correct elements — assert_equals: expected 2 but got 0
+  FAIL: :lang(fr-standard) only matches lang="fr-standard" (not lang="fr-x-standard") — assert_equals: expected 1 but got 0
+FAIL css/selectors/selectors-case-sensitive-001.html (1/3 pass)
+  FAIL: CSS selector should match for Unicode uppercase element — assert_equals: expected (number) 100 but got (undefined) undefined
+  FAIL: Elements with namespace should work the same way — assert_equals: expected (number) 200 but got (undefined) undefined
+FAIL css/selectors/user-invalid.html (0/8 pass)
+  FAIL: :user-error selector should not be supported — assert_throws_dom: function "[Function]" did not throw
+  FAIL: :user-invalid selector should respond to user action — Cannot read properties of undefined (reading 'valid')
+  FAIL: :user-invalid selector properly interacts with submit & reset buttons — Cannot read properties of undefined (reading 'valid')
+FAIL css/selectors/user-valid-user-invalid-multifield-inputs.tentative.html (0/3 pass)
+  FAIL: <input type=date> keyboard behavior for :user-valid/:user-invalid. — assert_equals: Date input should not have a value at the start of the test. expected (string) "" but got (undefined) undefined
+  FAIL: <input type=time> keyboard behavior for :user-valid/:user-invalid. — assert_equals: Time input should not have a value at the start of the test. expected (string) "" but got (undefined) undefined
+  FAIL: <input type=datetime-local> keyboard behavior for :user-valid/:user-invalid. — assert_equals: Datetime input should not have a value at the start of the test. expected (string) "" but got (undefined) undefined
+FAIL css/selectors/user-valid.html (0/5 pass)
+  FAIL: :user-valid selector should respond to user action — Cannot read properties of undefined (reading 'valid')
+  FAIL: :user-valid selector properly interacts with submit & reset buttons — Cannot read properties of undefined (reading 'valid')
+  FAIL: Checkboxes should match :user-valid after the user clicks on it. — assert_false: Checkbox should not be checked at the start of the test. expected false got undefined
+FAIL css/selectors/valid-invalid-form-fieldset.html (0/1 pass)
+  FAIL: form and fieldset elements should match :valid/:invalid but not :user-valid/:user-invalid. — Cannot read properties of null (reading 'matches')
+FAIL css/selectors/x-pseudo-element.html (0/1 pass)
+  FAIL: x-prefixed pseudo-elements should make the whole rule invalid — assert_equals: expected "rgb(0, 128, 0)" but got "rgb(255, 0, 0)"
+
+===========================================
+  WPT Results: css/selectors
+===========================================
+  Test files: 262 (pass=70 fail=188 err=4)
+  Subtests: 1751/2707 pass
+  Pass rate: 64.7%
+===========================================

@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"for test in CharacterData-deleteData CharacterData-insertData CharacterData-replaceData CharacterData-substringData; do\\n    OUT=$(DISPLAY=:98 timeout 15 ~/suzume/zig-out/bin/suzume \\\"http...",
-  "error": "Exit code 1\ngrep: (標準入力): binary file matches\nCharacterData-deleteData: WPT_SUMMARY: PASS=10 FAIL=8 TOTAL=18\n  WPT_FAIL: Text.deleteData() with small negative count — assert_equals: expected \"te\" but got \"test\"\nWPT_FAIL: Text.deleteData() with large negative count — assert_equals: expected \"tt\" but got \"test\"\nCharacterData-insertData: WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2\ngrep: (標準入力): binary file matches\nCharacterData-replaceData: WPT_SUMMARY: PASS=28 FAIL=6 TOTAL=34\n  WPT_FAIL: Text.replaceData()...",
-  "timestamp": "2026-04-16T09:07:58.593Z",
-  "retry_count": 1
-}

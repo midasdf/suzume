@@ -1,0 +1,1 @@
+ERROR: Run 'zig build' first.

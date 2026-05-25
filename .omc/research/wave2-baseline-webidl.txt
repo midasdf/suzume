@@ -1,0 +1,82 @@
+=== WPT Tests: webidl (26 files, 2 parallel, engine=kotori) ===
+FAIL webidl/ecmascript-binding/default-toJSON-cross-realm.html (0/2 pass)
+  FAIL: Cross-realm [Default] toJSON() creates result object in its realm — Cannot read properties of undefined (reading 'DOMRectReadOnly')
+  FAIL: Cross-realm [Default] toJSON() converts its interface attributes to ECMAScript values of correct realm — Cannot read properties of undefined (reading 'DOMQuad')
+FAIL webidl/ecmascript-binding/default-iterator-object.html (0/3 pass)
+  FAIL: Default iterator objects for an interface have the same prototype — Cannot read properties of undefined
+  FAIL: Object.prototype.toString returns correct value — Cannot read properties of undefined (reading 'entries')
+  FAIL: @@toStringTag has correct value from prototype — Cannot read properties of undefined (reading 'entries')
+FAIL webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html (0/6 pass)
+  FAIL: Cross-realm global object's getter throws when called on incompatible object — Cannot read properties of undefined (reading 'TypeError')
+  FAIL: Cross-realm global object's setter throws when called on incompatible object — Cannot read properties of undefined (reading 'TypeError')
+  FAIL: Cross-realm global object's operation throws when called on incompatible object — Cannot read properties of undefined (reading 'TypeError')
+FAIL webidl/ecmascript-binding/es-exceptions/exceptions.html (2/6 pass)
+  FAIL: exception.hasOwnProperty("name") — assert_false: expected false got true
+  FAIL: exception.hasOwnProperty("message") — assert_false: expected false got true
+  FAIL: exception.code === DOMException.HIERARCHY_REQUEST_ERR — assert_equals: expected (undefined) undefined but got (number) 3
+FAIL webidl/ecmascript-binding/has-instance.html (2/3 pass)
+  FAIL: instanceof must return false across different globals, for platform objects — Cannot read properties of undefined
+FAIL webidl/ecmascript-binding/interface-prototype-constructor-set-receiver.html (0/2 pass)
+  FAIL: Direct [[Set]] preserves [[Enumerable]]: false property attribute — Cannot read properties of undefined (reading 'prototype')
+  FAIL: Prototype chain [[Set]] creates property on receiver — Cannot read properties of undefined (reading 'prototype')
+FAIL webidl/ecmascript-binding/interface-object.html (3/4 pass)
+  FAIL: An interface object deleted after it has been accessed is undefined — assert_equals: expected "function" but got "undefined"
+FAIL webidl/ecmascript-binding/iterator-invalidation-foreach.html (0/3 pass)
+  FAIL: forEach will not iterate over elements removed during iteration — Cannot read properties of undefined (reading 'forEach')
+  FAIL: Removing elements already iterated over during forEach will cause iterator to skip an element — Cannot read properties of undefined (reading 'forEach')
+  FAIL: Elements added during iteration with forEach will be reached — Cannot read properties of undefined (reading 'forEach')
+FAIL webidl/ecmascript-binding/invalid-this-value-cross-realm.html (0/3 pass)
+  FAIL: Cross-realm getter throws when called on incompatible object — Cannot read properties of undefined (reading 'HTMLElement')
+  FAIL: Cross-realm setter throws when called on incompatible object — Cannot read properties of undefined (reading 'HTMLElement')
+  FAIL: Cross-realm operation throws when called on incompatible object — Cannot read properties of undefined (reading 'HTMLDocument')
+FAIL webidl/ecmascript-binding/legacy-callback-interface-object.html (1/8 pass)
+  FAIL: Must be a function according to typeof — assert_equals: expected "function" but got "object"
+  FAIL: Must have the correct [[Prototype]] — assert_true: expected true got false
+  FAIL: Must have the correct property descriptor — Cannot read properties of undefined (reading 'writable')
+FAIL webidl/ecmascript-binding/iterator-prototype-object.html (0/4 pass)
+  FAIL: Has %IteratorPrototype% as prototype — Cannot read properties of undefined (reading 'entries')
+  FAIL: next() exists and is writable, enumerable, and configurable — Cannot read properties of undefined (reading 'entries')
+  FAIL: next() throws TypeError when called on ineligible receiver — Cannot read properties of undefined (reading 'entries')
+FAIL webidl/ecmascript-binding/legacy-platform-object/GetOwnProperty.html (0/3 pass)
+  FAIL: [[GetOwnProperty]] with getters and no setters — Cannot read properties of undefined (reading 'hasOwnProperty')
+  FAIL: [[GetOwnProperty]] with named property getters and setters — Cannot set properties of undefined (setting 'foo')
+  FAIL: [[GetOwnProperty]] with indexed property getters and setters — Cannot read properties of undefined (reading 'hasOwnProperty')
+FAIL webidl/ecmascript-binding/legacy-platform-object/OwnPropertyKeys.html (0/5 pass)
+  FAIL: must enumerate property indices in ascending numerical order — Cannot read properties of undefined (reading 'join')
+  FAIL: must enumerate property names in list order — TypeError
+  FAIL: must first enumerate property indices in ascending numerical order, then named properties in list order — Cannot read properties of undefined (reading 'join')
+FAIL webidl/ecmascript-binding/put-forwards.html (0/11 pass)
+  FAIL: Overriding getter of [PutForwards] attribute — Cannot read properties of undefined (reading 'set')
+  FAIL: Overriding setter of [PutForwards] target attribute — Cannot read properties of undefined (reading 'prototype')
+  FAIL: Overriding target of [PutForwards] attribute — Cannot read properties of undefined (reading 'set')
+FAIL webidl/ecmascript-binding/legacy-platform-object/Set.html (5/11 pass)
+  FAIL: must throw when assigning to a numeric property on an object which implements a indexed property getter but not a setter in strict mode — assert_throws_js: function "[Function]" did not throw
+  FAIL: must allow setting built-in property on a [LegacyOverrideBuiltIns] object even if a named property shadows it — assert_equals: expected "get" but got ""
+  FAIL: must allow assigning to a symbol property on an object which implements an indexed property getter but not a setter when not in strict mode — assert_equals: expected (string) "foo" but got (undefined) undefined
+FAIL webidl/ecmascript-binding/sequence-conversion.html (0/8 pass)
+  FAIL: An array — Cannot read properties of undefined (reading 'setLineDash')
+  FAIL: A generator — Cannot read properties of undefined (reading 'setLineDash')
+  FAIL: An array with an overridden Symbol.iterator — Cannot read properties of undefined (reading 'setLineDash')
+FAIL webidl/ecmascript-binding/replaceable-setter-throws-if-defineownproperty-fails.html (0/8 pass)
+  FAIL: window.self setter throws TypeError if called on non-configurable accessor property — assert_throws_js: function "[Function]" did not throw
+  FAIL: window.parent setter throws TypeError if called on non-configurable accessor property — assert_throws_js: function "[Function]" did not throw
+  FAIL: window.origin setter throws TypeError if called on non-configurable accessor property — assert_throws_js: function "[Function]" did not throw
+FAIL webidl/ecmascript-binding/setter-argument.html (0/17 pass)
+  FAIL: String attribute setter should throw if this value is invalid — Cannot read properties of undefined (reading 'prototype')
+  FAIL: String attribute setter should treat no arguments as undefined — Cannot read properties of undefined (reading 'prototype')
+  FAIL: String attribute setter called with undefined should behave in the same way as no arguments — Cannot read properties of undefined (reading 'prototype')
+FAIL webidl/ecmascript-binding/window-named-properties-object.html (0/13 pass)
+  FAIL: [[SetPrototypeOf]] and [[GetPrototypeOf]] — Cannot read properties of undefined (reading 'Window')
+  FAIL: [[PreventExtensions]] and [[IsExtensible]] — Cannot read properties of undefined (reading 'Window')
+  FAIL: [[GetOwnProperty]] — Cannot read properties of undefined (reading 'Window')
+
+===========================================
+  WPT Results: webidl
+===========================================
+  Test files: 26 (pass=5 fail=19 err=2)
+  Subtests: 16/123 pass
+  Pass rate: 13.0%
+===========================================
+
+ELAPSED_SECONDS=75
+EXIT=0

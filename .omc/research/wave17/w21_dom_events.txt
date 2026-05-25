@@ -1,0 +1,120 @@
+=== WPT Tests: dom/events (161 files, 2 parallel, engine=kotori) ===
+FAIL dom/events/AddEventListenerOptions-passive.any.html (3/5 pass)
+  FAIL: Supports passive option on addEventListener only — assert_true: addEventListener doesn't support the passive option expected true got false
+  FAIL: returnValue should be ignored if-and-only-if the passive option is true — assert_equals: Incorrect defaultPrevented for options: null expected true but got false
+FAIL dom/events/Body-FrameSet-Event-Handlers.html (0/48 pass)
+  FAIL: Set HTMLBodyElement.onblur — assert_equals: Initially null expected (object) null but got (undefined) undefined
+  FAIL: Enumerate HTMLBodyElement.onblur — assert_true: expected true got undefined
+  FAIL: Reflect HTMLBodyElement.onblur — assert_equals: Convert to function expected "function" but got "undefined"
+FAIL dom/events/Event-constructors.any.html (12/14 pass)
+  FAIL: Untitled 1 — assert_throws_js: function "[Function]" did not throw
+  FAIL: Untitled 12 — assert_array_equals: lengths differ, expected array ["bubbles", "cancelable"] length 2, got [] length 0
+FAIL dom/events/Event-defaultPrevented-after-dispatch.html (0/2 pass)
+  FAIL: Default prevention via preventDefault — assert_equals: expected Element node <input id="target" type="hidden" value=""></input> but got null
+  FAIL: Default prevention via returnValue — assert_true: during dispatch expected true got false
+FAIL dom/events/Event-defaultPrevented.html (7/8 pass)
+  FAIL: returnValue should change defaultPrevented if cancelable is true. — assert_equals: defaultPrevented expected true but got false
+FAIL dom/events/Event-dispatch-click.html (6/14 pass)
+  FAIL: look at parents only when event bubbles — assert_false: expected false got undefined
+  FAIL: disabled checkbox still has activation behavior — assert_false: expected false got undefined
+  FAIL: disabled checkbox still has activation behavior, part 2 — assert_equals: expected "done" but got "form"
+FAIL dom/events/Event-dispatch-click.tentative.html (0/6 pass)
+  FAIL: disabled checkbox should not be checked from label click — assert_false: expected false got undefined
+  FAIL: disabled radio should not be checked from label click — assert_false: expected false got undefined
+  FAIL: disabled checkbox should not be checked from label click by dispatchEvent — assert_false: expected false got undefined
+FAIL dom/events/Event-dispatch-detached-click.html (1/2 pass)
+  FAIL: Click event can be dispatched to an element that is not in the document. — assert_equals: expected Element node <somerandomelement></somerandomelement> but got null
+FAIL dom/events/Event-dispatch-detached-input-and-change.html (4/12 pass)
+  FAIL: attached checkbox should emit input and change events on click(). — assert_true: expected true got false
+  FAIL: attached radio should emit input and change events on click(). — assert_true: expected true got false
+  FAIL: attached checkbox should emit input and change events on dispatchEvent(new MouseEvent('click')). — assert_true: expected true got false
+FAIL dom/events/Event-dispatch-on-disabled-elements.html (3/9 pass)
+  FAIL: Calling click() on disabled elements must not dispatch events. — assert_true: .click() must dispatch "click" event on enabled undefined. expected true got false
+  FAIL: CSS Transitions transitionrun, transitionstart, transitionend events fire on disabled form elements — promise_test: test body must return a 'thenable' object (received undefined)
+  FAIL: CSS Transitions transitioncancel event fires on disabled form elements — promise_test: test body must return a 'thenable' object (received undefined)
+FAIL dom/events/Event-dispatch-other-document.html (0/1 pass)
+  FAIL: Custom event on an element in another document — assert_equals: expected Element node <div></div> but got null
+FAIL dom/events/Event-dispatch-throwing-multiple-globals.html (0/2 pass)
+  FAIL: exception thrown in event listener function should result in error event on listener's global — Cannot read properties of undefined (reading 'EventTarget')
+  FAIL: exception thrown in event listener interface object should result in error event on listener's global — Cannot read properties of undefined (reading 'listener')
+FAIL dom/events/Event-dispatch-throwing.html (0/2 pass)
+  FAIL: Throwing in event listener with a single listeners — Error from only listener
+  FAIL: Throwing in event listener with multiple listeners — Error from first listener
+FAIL dom/events/Event-init-while-dispatching.html (0/5 pass)
+  FAIL: Calling initKeyboardEvent while dispatching. — Cannot read properties of undefined (reading 'name')
+  FAIL: Calling initMouseEvent while dispatching. — Cannot read properties of undefined (reading 'name')
+  FAIL: Calling initCustomEvent while dispatching. — Cannot read properties of undefined (reading 'name')
+FAIL dom/events/Event-returnValue.html (5/7 pass)
+  FAIL: returnValue=false should have no effect if cancelable is false. — assert_true: returnValue expected true got false
+  FAIL: returnValue=true should have no effect once the canceled flag was set. — assert_false: expected false got true
+FAIL dom/events/Event-stopPropagation-cancel-bubbling.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'stopPropagation')
+FAIL dom/events/Event-timestamp-high-resolution.html (3/4 pass)
+  FAIL: Constructed WheelEvent timestamp should be high resolution and have the same time origin as performance.now() — Cannot read properties of undefined (reading 'timeStamp')
+FAIL dom/events/Event-timestamp-high-resolution.https.html (0/1 pass)
+  FAIL: Constructed GamepadEvent timestamp should be high resolution and have the same time origin as performance.now() — Cannot read properties of undefined (reading 'timeStamp')
+FAIL dom/events/EventListener-handleEvent-cross-realm.html (0/5 pass)
+  FAIL: EventListener is cross-realm plain object without 'handleEvent' property — Cannot read properties of undefined (reading 'Object')
+  FAIL: EventListener is cross-realm plain object with non-callable 'handleEvent' property — Cannot read properties of undefined (reading 'Object')
+  FAIL: EventListener is cross-realm plain object with revoked Proxy as 'handleEvent' property — Cannot read properties of undefined (reading 'Object')
+FAIL dom/events/EventListener-handleEvent.html (2/6 pass)
+  FAIL: calls `handleEvent` method of `EventListener` — assert_equals: expected Element node <div></div> but got null
+  FAIL: rethrows errors when getting `handleEvent` — undefined
+  FAIL: throws if `handleEvent` is falsy and not callable — Cannot read properties of undefined (reading 'error')
+FAIL dom/events/EventListenerOptions-capture.html (2/4 pass)
+  FAIL: Capture boolean should be honored correctly — assert_equals: Incorrect event phase for value: 2.3 expected 1 but got 3
+  FAIL: Supports capture option — assert_true: addEventListener doesn't support the capture option expected true got false
+FAIL dom/events/EventTarget-constructible.any.html (1/3 pass)
+  FAIL: A constructed EventTarget implements dispatch correctly — Cannot read properties of undefined (reading 'join')
+  FAIL: EventTarget can be subclassed — assert_equals: expected 1 but got 0
+FAIL dom/events/EventTarget-this-of-listener.html (0/6 pass)
+  FAIL: the this value inside the event listener callback should be the node — assert_equals: expected 5 but got 4
+  FAIL: the this value inside the event listener object handleEvent should be the object — assert_equals: expected (undefined) undefined but got (object) object "[object Object]"
+  FAIL: dispatchEvent should invoke the current handleEvent method of the object — assert_equals: expected 5 but got 4
+FAIL dom/events/event-global.html (0/8 pass)
+  FAIL: event exists on window, which is initially set to undefined — assert_own_property: expected property "event" missing
+  FAIL: window.event is only defined during dispatch — assert_equals: window.event set to current event during dispatch expected (object) object "[object Object]" but got (undefined) undefined
+  FAIL: window.event is undefined if the target is in a shadow tree (event dispatched outside shadow tree) — assert_equals: expected (object) object "[object Object]" but got (undefined) undefined
+FAIL dom/events/event-src-element-nullable.html (0/1 pass)
+  FAIL: Event srcElement should be nullable — assert_not_equals: got disallowed value null
+FAIL dom/events/label-default-action.html (0/1 pass)
+  FAIL: Label default action should not trigger when clicked button removes itself — assert_false: expected false got undefined
+FAIL dom/events/mouse-event-retarget.html (0/1 pass)
+  FAIL: offsetX is correctly adjusted — assert_equals: expected (number) 42 but got (undefined) undefined
+FAIL dom/events/non-cancelable-when-passive/generic-events-stay-cancelable.html (0/1 pass)
+  FAIL: A generic event with only passive listeners remains cancelable — assert_true: expected true got false
+FAIL dom/events/non-cancelable-when-passive/synthetic-events-cancelable.html (0/12 pass)
+  FAIL: Synthetic wheel event with interface WheelEvent is not cancelable — assert_implements: WheelEvent should be supported undefined
+  FAIL: Synthetic wheel event with interface Event is not cancelable — assert_false: defaultPrevented expected false got null
+  FAIL: Synthetic mousewheel event with interface WheelEvent is not cancelable — assert_implements: WheelEvent should be supported undefined
+FAIL dom/events/preventDefault-during-activation-behavior.html (0/1 pass)
+  FAIL: behavior of preventDefault during activation behavior — assert_true: expected true got false
+FAIL dom/events/scrolling/scroll-event-fired-to-element.html (0/4 pass)
+  FAIL: scrollTop and scrollLeft should fire scroll event. — promise_test: test body must return a 'thenable' object (received an object with no `then` method)
+  FAIL: scrollTop and scrollLeft being set with the same value. — assert_equals: expected 0 but got 10
+  FAIL: scrollTop and scrollLeft being set with invalid scroll offset. — promise_test: test body must return a 'thenable' object (received undefined)
+FAIL dom/events/scrolling/scroll-event-fired-to-iframe.html (0/4 pass)
+  FAIL: scrollX and scrollY should fire scroll event. — Cannot read properties of undefined (reading 'contentWindow')
+  FAIL: scrollX and scrollY being set with the same value. — Cannot read properties of undefined (reading 'contentWindow')
+  FAIL: scrollX and scrollY being set with invalid scroll Scroll. — Cannot read properties of undefined (reading 'contentWindow')
+FAIL dom/events/scrolling/scrollend-event-fired-after-instant-scroll-in-microtask.html (0/1 pass)
+  FAIL: scrolling state is false at the end of the test — Cannot set properties of undefined (setting 'scrollTop')
+FAIL dom/events/scrolling/scrollend-with-snap-on-fractional-offset.html (0/1 pass)
+  FAIL: snap to fractional offset fires scrollend exactly once. — assert_approx_equals: scroller snaps to the left edge of box 2 expected undefined +/- 1 but got 0
+FAIL dom/events/shadow-relatedTarget.html (0/2 pass)
+  FAIL: relatedTarget should not leak at capturing phase, at window object. — Cannot read properties of null (reading 'focus')
+  FAIL: relatedTarget should not leak at target. — Cannot read properties of null (reading 'focus')
+FAIL dom/events/webkit-transition-end-event.html (0/13 pass)
+  FAIL: ontransitionend and onwebkittransitionend are not aliases — assert_equals: ontransitionend should initially be null expected (object) null but got (undefined) undefined
+  FAIL: dispatchEvent of a webkitTransitionEnd event does trigger a prefixed event handler or listener — assert_equals: onwebkittransitionend must be supported and not previously set expected (object) null but got (undefined) undefined
+  FAIL: dispatchEvent of a webkitTransitionEnd event does not trigger an unprefixed event handler or listener — assert_equals: ontransitionend must be supported and not previously set expected (object) null but got (undefined) undefined
+FAIL dom/events/window-composed-path.html (0/1 pass)
+  FAIL: window target has an empty path after dispatch — Cannot read properties of undefined (reading 'join')
+
+===========================================
+  WPT Results: dom/events
+===========================================
+  Test files: 161 (pass=122 fail=37 err=2)
+  Subtests: 117/286 pass
+  Pass rate: 40.9%
+===========================================

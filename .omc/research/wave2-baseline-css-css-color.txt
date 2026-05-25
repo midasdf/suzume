@@ -1,0 +1,173 @@
+=== WPT Tests: css/css-color (60 files, 2 parallel, engine=kotori) ===
+FAIL css/css-color/color-mix-missing-components.html (0/1 pass)
+  FAIL: Property color value 'color-mix(in srgb, oklch(0 none none), white)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.5 0.5 0.5).\n[object Object]
+FAIL css/css-color/color-mix-currentcolor-visited-getcomputedstyle.html (0/1 pass)
+  FAIL: Property background-color value 'color-mix(in srgb, currentcolor, white)' should not leak :visited for computed style — assert_equals: expected (string) "color(srgb 1 0.5 0.5)" but got (undefined) undefined
+FAIL css/css-color/inheritance.html (0/4 pass)
+  FAIL: Property color has initial value rgb(0, 0, 0) — assert_equals: expected (string) "rgb(0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color inherits — assert_equals: expected (string) "rgb(42, 53, 64)" but got (undefined) undefined
+  FAIL: Property opacity has initial value 1 — assert_equals: expected (string) "1" but got (undefined) undefined
+FAIL css/css-color/contrast-color-currentcolor-inherited.html (0/1 pass)
+  FAIL: currentcolor inside contrast-color() computes to the keyword — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/css-color/light-dark-currentcolor-in-color.html (0/1 pass)
+  FAIL: curentColor in light-dark() refers to parent color — Cannot read properties of null (reading 'color')
+FAIL css/css-color/light-dark-image.html (0/32 pass)
+  FAIL: background-image: light-dark(url('light.png'), url('dark.png')) — Cannot read properties of undefined (reading 'style')
+  FAIL: background-image: light-dark(none, url('dark.png')) — Cannot read properties of undefined (reading 'style')
+  FAIL: background-image: light-dark(url('light.png'), none) — Cannot read properties of undefined (reading 'style')
+FAIL css/css-color/parsing/alpha-color-computed.html (0/19 pass)
+  FAIL: Property color value 'alpha(from red / 0.5)' — assert_equals: expected (string) "rgba(255, 0, 0, 0.5)" but got (undefined) undefined
+  FAIL: Property color value 'alpha(from blue / 0)' — assert_equals: expected (string) "rgba(0, 0, 255, 0)" but got (undefined) undefined
+  FAIL: Property color value 'alpha(from green / 1)' — assert_equals: expected (string) "rgb(0, 128, 0)" but got (undefined) undefined
+FAIL css/css-color/nested-color-mix-with-currentcolor.html (0/1 pass)
+  FAIL: Nested color-mix function with inner currentColor should inherit unresolved — Cannot read properties of null (reading 'backgroundColor')
+FAIL css/css-color/parsing/alpha-color-parsing-invalid.html (0/10 pass)
+  FAIL: e.style['color'] = "alpha(red / 0.5)" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "alpha()" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "alpha(from / 0.5)" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+FAIL css/css-color/parsing/alpha-color-parsing-valid.html (0/22 pass)
+  FAIL: e.style['color'] = "alpha(from red / 0.5)" should set the property value — assert_equals: serialization should be canonical expected "alpha(from red / 0.5)" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "alpha(from blue / 1)" should set the property value — assert_equals: serialization should be canonical expected "alpha(from blue / 1)" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "alpha(from green / 0)" should set the property value — assert_equals: serialization should be canonical expected "alpha(from green / 0)" but got "rgb(0, 0, 0)"
+FAIL css/css-color/parsing/color-computed-color-function.html (0/468 pass)
+  FAIL: Property color value 'color(srgb 0% 0% 0%)' — assert_equals: expected (string) "color(srgb 0 0 0)" but got (undefined) undefined
+  FAIL: Property color value 'color(srgb 10% 10% 10%)' — assert_equals: expected (string) "color(srgb 0.1 0.1 0.1)" but got (undefined) undefined
+  FAIL: Property color value 'color(srgb .2 .2 25%)' — assert_equals: expected (string) "color(srgb 0.2 0.2 0.25)" but got (undefined) undefined
+FAIL css/css-color/parsing/color-computed-color-mix-function.html (0/894 pass)
+  FAIL: Property color value 'color-mix(in hsl, hsl(120deg 10% 20%), hsl(30deg 30% 40%))' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.33 0.36 0.24).\n[object Object]
+  FAIL: Property color value 'color-mix(in hsl, hsl(120deg 10% 20%) 25%, hsl(30deg 30% 40%))' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.4375 0.415625 0.2625).\n[object Object]
+  FAIL: Property color value 'color-mix(in hsl, 25% hsl(120deg 10% 20%), hsl(30deg 30% 40%))' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.4375 0.415625 0.2625).\n[object Object]
+FAIL css/css-color/parsing/color-computed-hex-color.html (0/6 pass)
+  FAIL: Property color value '#fff' [Valid 3-digit hex] — assert_equals: expected (string) "rgb(255, 255, 255)" but got (undefined) undefined
+  FAIL: Property color value '#ffff' [Valid 4-digit hex] — assert_equals: expected (string) "rgb(255, 255, 255)" but got (undefined) undefined
+  FAIL: Property color value '#ffffff' [Valid 6-digit hex] — assert_equals: expected (string) "rgb(255, 255, 255)" but got (undefined) undefined
+FAIL css/css-color/parsing/color-computed-contrast-color-function.html (0/17 pass)
+  FAIL: Property background-color value 'contrast-color(white)' — assert_in_array: value undefined not in array ["rgb(0, 0, 0)", "rgb(255, 255, 255)"]
+  FAIL: Property background-color value 'contrast-color(black)' — assert_in_array: value undefined not in array ["rgb(0, 0, 0)", "rgb(255, 255, 255)"]
+  FAIL: Property background-color value 'contrast-color(pink)' — assert_in_array: value undefined not in array ["rgb(0, 0, 0)", "rgb(255, 255, 255)"]
+FAIL css/css-color/parsing/color-computed-hwb.html (0/56 pass)
+  FAIL: Property color value 'hwb(120 30% 50%)' — assert_equals: expected (string) "rgb(77, 128, 77)" but got (undefined) undefined
+  FAIL: Property color value 'hwb(120 30% 50% / 0.5)' — assert_equals: expected (string) "rgba(77, 128, 77, 0.5)" but got (undefined) undefined
+  FAIL: Property color value 'hwb(120 30% 50% / 50%)' — assert_equals: expected (string) "rgba(77, 128, 77, 0.5)" but got (undefined) undefined
+FAIL css/css-color/parsing/color-computed-lab.html (0/120 pass)
+  FAIL: Property color value 'lab(0 0 0)' — assert_equals: expected (string) "lab(0 0 0)" but got (undefined) undefined
+  FAIL: Property color value 'lab(0 0 0 / 1)' — assert_equals: expected (string) "lab(0 0 0)" but got (undefined) undefined
+  FAIL: Property color value 'lab(0 0 0 / 0.5)' — assert_equals: expected (string) "lab(0 0 0 / 0.5)" but got (undefined) undefined
+FAIL css/css-color/parsing/color-computed-named-color.html (0/455 pass)
+  FAIL: Property color value '/**/transparent' [Should parse to completely transparent] — assert_equals: expected (string) "rgba(0, 0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value 'transparent' [Should parse to completely transparent] — assert_equals: expected (string) "rgba(0, 0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value ' transparent
+FAIL css/css-color/parsing/color-computed-relative-color.html (0/1156 pass)
+  FAIL: Property color value 'rgb(from rebeccapurple r g b)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.4 0.2 0.6).\n[object Object]
+  FAIL: Property color value 'rgb(from rebeccapurple r g b / alpha)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.4 0.2 0.6).\n[object Object]
+  FAIL: Property color value 'rgb(from rgb(20%, 40%, 60%, 80%) r g b / alpha)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.2 0.4 0.6 / 0.8).\n[object Object]
+FAIL css/css-color/parsing/color-computed-rgb.html (0/99 pass)
+  FAIL: Property color value 'rgb(none none none)' — assert_equals: expected (string) "rgb(0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value 'rgb(none none none / none)' — assert_equals: expected (string) "rgba(0, 0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value 'rgb(128 none none)' — assert_equals: expected (string) "rgb(128, 0, 0)" but got (undefined) undefined
+FAIL css/css-color/parsing/color-computed.html (0/16 pass)
+  FAIL: Property color value 'currentcolor' — assert_equals: expected (string) "rgb(255, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value 'transparent' — assert_equals: expected (string) "rgba(0, 0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value 'red' — assert_equals: expected (string) "rgb(255, 0, 0)" but got (undefined) undefined
+FAIL css/css-color/parsing/color-invalid-color-layers-function.html (0/93 pass)
+  FAIL: e.style['color'] = "color-layers()" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "color-layers(normal)" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "color-layers(multiply)" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+FAIL css/css-color/parsing/color-invalid-color-mix-function.html (0/175 pass)
+  FAIL: e.style['color'] = "color-mix(in hsl, hsl(120deg 10% 20%) -10%, hsl(30deg 30% 40%))" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "color-mix(in hsl, hsl(120deg 10% 20%) 150%, hsl(30deg 30% 40%))" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+  FAIL: e.style['color'] = "color-mix(in hsl, hsl(120deg 10% 20%) 0%, hsl(30deg 30% 40%) 0%)" should not set the property value — assert_equals: expected "" but got "rgb(0, 0, 0)"
+FAIL css/css-color/parsing/color-invalid-contrast-color-function.html (0/9 pass)
+  FAIL: e.style['background-color'] = "contrast-color()" should not set the property value — assert_equals: expected "" but got "rgba(0, 0, 0, 0)"
+  FAIL: e.style['background-color'] = "contrast-color(1)" should not set the property value — assert_equals: expected "" but got "rgba(0, 0, 0, 0)"
+  FAIL: e.style['background-color'] = "contrast-color(max)" should not set the property value — assert_equals: expected "" but got "rgba(0, 0, 0, 0)"
+FAIL css/css-color/parsing/color-mix-out-of-gamut.html (0/18 pass)
+  FAIL: Property color value 'color-mix(in hsl, color(display-p3 0 1 0) 100%, rgb(0, 0, 0) 0%)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb -0.511814 1.01832 -0.310726).\n[object Object]
+  FAIL: Property color value 'color-mix(in hsl, lab(100 104.3 -50.9) 100%, rgb(0, 0, 0) 0%)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 1.59343 0.58802 1.40564).\n[object Object]
+  FAIL: Property color value 'color-mix(in hsl, lab(0 104.3 -50.9) 100%, rgb(0, 0, 0) 0%)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.351376 -0.213938 0.299501).\n[object Object]
+FAIL css/css-color/parsing/color-valid-color-function.html (0/340 pass)
+  FAIL: e.style['color'] = "color(srgb 0% 0% 0%)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "color(srgb 10% 10% 10%)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "color(srgb .2 .2 25%)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-color-layers-function.html (0/170 pass)
+  FAIL: e.style['color'] = "color-layers(red)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "color-layers(red, blue)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "color-layers(red, blue, green)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-color-mix-function.html (0/642 pass)
+  FAIL: e.style['color'] = "color-mix(in srgb, red, blue)" should set the property value — Colors do not match.\nActual:   rgb(0, 0, 0)\nExpected: color-mix(in srgb, red, blue).\n[object Object]
+  FAIL: e.style['color'] = "color-mix(in srgb, 70% red, 50% blue)" should set the property value — Colors do not match.\nActual:   rgb(0, 0, 0)\nExpected: color-mix(in srgb, red 70%, blue 50%).\n[object Object]
+  FAIL: e.style['color'] = "color-mix(in hsl, red, blue)" should set the property value — Colors do not match.\nActual:   rgb(0, 0, 0)\nExpected: color-mix(in hsl, red, blue).\n[object Object]
+FAIL css/css-color/parsing/color-valid-contrast-color-function.html (0/17 pass)
+  FAIL: e.style['background-color'] = "contrast-color(white)" should set the property value — assert_equals: serialization should be canonical expected "contrast-color(white)" but got "rgba(0, 0, 0, 0)"
+  FAIL: e.style['background-color'] = "contrast-color(black)" should set the property value — assert_equals: serialization should be canonical expected "contrast-color(black)" but got "rgba(0, 0, 0, 0)"
+  FAIL: e.style['background-color'] = "contrast-color(pink)" should set the property value — assert_equals: serialization should be canonical expected "contrast-color(pink)" but got "rgba(0, 0, 0, 0)"
+FAIL css/css-color/parsing/color-valid-hsl.html (0/59 pass)
+  FAIL: e.style['color'] = "hsl(120 30% 50%)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "hsl(120 30% 50% / 0.5)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "hsl(none none none)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-hwb.html (0/38 pass)
+  FAIL: e.style['color'] = "hwb(120 30% 50%)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "hwb(120 30% 50% / 0.5)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "hwb(none none none)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-lab.html (0/150 pass)
+  FAIL: e.style['color'] = "lab(0 0 0)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "lab(0 0 0 / 1)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "lab(0 0 0 / 0.5)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-relative-color.html (0/1147 pass)
+  FAIL: e.style['color'] = "rgb(from rebeccapurple r g b)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "rgb(from rebeccapurple r g b / alpha)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "rgb(from rgb(20%, 40%, 60%, 80%) r g b / alpha)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-rgb.html (0/70 pass)
+  FAIL: e.style['color'] = "rgb(none none none)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "rgb(none none none / none)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "rgb(128 none none)" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid-system-color.html (0/19 pass)
+  FAIL: e.style['color'] = "ActiveText" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "ButtonBorder" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "ButtonFace" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/color-valid.html (0/17 pass)
+  FAIL: e.style['color'] = "currentcolor" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "transparent" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['color'] = "red" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/contrast-color-function-calc-container.html (0/2 pass)
+  FAIL: Property background-color value 'contrast-color(color(srgb calc(1 + (sign(20cqw - 10px) * 1)) calc(1 + (sign(20cqw - 10px) * 1)) calc(1 + (sign(20cqw - 10px) * 1))))' — assert_in_array: value undefined not in array ["rgb(0, 0, 0)", "rgb(255, 255, 255)"]
+  FAIL: e.style['background-color'] = "contrast-color(color(srgb calc(0.5) calc(1 + (sign(20cqw - 10px) * 0.5)) 1 / .5))" should set the property value — assert_equals: serialization should be canonical expected "contrast-color(color(srgb calc(0.5) calc(1 + (0.5 * sign(20cqw - 10px))) 1 / 0.5))" but got "rgba(0, 0, 0, 0)"
+FAIL css/css-color/parsing/opacity-computed.html (0/30 pass)
+  FAIL: Property opacity value '1' — assert_equals: expected (string) "1" but got (undefined) undefined
+  FAIL: Property opacity value '0.5' — assert_equals: expected (string) "0.5" but got (undefined) undefined
+  FAIL: Property opacity value '0' — assert_equals: expected (string) "0" but got (undefined) undefined
+FAIL css/css-color/parsing/opacity-valid.html (0/30 pass)
+  FAIL: e.style['opacity'] = "1" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['opacity'] = "0.5" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['opacity'] = "0" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-color/parsing/relative-color-out-of-gamut.html (0/27 pass)
+  FAIL: Property color value 'rgb(from color(display-p3 0 1 0) r g b / alpha)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb -0.5116 1.01827 -0.31067).\n[object Object]
+  FAIL: Property color value 'rgb(from lab(100 104.3 -50.9) r g b)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 1.5935 0.58776 1.40555).\n[object Object]
+  FAIL: Property color value 'rgb(from lab(0 104.3 -50.9) r g b)' — Colors do not match.\nActual:   undefined\nExpected: color(srgb 0.35137 -0.21392 0.29945).\n[object Object]
+FAIL css/css-color/relative-color-with-zoom.html (0/1 pass)
+  FAIL: oklch(from oklch(calc(0.54 + 0.01) 0.04 257) calc(0.994 + 0.001) calc(0.001 + 0.004) calc(h / alpha)) should be used-value-equivalent to oklch(0.995 0.005 257) — assert_not_equals: oklch(from oklch(calc(0.54 + 0.01) 0.04 257) calc(0.994 + 0.001) calc(0.001 + 0.004) calc(h / alpha)) isn't valid in 'color'; got the default value instead. got disallowed value undefined
+FAIL css/css-color/relative-currentcolor-visited-getcomputedstyle.html (0/1 pass)
+  FAIL: Property background-color value 'rgb(from currentcolor r g b)' should not leak :visited for computed style — assert_equals: expected (string) "color(srgb 0 1 0)" but got (undefined) undefined
+FAIL css/css-color/system-color-compute.html (0/27 pass)
+  FAIL: color-scheme property affects Menu system color keyword — assert_not_equals: got disallowed value ""
+  FAIL: System color doesn't compute to itself on color — assert_not_equals: got disallowed value "rgb(255, 255, 255)"
+  FAIL: Inherited system color keyword is observable on color — Cannot read properties of undefined (reading 'get')
+FAIL css/css-color/system-color-consistency.html (6/62 pass)
+  FAIL: Property color value 'ButtonBorder' resolves to the same color as the border-color of a button (light) — assert_equals: expected (string) "ButtonBorder" but got (undefined) undefined
+  FAIL: Property color value 'ButtonFace' resolves to the same color as the background-color of a button (light) — assert_equals: expected (string) "rgba(0, 0, 0, 0)" but got (undefined) undefined
+  FAIL: Property color value 'ButtonText' resolves to the same color as text on a button (light) — assert_equals: expected (string) "rgb(0, 0, 0)" but got (undefined) undefined
+FAIL css/css-color/system-color-support.html (9/21 pass)
+  FAIL: System color Canvas works — assert_not_equals: Canvas should react to color-scheme got disallowed value "Canvas"
+  FAIL: System color CanvasText works — assert_not_equals: CanvasText should react to color-scheme got disallowed value "CanvasText"
+  FAIL: System color LinkText works — assert_not_equals: LinkText should react to color-scheme got disallowed value "LinkText"
+
+===========================================
+  WPT Results: css/css-color
+===========================================
+  Test files: 60 (pass=14 fail=44 err=2)
+  Subtests: 604/7133 pass
+  Pass rate: 8.5%
+===========================================
+
+ELAPSED_SECONDS=227
+EXIT=0

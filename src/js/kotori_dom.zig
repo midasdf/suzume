@@ -4877,17 +4877,18 @@ fn nativeCreateEvent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerro
     const ctor_val = vm.globals.get(ctor_sid) orelse return JsValue.null_val;
     if (!ctor_val.isObject()) return JsValue.null_val;
     const ctor = ctor_val.asJsObject();
-    // Create uninitialised event via Event constructor (empty args).
+    // Create uninitialised event via Event constructor, passing empty-string type.
     // Set native_call_is_construct so the guard inside nativeEventConstructor passes.
-    const empty_args: []const JsValue = &.{};
+    const empty_sid = try vm.pool.intern("");
+    const ev_args = [_]JsValue{JsValue.initString(empty_sid)};
     vm.native_call_is_construct = true;
     const result = if (ctor.obj_type == .native_function)
-        ctor.data.native_fn(@ptrCast(vm), JsValue.undefined_val, empty_args) catch |err| {
+        ctor.data.native_fn(@ptrCast(vm), JsValue.undefined_val, &ev_args) catch |err| {
             vm.native_call_is_construct = false;
             return err;
         }
     else
-        nativeEventConstructor(@ptrCast(vm), JsValue.undefined_val, empty_args) catch |err| {
+        nativeEventConstructor(@ptrCast(vm), JsValue.undefined_val, &ev_args) catch |err| {
             vm.native_call_is_construct = false;
             return err;
         };
@@ -6748,15 +6749,11 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     const obj = try vm.createObj(.{});
 
     // DOM §2.5: first argument (type) is required.
-    // document.createEvent() passes empty_args directly (args.len==0) to create
-    // an uninitialised event — allow this. When called from script as `new Event()`
-    // the VM supplies at least one argument (undefined), so args.len>0 and
-    // args[0].isUndefined() means the caller omitted the required type.
+    // createEvent() now passes an explicit empty-string type arg, so no internal
+    // caller relies on the args.len==0 shortcut. From script, `new Event()` or
+    // `new Event(undefined)` must throw TypeError per the spec.
     var type_str: []const u8 = "";
-    if (args.len == 0) {
-        // createEvent internal call — proceed with empty type ""
-    } else if (args[0].isUndefined()) {
-        // new Event() with no args from script — type is required per DOM §2.5
+    if (args.len == 0 or args[0].isUndefined()) {
         return error.TypeError;
     } else if (args[0].isString()) {
         type_str = vm.pool.get(args[0].asStringId()) orelse "";

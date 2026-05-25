@@ -1,0 +1,14 @@
+=== WPT Tests: dom/lists (5 files, 2 parallel, engine=kotori) ===
+FAIL dom/lists/DOMTokenList-coverage-for-attributes.html (173/175 pass)
+  FAIL: output.htmlFor in http://www.w3.org/1999/xhtml namespace should be DOMTokenList. — assert_class_string: expected "[object DOMTokenList]" but got "[object String]"
+  FAIL: iframe.sandbox in http://www.w3.org/1999/xhtml namespace should be DOMTokenList. — assert_class_string: expected "[object DOMTokenList]" but got "[object String]"
+FAIL dom/lists/DOMTokenList-iteration.html (5/6 pass)
+  FAIL: classList inheritance from Array.prototype — assert_equals: .keys expected function "[Function]" but got function "[Function]"
+
+===========================================
+  WPT Results: dom/lists
+===========================================
+  Test files: 5 (pass=3 fail=2 err=0)
+  Subtests: 186/189 pass
+  Pass rate: 98.4%
+===========================================

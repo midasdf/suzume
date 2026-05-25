@@ -1,0 +1,692 @@
+=== WPT Tests: css/css-text (352 files, 2 parallel, engine=kotori) ===
+FAIL css/css-text/animations/text-indent-composition.html (26/62 pass)
+  FAIL: Compositing CSS Animations: property <text-indent> underlying [100%] from add [50px] to add [150px] at (-0.3) should be [calc(100% + 20px)] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <text-indent> underlying [100%] from add [50px] to add [150px] at (0) should be [calc(100% + 50px)] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <text-indent> underlying [100%] from add [50px] to add [150px] at (0.3) should be [calc(100% + 80px)] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 "
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-001.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-002.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-003.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-004.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-006.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-005.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-007.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-008.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-009.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-010.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-011.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-012.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-014.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-015.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-016.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-017.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-018.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-019.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-020.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-021.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-022.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-023.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-024.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-025.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-026.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-030.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-031.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-032.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-033.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-034.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-035.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-036.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-037.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-038.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-039.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-040.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-041.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-042.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-043.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-044.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-045.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-046.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-047.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-048.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-049.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-050.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-051.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-052.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-060.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-061.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-062.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-063.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-064.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-065.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-066.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-067.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-068.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-069.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-070.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-071.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-072.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-073.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-074.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-075.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-076.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-077.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-078.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-080.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-081.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-082.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-083.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-084.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-085.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-086.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-090.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-091.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-092.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-093.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-095.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-096.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-097.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-098.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-099.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-100.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-101.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-102.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-103.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-104.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-105.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-106.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-107.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-108.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-109.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-110.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-111.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-112.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-113.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-114.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-115.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-116.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-117.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-118.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-120.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-121.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-122.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-123.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-124.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-125.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-126.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-127.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-128.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-130.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/i18n/css3-text-line-break-baspglwj-131.html (0/4 pass)
+  FAIL: white-space:normal — assert_true: expected true got false
+  FAIL: white-space:pre-line — assert_true: expected true got false
+  FAIL: white-space:pre-wrap — assert_true: expected true got false
+FAIL css/css-text/inheritance.html (0/40 pass)
+  FAIL: Property hanging-punctuation has initial value none — assert_equals: expected "none" but got "initial"
+  FAIL: Property hanging-punctuation inherits — assert_equals: expected "first last" but got "unset"
+  FAIL: Property hyphens has initial value manual — assert_equals: expected "manual" but got "initial"
+FAIL css/css-text/line-break/line-break-var-substitution.html (0/1 pass)
+  FAIL: Test that line-break can be set with a var() substitution — Cannot read properties of null (reading 'lineBreak')
+FAIL css/css-text/line-breaking/line-breaking-020.html (0/1 pass)
+  FAIL: CSS Text Test: Simple line breaking test — Cannot read properties of undefined (reading 'x')
+FAIL css/css-text/line-breaking/line-breaking-028.html (0/4 pass)
+  FAIL: U+0x1361 (BA) and U+0x0021 (EX) — assert_true: expected true got false
+  FAIL: U+0x1680 (BA) and U+0x0021 (EX) — assert_true: expected true got false
+  FAIL: U+0x2009 (BA) and U+0x0021 (EX) — assert_true: expected true got false
+FAIL css/css-text/line-breaking/line-breaking-029.html (0/4 pass)
+  FAIL: U+0x0031 (NU), U+0x002E (IS) and U+0x201D (QU) — assert_true: expected true got false
+  FAIL: U+0x0041 (AL), U+0x002E (IS) and U+0x201D (QU) — assert_true: expected true got false
+  FAIL: U+0x0031 (NU), U+0x002E (IS) and U+0x0022 (QU) — assert_true: expected true got false
+FAIL css/css-text/line-breaking/line-breaking-atomic-nowrap-001.html (0/4 pass)
+  FAIL: CSS Text Test: Check atomic inline+NBSP quirk does not apply if nowrap — assert_equals: expected (number) 1 but got (undefined) 
+  FAIL: CSS Text Test: Check atomic inline+NBSP quirk does not apply if nowrap 1 — assert_equals: expected (number) 1 but got (undefined) 
+  FAIL: CSS Text Test: Check atomic inline+NBSP quirk does not apply if nowrap 2 — assert_equals: expected (number) 1 but got (undefined) 
+FAIL css/css-text/overflow-wrap/overflow-wrap-break-word-keep-all-001.html (0/2 pass)
+  FAIL: 0000000000 — assert_greater_than: expected a number but got a "undefined"
+  FAIL: 헬로우월드헬로우월드헬로우월드헬로우월드헬로우월드 — assert_greater_than: expected a number but got a "undefined"
+FAIL css/css-text/overflow-wrap/word-wrap-alias.html (0/2 pass)
+  FAIL: word-wrap should be defined as an alias of overflow-wrap — assert_equals: Only overflow-wrap should appear when serializing the declaration. expected "overflow-wrap: break-word;" but got "word-wrap: break-word; overflow-wrap: break-word;"
+  FAIL: word-wrap is a legacy name alias for overflow-wrap — assert_equals: word-wrap is an alias for overflow-wrap expected "inherit" but got ""
+FAIL css/css-text/parsing/hanging-punctuation-invalid.html (0/11 pass)
+  FAIL: e.style['hanging-punctuation'] = "none first" should not set the property value — assert_equals: expected "" but got "none first"
+  FAIL: e.style['hanging-punctuation'] = "last none" should not set the property value — assert_equals: expected "" but got "last none"
+  FAIL: e.style['hanging-punctuation'] = "first first" should not set the property value — assert_equals: expected "" but got "first first"
+FAIL css/css-text/parsing/hyphenate-character-computed.html (4/5 pass)
+  FAIL: Property hyphenate-character value '"\1400"' — assert_equals: expected ""᐀"" but got ""\1400""
+FAIL css/css-text/parsing/hyphenate-character-invalid.html (0/7 pass)
+  FAIL: e.style['hyphenate-character'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['hyphenate-character'] = "manual" should not set the property value — assert_equals: expected "" but got "manual"
+  FAIL: e.style['hyphenate-character'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+FAIL css/css-text/parsing/hyphenate-character-valid.html (4/5 pass)
+  FAIL: e.style['hyphenate-character'] = "\"\\1400\"" should set the property value — assert_equals: serialization should be canonical expected ""᐀"" but got ""\1400""
+FAIL css/css-text/parsing/hyphenate-limit-chars-computed.html (7/11 pass)
+  FAIL: Property hyphenate-limit-chars value 'auto auto' — assert_equals: expected "auto" but got "auto auto"
+  FAIL: Property hyphenate-limit-chars value 'auto auto auto' — assert_equals: expected "auto" but got "auto auto auto"
+  FAIL: Property hyphenate-limit-chars value '5 2 calc(3.1)' — assert_equals: expected "5 2 3" but got "5 2 calc(3.1)"
+FAIL css/css-text/parsing/hyphenate-limit-chars-invalid.html (0/8 pass)
+  FAIL: e.style['hyphenate-limit-chars'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['hyphenate-limit-chars'] = "1 normal" should not set the property value — assert_equals: expected "" but got "1 normal"
+  FAIL: e.style['hyphenate-limit-chars'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+FAIL css/css-text/parsing/hyphenate-limit-chars-valid.html (7/11 pass)
+  FAIL: e.style['hyphenate-limit-chars'] = "auto auto" should set the property value — assert_equals: serialization should be canonical expected "auto" but got "auto auto"
+  FAIL: e.style['hyphenate-limit-chars'] = "auto auto auto" should set the property value — assert_equals: serialization should be canonical expected "auto" but got "auto auto auto"
+  FAIL: e.style['hyphenate-limit-chars'] = "5 2 2" should set the property value — assert_equals: serialization should be canonical expected "5 2" but got "5 2 2"
+FAIL css/css-text/parsing/letter-spacing-computed.html (5/9 pass)
+  FAIL: Property letter-spacing value '0px' — assert_equals: expected "normal" but got "0px"
+  FAIL: Property letter-spacing value 'calc(10px - 0.5em)' — assert_equals: expected "-10px" but got "calc(10px - 0.5em)"
+  FAIL: Property letter-spacing value 'calc(10% - 20%)' — assert_equals: expected "-10%" but got "calc(10% - 20%)"
+FAIL css/css-text/parsing/letter-spacing-inherited-computed.html (2/3 pass)
+  FAIL: computed zoomed inherited letter-spacing — assert_equals: expected "2px" but got ""
+FAIL css/css-text/parsing/letter-spacing-invalid.html (0/4 pass)
+  FAIL: e.style['letter-spacing'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['letter-spacing'] = "20" should not set the property value — assert_equals: expected "" but got "20"
+  FAIL: e.style['letter-spacing'] = "normal 10px" should not set the property value — assert_equals: expected "" but got "normal 10px"
+FAIL css/css-text/parsing/letter-spacing-valid.html (7/9 pass)
+  FAIL: e.style['letter-spacing'] = "0" should set the property value — assert_equals: serialization should be canonical expected "0px" but got "0"
+  FAIL: e.style['letter-spacing'] = "calc(2ch - 30%)" should set the property value — assert_equals: serialization should be canonical expected "calc(-30% + 2ch)" but got "calc(2ch - 30%)"
+FAIL css/css-text/parsing/tab-size-computed.html (6/10 pass)
+  FAIL: Property tab-size value 'calc(10 + (sign(2cqw - 10px) * 5))' — assert_equals: expected "5" but got "calc(10 + (sign(2cqw - 10px) * 5))"
+  FAIL: Property tab-size value 'calc(10px + 0.5em)' — assert_equals: expected "30px" but got "calc(10px + 0.5em)"
+  FAIL: Property tab-size value 'calc(10px - 0.5em)' — assert_equals: expected "0px" but got "calc(10px - 0.5em)"
+FAIL css/css-text/parsing/tab-size-invalid.html (2/4 pass)
+  FAIL: e.style['tab-size'] = "30%" should not set the property value — assert_equals: expected "" but got "30%"
+  FAIL: e.style['tab-size'] = "calc(40% + 50px)" should not set the property value — assert_equals: expected "" but got "calc(40% + 50px)"
+FAIL css/css-text/parsing/text-align-all-invalid.html (0/5 pass)
+  FAIL: e.style['text-align-all'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['text-align-all'] = "start end" should not set the property value — assert_equals: expected "" but got "start end"
+  FAIL: e.style['text-align-all'] = "left right" should not set the property value — assert_equals: expected "" but got "left right"
+FAIL css/css-text/parsing/text-align-computed.html (5/7 pass)
+  FAIL: Property text-align value 'start' — assert_equals: expected "start" but got "left"
+  FAIL: Property text-align value 'end' — assert_equals: expected "end" but got "right"
+FAIL css/css-text/parsing/text-align-last-invalid.html (0/5 pass)
+  FAIL: e.style['text-align-last'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+  FAIL: e.style['text-align-last'] = "auto start" should not set the property value — assert_equals: expected "" but got "auto start"
+  FAIL: e.style['text-align-last'] = "end left" should not set the property value — assert_equals: expected "" but got "end left"
+FAIL css/css-text/parsing/text-autospace-computed.html (15/32 pass)
+  FAIL: Property text-autospace value 'initial' — assert_equals: expected "normal" but got "initial"
+  FAIL: Property text-autospace value 'punctuation ideograph-alpha' — assert_equals: expected "ideograph-alpha punctuation" but got "punctuation ideograph-alpha"
+  FAIL: Property text-autospace value 'punctuation ideograph-alpha ideograph-numeric' — assert_equals: expected "ideograph-alpha ideograph-numeric punctuation" but got "punctuation ideograph-alpha ideograph-numeric"
+FAIL css/css-text/parsing/text-autospace-invalid.html (0/15 pass)
+  FAIL: e.style['text-autospace'] = "punctuation normal" should not set the property value — assert_equals: expected "" but got "punctuation normal"
+  FAIL: e.style['text-autospace'] = "punctuation normal insert" should not set the property value — assert_equals: expected "" but got "punctuation normal insert"
+  FAIL: e.style['text-autospace'] = "insert punctuation normal" should not set the property value — assert_equals: expected "" but got "insert punctuation normal"
+FAIL css/css-text/parsing/text-autospace-valid.html (15/31 pass)
+  FAIL: e.style['text-autospace'] = "punctuation ideograph-alpha" should set the property value — assert_equals: serialization should be canonical expected "ideograph-alpha punctuation" but got "punctuation ideograph-alpha"
+  FAIL: e.style['text-autospace'] = "punctuation ideograph-alpha ideograph-numeric" should set the property value — assert_equals: serialization should be canonical expected "ideograph-alpha ideograph-numeric punctuation" but got "punctuation ideograph-alpha ideograph-numeric"
+  FAIL: e.style['text-autospace'] = "punctuation ideograph-alpha insert" should set the property value — assert_equals: serialization should be canonical expected "ideograph-alpha punctuation insert" but got "punctuation ideograph-alpha insert"
+FAIL css/css-text/parsing/text-group-align-invalid.html (0/11 pass)
+  FAIL: e.style['text-group-align'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['text-group-align'] = "match-parent" should not set the property value — assert_equals: expected "" but got "match-parent"
+  FAIL: e.style['text-group-align'] = "justify" should not set the property value — assert_equals: expected "" but got "justify"
+FAIL css/css-text/parsing/text-indent-computed.html (8/10 pass)
+  FAIL: Property text-indent value 'calc(10px - 0.5em)' — assert_equals: expected "-10px" but got "calc(10px - 0.5em)"
+  FAIL: Property text-indent value 'each-line hanging calc(10px + 0.5em)' — assert_equals: expected "30px hanging each-line" but got "each-line hanging calc(10px + 0.5em)"
+FAIL css/css-text/parsing/text-indent-invalid.html (0/7 pass)
+  FAIL: e.style['text-indent'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['text-indent'] = "hanging" should not set the property value — assert_equals: expected "" but got "hanging"
+  FAIL: e.style['text-indent'] = "each-line" should not set the property value — assert_equals: expected "" but got "each-line"
+FAIL css/css-text/parsing/text-indent-valid.html (9/14 pass)
+  FAIL: e.style['text-indent'] = "hanging calc(50% + 60px)" should set the property value — assert_equals: serialization should be canonical expected "calc(50% + 60px) hanging" but got "hanging calc(50% + 60px)"
+  FAIL: e.style['text-indent'] = "each-line 10px" should set the property value — assert_equals: serialization should be canonical expected "10px each-line" but got "each-line 10px"
+  FAIL: e.style['text-indent'] = "hanging 20% each-line" should set the property value — assert_equals: serialization should be canonical expected "20% hanging each-line" but got "hanging 20% each-line"
+FAIL css/css-text/parsing/text-justify-computed-legacy.html (0/1 pass)
+  FAIL: Property text-justify value 'distribute' — assert_equals: expected "inter-character" but got "distribute"
+FAIL css/css-text/parsing/text-justify-invalid.html (0/3 pass)
+  FAIL: e.style['text-justify'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['text-justify'] = "auto none" should not set the property value — assert_equals: expected "" but got "auto none"
+  FAIL: e.style['text-justify'] = "inter-character inter-word" should not set the property value — assert_equals: expected "" but got "inter-character inter-word"
+FAIL css/css-text/parsing/text-spacing-computed.html (7/16 pass)
+  FAIL: Property text-spacing value 'initial' — assert_equals: expected "normal" but got "initial"
+  FAIL: Property text-spacing value 'normal normal' — assert_equals: expected "normal" but got "normal normal"
+  FAIL: Property text-spacing value 'normal trim-start' — assert_equals: expected "trim-start" but got "normal trim-start"
+FAIL css/css-text/parsing/text-spacing-invalid.html (0/11 pass)
+  FAIL: e.style['text-spacing'] = "none none" should not set the property value — assert_equals: expected "" but got "none none"
+  FAIL: e.style['text-spacing'] = "none no-autospace" should not set the property value — assert_equals: expected "" but got "none no-autospace"
+  FAIL: e.style['text-spacing'] = "no-autospace none" should not set the property value — assert_equals: expected "" but got "no-autospace none"
+FAIL css/css-text/parsing/text-spacing-trim-invalid.html (0/9 pass)
+  FAIL: e.style['text-spacing-trim'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+  FAIL: e.style['text-spacing-trim'] = "normal space-all" should not set the property value — assert_equals: expected "" but got "normal space-all"
+  FAIL: e.style['text-spacing-trim'] = "normal space-first" should not set the property value — assert_equals: expected "" but got "normal space-first"
+FAIL css/css-text/parsing/text-spacing-valid.html (7/15 pass)
+  FAIL: e.style['text-spacing'] = "normal normal" should set the property value — assert_equals: serialization should be canonical expected "normal" but got "normal normal"
+  FAIL: e.style['text-spacing'] = "normal trim-start" should set the property value — assert_equals: serialization should be canonical expected "trim-start" but got "normal trim-start"
+  FAIL: e.style['text-spacing'] = "no-autospace normal" should set the property value — assert_equals: serialization should be canonical expected "no-autospace" but got "no-autospace normal"
+FAIL css/css-text/parsing/text-transform-computed.html (6/10 pass)
+  FAIL: Property text-transform value 'math-auto' — assert_true: 'math-auto' is a supported value for text-transform. expected true got false
+  FAIL: Property text-transform value 'capitalize full-width' — assert_true: 'capitalize full-width' is a supported value for text-transform. expected true got false
+  FAIL: Property text-transform value 'full-width full-size-kana' — assert_true: 'full-width full-size-kana' is a supported value for text-transform. expected true got false
+FAIL css/css-text/parsing/text-transform-valid.html (6/19 pass)
+  FAIL: e.style['text-transform'] = "math-auto" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['text-transform'] = "capitalize full-width" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['text-transform'] = "uppercase full-size-kana" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/text-wrap-computed.html (4/17 pass)
+  FAIL: Property text-wrap value 'auto' — assert_equals: expected "wrap" but got "auto"
+  FAIL: Property text-wrap value 'wrap auto' — assert_true: 'wrap auto' is a supported value for text-wrap. expected true got false
+  FAIL: Property text-wrap value 'wrap balance' — assert_true: 'wrap balance' is a supported value for text-wrap. expected true got false
+FAIL css/css-text/parsing/text-wrap-mode-valid.html (6/7 pass)
+  FAIL: e.style['text-wrap-mode'] = "revert-layer" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/text-wrap-pretty.html (4/14 pass)
+  FAIL: e.style['text-wrap'] = "wrap pretty" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['text-wrap'] = "pretty wrap" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['text-wrap'] = "stable wrap" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/text-wrap-style-valid.html (7/8 pass)
+  FAIL: e.style['text-wrap-style'] = "revert-layer" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/text-wrap-valid.html (8/22 pass)
+  FAIL: e.style['text-wrap'] = "auto" should set the property value — assert_equals: serialization should be canonical expected "wrap" but got "auto"
+  FAIL: e.style['text-wrap'] = "wrap auto" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: e.style['text-wrap'] = "wrap balance" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/white-space-collapse-invalid.html (0/6 pass)
+  FAIL: e.style['white-space-collapse'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['white-space-collapse'] = "none" should not set the property value — assert_equals: expected "" but got "none"
+  FAIL: e.style['white-space-collapse'] = "collapse preserve" should not set the property value — assert_equals: expected "" but got "collapse preserve"
+FAIL css/css-text/parsing/white-space-shorthand-text-wrap.html (0/6 pass)
+  FAIL: `text-wrap: balance` should be set — assert_equals: expected "balance" but got ""
+  FAIL: `text-wrap` should not be affected by previous `white-space` — assert_equals: expected "balance" but got ""
+  FAIL: `white-space` should not overwrite previous `text-wrap-style: balance` — assert_equals: expected "balance" but got ""
+FAIL css/css-text/parsing/white-space-shorthand.html (9/45 pass)
+  FAIL: e.style['white-space'] = "collapse" should set the property value — assert_not_equals: property should be set got disallowed value ""
+  FAIL: Property white-space value 'collapse' — assert_true: 'collapse' is a supported value for white-space. expected true got false
+  FAIL: e.style['white-space'] = "wrap" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/word-break-valid.html (5/6 pass)
+  FAIL: e.style['word-break'] = "manual" should set the property value — assert_not_equals: property should be set got disallowed value ""
+FAIL css/css-text/parsing/word-space-transform-invalid.html (0/6 pass)
+  FAIL: e.style['word-space-transform'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['word-space-transform'] = "normal" should not set the property value — assert_equals: expected "" but got "normal"
+  FAIL: e.style['word-space-transform'] = "spaces" should not set the property value — assert_equals: expected "" but got "spaces"
+FAIL css/css-text/parsing/word-spacing-computed.html (4/9 pass)
+  FAIL: Property word-spacing value 'normal' — assert_equals: expected "0px" but got "normal"
+  FAIL: Property word-spacing value '0' — assert_equals: expected "0px" but got "0"
+  FAIL: Property word-spacing value 'calc(10px - 0.5em)' — assert_equals: expected "-10px" but got "calc(10px - 0.5em)"
+FAIL css/css-text/parsing/word-spacing-invalid.html (0/3 pass)
+  FAIL: e.style['word-spacing'] = "auto" should not set the property value — assert_equals: expected "" but got "auto"
+  FAIL: e.style['word-spacing'] = "normal 10px" should not set the property value — assert_equals: expected "" but got "normal 10px"
+  FAIL: e.style['word-spacing'] = "10% 10px" should not set the property value — assert_equals: expected "" but got "10% 10px"
+FAIL css/css-text/parsing/word-spacing-valid.html (7/9 pass)
+  FAIL: e.style['word-spacing'] = "0" should set the property value — assert_equals: serialization should be canonical expected "0px" but got "0"
+  FAIL: e.style['word-spacing'] = "calc(2ch - 30%)" should set the property value — assert_equals: serialization should be canonical expected "calc(-30% + 2ch)" but got "calc(2ch - 30%)"
+FAIL css/css-text/tab-size/tab-size-computed-value-001.html (2/11 pass)
+  FAIL: testing tab-size: 0.5in — assert_equals: expected "48px" but got "0.5in"
+  FAIL: testing tab-size: 2.54cm — assert_equals: expected "96px" but got "2.54cm"
+  FAIL: testing tab-size: 25.4mm — assert_equals: expected "96px" but got "25.4mm"
+FAIL css/css-text/tab-size/tab-size.html (0/1 pass)
+  FAIL: Test tab-size measurements — Cannot read properties of undefined (reading 'width')
+FAIL css/css-text/text-align/text-align-last-empty-inline.html (0/1 pass)
+  FAIL: content that cannot be justified should be centered when text-align-last is justify — Cannot read properties of undefined (reading 'left')
+FAIL css/css-text/text-align/text-align-match-parent-002.html (0/1 pass)
+  FAIL: CSS Text Test: text-align - computed value for match-parent on the root element — assert_equals: expected "start" but got "left"
+FAIL css/css-text/text-justify/distribute-alias.tentative.html (0/1 pass)
+  FAIL: text-justify: distribute is a parse-time alias of inter-character — assert_equals: expected "inter-character" but got "distribute"
+FAIL css/css-text/text-transform/math/text-transform-math-auto-003.html (0/112 pass)
+  FAIL: Selection.toString() for math-auto 'undefined' returns the transformed character. — Cannot set properties of undefined (setting 'textContent')
+  FAIL: Selection.toString() for math-auto 'undefined' returns the transformed character. — Cannot set properties of undefined (setting 'textContent')
+  FAIL: Selection.toString() for math-auto 'undefined' returns the transformed character. — Cannot set properties of undefined (setting 'textContent')
+FAIL css/css-text/text-transform/text-transform-capitalize-036.html (0/6 pass)
+  FAIL: text-transform: capitalize test for 'hello world' — assert_equals: innerText for 'hello world' should be 'Hello World' expected (string) "Hello World" but got (undefined) undefined
+  FAIL: text-transform: capitalize test for 'foo-bar' — assert_equals: innerText for 'foo-bar' should be 'Foo-Bar' expected (string) "Foo-Bar" but got (undefined) undefined
+  FAIL: text-transform: capitalize test for "john's apple" — assert_equals: innerText for "john's apple" should be "John's Apple" expected (string) "John's Apple" but got (undefined) undefined
+FAIL css/css-text/text-transform/text-transform-full-size-kana-009.html (0/58 pass)
+  FAIL: Selection.toString() for full-size-kana 'undefined' (U+3041) returns the transformed character. — Cannot set properties of undefined (setting 'textContent')
+  FAIL: Selection.toString() for full-size-kana 'undefined' (U+3043) returns the transformed character. — Cannot set properties of undefined (setting 'textContent')
+  FAIL: Selection.toString() for full-size-kana 'undefined' (U+3045) returns the transformed character. — Cannot set properties of undefined (setting 'textContent')
+FAIL css/css-text/text-transform/text-transform-upperlower-107.html (0/1 pass)
+  FAIL: Selection.toString() for 'ß' with text-transform: uppercase — Cannot read properties of undefined (reading 'setBaseAndExtent')
+FAIL css/css-text/white-space/pre-line-br-with-whitespace-child-crash.html (0/1 pass)
+  FAIL: Modifying data of a text child of a root br element with pre-line should not crash. — HierarchyRequestError
+FAIL css/css-text/white-space/seg-break-transformation-016.tentative.html (6/12 pass)
+  FAIL: zwsp retained 1 — Cannot read properties of null (reading 'length')
+  FAIL: zwsp retained 2 — Cannot read properties of null (reading 'length')
+  FAIL: zwsp retained 3 — Cannot read properties of null (reading 'length')
+FAIL css/css-text/white-space/seg-break-transformation-017.tentative.html (6/12 pass)
+  FAIL: zwsp retained 1 — Cannot read properties of null (reading 'length')
+  FAIL: zwsp retained 2 — Cannot read properties of null (reading 'length')
+  FAIL: zwsp retained 3 — Cannot read properties of null (reading 'length')
+FAIL css/css-text/white-space/trailing-space-in-inline-box.html (0/3 pass)
+  FAIL: Preserved trailing spaces in inline boxes should hang — assert_less_than_equal: expected a number but got a "undefined"
+  FAIL: Preserved trailing spaces in inline boxes should hang 1 — assert_less_than_equal: expected a number but got a "undefined"
+  FAIL: Preserved trailing spaces in inline boxes should hang 2 — assert_less_than_equal: expected a number but got a "undefined"
+FAIL css/css-text/word-spacing/word-spacing-computed-001.html (1/12 pass)
+  FAIL: testing word-spacing: normal — assert_equals: expected "0px" but got "normal"
+  FAIL: testing word-spacing: 0 — assert_equals: expected "0px" but got "0"
+  FAIL: testing word-spacing: 1.27cm — assert_equals: expected "48px" but got "1.27cm"
+
+===========================================
+  WPT Results: css/css-text
+===========================================
+  Test files: 352 (pass=170 fail=180 err=2)
+  Subtests: 710/1773 pass
+  Pass rate: 40.0%
+===========================================

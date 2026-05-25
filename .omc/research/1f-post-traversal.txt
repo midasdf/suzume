@@ -1,0 +1,19 @@
+=== WPT Tests: dom/traversal (16 files, 2 parallel, engine=kotori) ===
+FAIL dom/traversal/TreeWalker-acceptNode-filter-cross-realm.html (0/5 pass)
+  FAIL: NodeFilter is cross-realm plain object without 'acceptNode' property — Cannot read properties of undefined (reading 'Object')
+  FAIL: NodeFilter is cross-realm plain object with non-callable 'acceptNode' property — Cannot read properties of undefined (reading 'Object')
+  FAIL: NodeFilter is cross-realm plain object with revoked Proxy as 'acceptNode' property — Cannot read properties of undefined (reading 'Object')
+FAIL dom/traversal/TreeWalker-currentNode.html (2/4 pass)
+  FAIL: Test that we handle setting the currentNode to arbitrary nodes not under the root element. — assert_equals: expected null but got Document node with 2 children
+  FAIL: Test how we handle the case when the traversed to node is within the root, but the currentElement is not. — Cannot read properties of undefined (reading 'name')
+FAIL dom/traversal/TreeWalker-realm.html (0/2 pass)
+  FAIL: Node returned by TreeWalker from different realm — createTreeWalker requires a Node
+  FAIL: Node returned by TreeWalker from different realm with acceptNode — createTreeWalker requires a Node
+
+===========================================
+  WPT Results: dom/traversal
+===========================================
+  Test files: 16 (pass=8 fail=3 err=5)
+  Subtests: 32/41 pass
+  Pass rate: 78.0%
+===========================================

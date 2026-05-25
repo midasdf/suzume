@@ -1,0 +1,112 @@
+=== WPT Tests: dom/ranges (54 files, 3 parallel, engine=kotori) ===
+FAIL dom/ranges/Range-adopt-test.html (0/4 pass)
+  FAIL: Range in document: Removing the only element in the range must collapse the range — assert_equals: expected 0 but got 1
+  FAIL: Parented range container moved to another document with appendChild: Moving the element to the other document must collapse the range — assert_equals: expected 0 but got 1
+  FAIL: Parentless range container moved to another document with appendChild: Removing the only element in the range must collapse the range — assert_equals: expected 0 but got 1
+FAIL dom/ranges/Range-collapse.html (171/186 pass)
+  FAIL: Range 18 [paras[0], 0, paras[0], 1], toStart true — Cannot read properties of undefined (reading 'name')
+  FAIL: Range 18 [paras[0], 0, paras[0], 1], toStart false — Cannot read properties of undefined (reading 'name')
+  FAIL: Range 18 [paras[0], 0, paras[0], 1], toStart omitted — Cannot read properties of undefined (reading 'name')
+FAIL dom/ranges/Range-cloneRange.html (34/62 pass)
+  FAIL: Range 6 [paras[5].firstChild, 2, paras[5].lastChild, 4] — assert_equals: doc.createRange() must create Range whose startContainer is doc expected Document node with 0 children but got Document node with 2 children
+  FAIL: Range 7 [paras[5].firstChild, 1, paras[5].firstChild, 3] — assert_equals: doc.createRange() must create Range whose startContainer is doc expected Document node with 0 children but got Document node with 2 children
+  FAIL: Range 10 [foreignPara1.firstChild, 0, foreignPara1.firstChild, 0] — assert_equals: doc.createRange() must create Range whose startContainer is doc expected Document node with 3 children but got Document node with 2 children
+FAIL dom/ranges/Range-commonAncestorContainer.html (52/63 pass)
+  FAIL: 19: range [paras[0], 0, paras[0], 1] — Cannot read properties of undefined (reading 'name')
+  FAIL: 21: range [paras[0].firstChild, 0, paras[1].firstChild, 0] — Cannot read properties of undefined (reading 'name')
+  FAIL: 22: range [paras[0].firstChild, 0, paras[1].firstChild, 8] — Cannot read properties of undefined (reading 'name')
+FAIL dom/ranges/Range-extractContents-dynamic-end.html (0/1 pass)
+  FAIL: Range.extractContents should not extract out-of-bounds nodes if end container is removed during iframe unload — Cannot read properties of undefined (reading 'contentWindow')
+FAIL dom/ranges/Range-intersectsNode-shadow.html (0/1 pass)
+  FAIL: Range.intersectsNode() doesn't return true for shadow children in other trees — Argument is not a Node
+FAIL dom/ranges/Range-mutations-appendChild.html (6/70 pass)
+  FAIL: testDiv.appendChild(testDiv.lastChild), with unselected range collapsed at (testDiv.lastChild, 0) — Cannot read properties of undefined (reading 'name')
+  FAIL: testDiv.appendChild(testDiv.lastChild), with selected range collapsed at (testDiv.lastChild, 0) — Cannot read properties of undefined (reading 'removeAllRanges')
+  FAIL: testDiv.appendChild(testDiv.lastChild), with unselected range on testDiv.lastChild from 0 to 1 — Cannot read properties of undefined (reading 'name')
+FAIL dom/ranges/Range-mutations-insertBefore.html (5/76 pass)
+  FAIL: testDiv.insertBefore(paras[0], paras[1]), with unselected range collapsed at (paras[0], 0) — Cannot read properties of undefined (reading 'name')
+  FAIL: testDiv.insertBefore(paras[0], paras[1]), with selected range collapsed at (paras[0], 0) — Cannot read properties of undefined (reading 'removeAllRanges')
+  FAIL: testDiv.insertBefore(paras[0], paras[1]), with unselected range on paras[0] from 0 to 1 — Cannot read properties of undefined (reading 'name')
+FAIL dom/ranges/Range-mutations-removeChild.html (0/20 pass)
+  FAIL: paras[0].parentNode.removeChild(paras[0]), with unselected range collapsed at (paras[0], 0) — Cannot read properties of undefined (reading 'name')
+  FAIL: paras[0].parentNode.removeChild(paras[0]), with selected range collapsed at (paras[0], 0) — Cannot read properties of undefined (reading 'removeAllRanges')
+  FAIL: paras[0].parentNode.removeChild(paras[0]), with unselected range on paras[0] from 0 to 1 — Cannot read properties of undefined (reading 'name')
+FAIL dom/ranges/Range-mutations-replaceChild.html (5/60 pass)
+  FAIL: testDiv.replaceChild(paras[0], paras[0]), with unselected range collapsed at (paras[0], 0) — Cannot read properties of undefined (reading 'name')
+  FAIL: testDiv.replaceChild(paras[0], paras[0]), with selected range collapsed at (paras[0], 0) — Cannot read properties of undefined (reading 'removeAllRanges')
+  FAIL: testDiv.replaceChild(paras[0], paras[0]), with unselected range on paras[0] from 0 to 1 — Cannot read properties of undefined (reading 'name')
+FAIL dom/ranges/Range-mutations-splitText.html (35/116 pass)
+  FAIL: paras[0].firstChild.splitText(376), with selected range on paras[0].firstChild from 0 to 1 — Cannot read properties of undefined (reading 'removeAllRanges')
+  FAIL: paras[0].firstChild.splitText(0), with selected range collapsed at (paras[0].firstChild, 0) — Cannot read properties of undefined (reading 'removeAllRanges')
+  FAIL: paras[0].firstChild.splitText(1), with selected range collapsed at (paras[0].firstChild, 1) — Cannot read properties of undefined (reading 'removeAllRanges')
+./tests/wpt/run_wpt_parallel.sh: 129 行: 1465122 強制終了               Xvfb ":$DISP" -screen 0 800x600x24 -ac &> /dev/null
+./tests/wpt/run_wpt_parallel.sh: 129 行: 1465123 強制終了               Xvfb ":$DISP" -screen 0 800x600x24 -ac &> /dev/null
+
+===========================================
+  WPT Results: dom/ranges
+===========================================
+  Test files: 54 (pass=13 fail=11 err=30)
+  Subtests: 2681/3032 pass
+  Pass rate: 88.4%
+===========================================
+/17 pass)
+  FAIL: OpaqueRange disconnected on element removal (textarea) — Cannot read properties of undefined (reading 'startOffset')
+  FAIL: Element accepts new OpaqueRanges after re-insertion (textarea) — Cannot read properties of undefined (reading 'startOffset')
+  FAIL: OpaqueRange disconnected on ancestor removal (textarea) — Cannot read properties of undefined (reading 'startOffset')
+FAIL dom/ranges/tentative/OpaqueRange-basic.html (0/3 pass)
+  FAIL: Tests createValueRange returns OpaqueRange that extends AbstractRange. — assert_true: |range| should be an instance of OpaqueRange. expected true got false
+  FAIL: OpaqueRange handles createValueRange correctly. — Cannot read properties of undefined (reading 'startContainer')
+  FAIL: OpaqueRange handles empty value correctly. — Cannot read properties of undefined (reading 'startOffset')
+FAIL dom/ranges/tentative/OpaqueRange-disconnect.html (0/5 pass)
+  FAIL: disconnect() resets range state and geometry. — Cannot read properties of undefined (reading 'disconnect')
+  FAIL: disconnect() is idempotent. — Cannot read properties of undefined (reading 'disconnect')
+  FAIL: disconnect() stops live offset updates. — Cannot read properties of undefined (reading 'disconnect')
+FAIL dom/ranges/tentative/OpaqueRange-geometry-basic.html (0/14 pass)
+  FAIL: Collapsed caret geometry (input) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: Simple selection geometry (input) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: Geometry empty after control removal (input) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+FAIL dom/ranges/tentative/OpaqueRange-geometry-complexity-and-visibility.html (0/6 pass)
+  FAIL: Bidirectional mixed text full selection geometry (input) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: Surrogate pair width normalization invariants (input) — Cannot read properties of undefined (reading 'getClientRects')
+  FAIL: visibility:hidden caret geometry (input) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+FAIL dom/ranges/tentative/OpaqueRange-geometry-multiline-and-mutations.html (0/15 pass)
+  FAIL: Partial hard-newline selection (textarea) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: Selection spanning blank line (textarea) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+  FAIL: Soft-wrapped long single line (textarea) — Cannot read properties of undefined (reading 'getBoundingClientRect')
+FAIL dom/ranges/tentative/OpaqueRange-highlight.html (0/8 pass)
+  FAIL: OpaqueRange can be added to and deleted from a Highlight (input) — Cannot read properties of undefined (reading 'clear')
+  FAIL: OpaqueRange mixed with DOM Range in same Highlight (input) — Cannot read properties of undefined (reading 'clear')
+  FAIL: Disconnected OpaqueRange remains in Highlight but is collapsed (input) — Cannot read properties of undefined (reading 'clear')
+FAIL dom/ranges/tentative/OpaqueRange-highlightsFromPoint.html (0/11 pass)
+  FAIL: highlightsFromPoint returns OpaqueRange highlight (input) — Cannot read properties of undefined (reading 'clear')
+  FAIL: highlightsFromPoint returns empty outside control (input) — Cannot read properties of undefined (reading 'clear')
+  FAIL: highlightsFromPoint returns empty for disconnected OpaqueRange (input) — Cannot read properties of undefined (reading 'clear')
+FAIL dom/ranges/tentative/OpaqueRange-offset.html (0/6 pass)
+  FAIL: createValueRange with single character in textarea. — Cannot read properties of undefined (reading 'startOffset')
+  FAIL: createValueRange with empty control in textarea. — Cannot read properties of undefined (reading 'startOffset')
+  FAIL: createValueRange boundary positions in textarea. — Cannot read properties of undefined (reading 'startOffset')
+FAIL dom/ranges/tentative/OpaqueRange-programmatic-updates.html (0/28 pass)
+  FAIL: Full replace collapses to start (shorter & longer) (input) — assert_equals: DOM shorter: start collapsed to 0 expected 0 but got 2
+  FAIL: Full replace from whole-old range collapses to 0 (input) — assert_equals: DOM whole-old: end collapsed to 0 expected 0 but got 5
+  FAIL: Full replace (equal length) collapses to 0 (input) — assert_equals: DOM equal-length: start collapsed to 0 expected 0 but got 1
+FAIL dom/ranges/tentative/OpaqueRange-range-updates.html (0/4 pass)
+  FAIL: createValueRange creates independent ranges on same element. — Cannot read properties of undefined (reading 'startOffset')
+  FAIL: createValueRange works on different form controls. — Cannot read properties of undefined (reading 'startContainer')
+  FAIL: createValueRange works with disconnected form controls. — Cannot read properties of undefined (reading 'startContainer')
+FAIL dom/ranges/tentative/OpaqueRange-supported-elements.html (0/6 pass)
+  FAIL: createValueRange should work on textarea. — Cannot read properties of undefined (reading 'startContainer')
+  FAIL: createValueRange should work on input[type=text]. — Cannot read properties of undefined (reading 'startContainer')
+  FAIL: createValueRange should work on input[type=search]. — Cannot read properties of undefined (reading 'startContainer')
+FAIL dom/ranges/tentative/OpaqueRange-unsupported-elements.html (0/1 pass)
+  FAIL: createValueRange throws NotSupportedError for unsupported input types. — assert_throws_dom: createValueRange should throw NotSupportedError for <input type="hidden"> function "[Function]" did not throw
+FAIL dom/ranges/tentative/OpaqueRange-validation.html (0/2 pass)
+  FAIL: createValueRange throws IndexSizeError for out-of-bounds offsets. — assert_throws_dom: function "[Function]" did not throw
+  FAIL: createValueRange handles all range types correctly: forward, backwards, and out-of-bounds. — Cannot read properties of undefined (reading 'startOffset')
+
+===========================================
+  WPT Results: dom/ranges
+===========================================
+  Test files: 54 (pass=18 fail=26 err=10)
+  Subtests: 2695/3180 pass
+  Pass rate: 84.7%
+===========================================

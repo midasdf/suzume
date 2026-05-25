@@ -1,0 +1,81 @@
+=== WPT Tests: css/css-flexbox (352 files, 2 parallel, engine=kotori) ===
+FAIL css/css-flexbox/align-content-rounding.html (0/1 pass)
+  FAIL: The last item should match the end edge. — Cannot read properties of undefined (reading 'style')
+FAIL css/css-flexbox/align-content-stretch-rounding.html (0/1 pass)
+  FAIL: The last item should match the end edge. — Cannot read properties of undefined (reading 'style')
+FAIL css/css-flexbox/animation/flex-basis-composition.html (42/50 pass)
+  FAIL: Compositing CSS Animations: property <flex-basis> underlying [10%] from add [100px] to add [20%] at (-0.3) should be [calc(130px + 4%)] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <flex-basis> underlying [10%] from add [100px] to add [20%] at (0) should be [calc(100px + 10%)] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 "
+  FAIL: Compositing CSS Animations: property <flex-basis> underlying [10%] from add [100px] to add [20%] at (0.5) should be [calc(50px + 20%)] — assert_equals: expected "$1 $1 $1 $1 $1 $1 $1 " but got "$1 $1 "
+FAIL css/css-flexbox/checkbox-percentage-width-in-flex.html (0/4 pass)
+  FAIL: Checkbox with percentage width in flex container should shrink to allow siblings to render — assert_greater_than: Sibling of checkbox with width:100% should have non-zero width expected a number but got a "undefined"
+  FAIL: Checkbox with percentage width should participate in flex shrink — assert_less_than: Checkbox with width:100% should shrink below container width when there are siblings expected a number but got a "undefined"
+  FAIL: Radio with percentage width in flex container should shrink to allow siblings to render — assert_greater_than: Sibling of radio with width:100% should have non-zero width expected a number but got a "undefined"
+FAIL css/css-flexbox/flex-rounding.html (0/1 pass)
+  FAIL: The last item shouldn't overflow the flexbox. — Cannot read properties of undefined (reading 'getBoundingClientRect')
+FAIL css/css-flexbox/flexbox-ignores-first-letter.html (8/12 pass)
+  FAIL: .container 5 — assert_equals: 
+  FAIL: .container 6 — assert_equals: 
+  FAIL: .container 9 — assert_equals: 
+FAIL css/css-flexbox/getcomputedstyle/flexbox_computedstyle_align-self-invalid.html (0/1 pass)
+  FAIL: flexbox | computed style | align-self: invalid — assert_equals: expected "auto" but got "normal"
+FAIL css/css-flexbox/getcomputedstyle/flexbox_computedstyle_flex-shorthand-invalid.html (0/1 pass)
+  FAIL: flexbox | computed style | flex: invalid — assert_equals: expected "auto" but got "1px"
+FAIL css/css-flexbox/getcomputedstyle/flexbox_computedstyle_min-auto-size.html (2/4 pass)
+  FAIL: Computed min-width/min-height of specified auto inside display:none which would otherwise have been a flex item. — assert_equals: expected "0px" but got "auto"
+  FAIL: Computed min-width/min-height of specified auto with display:none which would otherwise have been a flex item. — assert_equals: expected "0px" but got "auto"
+FAIL css/css-flexbox/hittest-anonymous-box.html (0/1 pass)
+  FAIL: Hit-testing within an anonymous flex-item should return the flexbox as the hittest result. — assert_equals: expected (undefined) undefined but got (object) Element node <div id="target">X</div>
+FAIL css/css-flexbox/hittest-overlapping-margin.html (0/1 pass)
+  FAIL: Flexboxes should perform hit testing in reverse paint order for overlapping elements: negative margin case (crbug.com/844505) — Cannot read properties of undefined (reading 'nodeName')
+FAIL css/css-flexbox/hittest-overlapping-relative.html (0/1 pass)
+  FAIL: Flexboxes should perform hit testing in reverse paint order for overlapping elements: relative case (crbug.com/844505) — Cannot read properties of undefined (reading 'nodeName')
+FAIL css/css-flexbox/inheritance.html (19/20 pass)
+  FAIL: Property align-self has initial value auto — assert_equals: expected "auto" but got "normal"
+FAIL css/css-flexbox/justify-content-rounding.html (0/1 pass)
+  FAIL: The last item should match the end edge. — Cannot read properties of undefined (reading 'style')
+FAIL css/css-flexbox/main-axis-margin-rounding.html (0/1 pass)
+  FAIL: The last item should match the end edge. — Cannot read properties of undefined (reading 'style')
+FAIL css/css-flexbox/parsing/flex-basis-computed.html (11/12 pass)
+  FAIL: Property flex-basis value 'calc(10% + 0px)' — assert_equals: expected "10%" but got "calc(10% + 0px)"
+FAIL css/css-flexbox/parsing/flex-computed.html (1/14 pass)
+  FAIL: Property flex value 'none' — assert_equals: expected "0 0 auto" but got "none"
+  FAIL: Property flex value '1' — assert_equals: expected "1 1 0%" but got "1"
+  FAIL: Property flex value '2 3' — assert_equals: expected "2 3 0%" but got "2 3"
+FAIL css/css-flexbox/parsing/flex-flow-invalid.html (0/2 pass)
+  FAIL: e.style['flex-flow'] = "nowrap row nowrap" should not set the property value — assert_equals: expected "" but got "nowrap row nowrap"
+  FAIL: e.style['flex-flow'] = "column wrap column" should not set the property value — assert_equals: expected "" but got "column wrap column"
+FAIL css/css-flexbox/parsing/flex-flow-valid.html (1/7 pass)
+  FAIL: e.style['flex-flow'] = "column nowrap" should set the property value — assert_equals: serialization should be canonical expected "column" but got "column nowrap"
+  FAIL: e.style['flex-flow'] = "nowrap column" should set the property value — assert_equals: serialization should be canonical expected "column" but got "nowrap column"
+  FAIL: e.style['flex-flow'] = "wrap row-reverse" should set the property value — assert_equals: serialization should be canonical expected "row-reverse wrap" but got "wrap row-reverse"
+FAIL css/css-flexbox/parsing/flex-grow-valid.html (1/4 pass)
+  FAIL: e.style['flex-grow'] = "23.4e5" should set the property value — assert_in_array: serialization should be sound value "23.4e5" not in array ["2.34e+06", "2.34e+006", "2340000"]
+  FAIL: e.style['flex-grow'] = "+.678E9" should set the property value — assert_in_array: serialization should be sound value "+.678E9" not in array ["6.78e+08", "6.78e+008", "678000000"]
+  FAIL: e.style['flex-grow'] = ".0" should set the property value — assert_equals: serialization should be canonical expected "0" but got ".0"
+FAIL css/css-flexbox/parsing/flex-shrink-valid.html (1/4 pass)
+  FAIL: e.style['flex-shrink'] = "23.4e5" should set the property value — assert_in_array: serialization should be sound value "23.4e5" not in array ["2.34e+06", "2.34e+006", "2340000"]
+  FAIL: e.style['flex-shrink'] = "+.678E9" should set the property value — assert_in_array: serialization should be sound value "+.678E9" not in array ["6.78e+08", "6.78e+008", "678000000"]
+  FAIL: e.style['flex-shrink'] = ".0" should set the property value — assert_equals: serialization should be canonical expected "0" but got ".0"
+FAIL css/css-flexbox/parsing/flex-valid.html (2/16 pass)
+  FAIL: e.style['flex'] = "none" should set the property value — assert_equals: serialization should be canonical expected "0 0 auto" but got "none"
+  FAIL: e.style['flex'] = "1" should set the property value — assert_equals: serialization should be canonical expected "1 1 0%" but got "1"
+  FAIL: e.style['flex'] = "2 3" should set the property value — assert_equals: serialization should be canonical expected "2 3 0%" but got "2 3"
+FAIL css/css-flexbox/parsing/webkit-aliases.html (0/12 pass)
+  FAIL: -webkit-align-content is a legacy name alias for align-content — assert_equals: -webkit-align-content is an alias for align-content expected "inherit" but got ""
+  FAIL: -webkit-align-items is a legacy name alias for align-items — assert_equals: -webkit-align-items is an alias for align-items expected "inherit" but got ""
+  FAIL: -webkit-align-self is a legacy name alias for align-self — assert_equals: -webkit-align-self is an alias for align-self expected "inherit" but got ""
+FAIL css/css-flexbox/scrollbars-auto-min-content-sizing.html (0/1 pass)
+  FAIL: Untitled — Cannot read properties of undefined (reading 'width')
+FAIL css/css-flexbox/select-as-flex-item-child-with-overflow.html (0/1 pass)
+  FAIL: select content (option) should not trigger scrollable overflow. — assert_less_than_equal: expected a number but got a "undefined"
+FAIL css/css-flexbox/select-as-flex-item-with-overflow.html (0/1 pass)
+  FAIL: select content (option) should not trigger scrollable overflow. — assert_less_than_equal: expected a number but got a "undefined"
+
+===========================================
+  WPT Results: css/css-flexbox
+===========================================
+  Test files: 352 (pass=313 fail=26 err=13)
+  Subtests: 1532/1618 pass
+  Pass rate: 94.7%
+===========================================
