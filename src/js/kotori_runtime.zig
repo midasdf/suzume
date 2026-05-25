@@ -6484,11 +6484,42 @@ pub const KotoriRuntime = struct {
         \\  TextEncoder.prototype.encoding='utf-8';
         \\}
         \\if(typeof TextDecoder==='undefined'){
-        \\  globalThis.TextDecoder=function(enc,opts){this.encoding=(enc||'utf-8').toLowerCase();this.fatal=!!(opts&&opts.fatal);this.ignoreBOM=!!(opts&&opts.ignoreBOM);};
+        \\  globalThis.TextDecoder=function(enc,opts){
+        \\    var label=(enc||'utf-8').toLowerCase();
+        \\    // Encoding §4.12 label → canonical name mapping
+        \\    var labels={'unicode-1-1-utf-8':'utf-8',utf8:'utf-8',unicode11utf8:'utf-8',
+        \\      unicode20utf8:'utf-8','x-utf8':'utf-8','utf-16le':'utf-16le','utf-16':'utf-16',
+        \\      'utf-16be':'utf-16be',csunicode:'utf-16le',unicodefffe:'utf-16be',
+        \\      ucs2:'utf-16le','iso-10646-ucs-2':'utf-16le'};
+        \\    this.encoding=labels[label]||label;
+        \\    this.fatal=!!(opts&&opts.fatal);this.ignoreBOM=!!(opts&&opts.ignoreBOM);
+        \\  };
         \\  TextDecoder.prototype.decode=function(buf){
         \\    if(!buf||buf.byteLength===0)return'';
         \\    var a=buf instanceof Uint8Array?buf:new Uint8Array(buf.buffer||buf);
         \\    var s='',i=0;
+        \\    // UTF-16 decode (little-endian, big-endian, auto-detect)
+        \\    if(this.encoding==='utf-16le'||this.encoding==='utf-16be'||this.encoding==='utf-16'){
+        \\      var isLE=this.encoding==='utf-16le';
+        \\      if(this.encoding==='utf-16'&&a.length>=2){
+        \\        if(a[0]===0xFF&&a[1]===0xFE){isLE=true;i=2;}
+        \\        else if(a[0]===0xFE&&a[1]===0xFF){isLE=false;i=2;}
+        \\      }else if(!this.ignoreBOM&&a.length>=2){
+        \\        if((isLE&&a[0]===0xFF&&a[1]===0xFE)||(!isLE&&a[0]===0xFE&&a[1]===0xFF))i=2;
+        \\      }
+        \\      while(i<a.length){
+        \\        if(i+1>=a.length){s+=String.fromCharCode(0xFFFD);break;}
+        \\        var w=isLE?(a[i]|(a[i+1]<<8)):((a[i]<<8)|a[i+1]);i+=2;
+        \\        if(w>=0xD800&&w<=0xDBFF){ // high surrogate
+        \\          if(i+1>=a.length){s+=String.fromCharCode(0xFFFD);break;}
+        \\          var w2=isLE?(a[i]|(a[i+1]<<8)):((a[i]<<8)|a[i+1]);
+        \\          if(w2>=0xDC00&&w2<=0xDFFF){s+=String.fromCodePoint(0x10000+((w-0xD800)<<10)+(w2-0xDC00));i+=2;}
+        \\          else{s+=String.fromCharCode(0xFFFD);}
+        \\        }else if(w>=0xDC00&&w<=0xDFFF){s+=String.fromCharCode(0xFFFD);} // lone low surrogate
+        \\        else{s+=String.fromCharCode(w);}
+        \\      }return s;
+        \\    }
+        \\    // UTF-8 decode
         \\    function isCont(b){return b>=0x80&&b<=0xBF;}
         \\    while(i<a.length){var b=a[i];
         \\      if(b<0x80){s+=String.fromCharCode(b);i++;}
