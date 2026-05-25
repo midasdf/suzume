@@ -234,6 +234,10 @@ pub const KotoriRuntime = struct {
         // attribute setter algorithm.
         _ = self.eval(body_event_handler_polyfill_js);
 
+        // Encoding §9 — TextEncoder / TextDecoder UTF-8 polyfill.
+        // Required by encoding .any.* WPT tests.
+        _ = self.eval(text_encoder_polyfill_js);
+
         return self;
     }
 
@@ -6441,6 +6445,57 @@ pub const KotoriRuntime = struct {
         \\    }
         \\  }
         \\})();
+    ;
+
+    /// Encoding §9 TextEncoder / TextDecoder polyfill for kotori.
+    /// Mirrors the QuickJS-side polyfill in web_api.zig. Provides
+    /// UTF-8 encode/decode with surrogate-pair handling per the
+    /// WHATWG Encoding Standard: lone surrogates → U+FFFD on encode;
+    /// invalid UTF-8 sequences → U+FFFD on decode.
+    const text_encoder_polyfill_js =
+        \\if(typeof TextEncoder==='undefined'){
+        \\  globalThis.TextEncoder=function(){};
+        \\  TextEncoder.prototype.encode=function(s){
+        \\    var a=[];for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);
+        \\      if(c>=0xD800&&c<=0xDBFF){
+        \\        var lo=s.charCodeAt(i+1);
+        \\        if(lo>=0xDC00&&lo<=0xDFFF){var cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);a.push(0xF0|(cp>>18));a.push(0x80|((cp>>12)&0x3F));a.push(0x80|((cp>>6)&0x3F));a.push(0x80|(cp&0x3F));i++;}
+        \\        else{a.push(0xEF);a.push(0xBF);a.push(0xBD);}
+        \\      }else if(c>=0xDC00&&c<=0xDFFF){a.push(0xEF);a.push(0xBF);a.push(0xBD);}
+        \\      else if(c<0x80)a.push(c);
+        \\      else if(c<0x800){a.push(0xC0|(c>>6));a.push(0x80|(c&0x3F));}
+        \\      else{a.push(0xE0|(c>>12));a.push(0x80|((c>>6)&0x3F));a.push(0x80|(c&0x3F));}
+        \\    }return new Uint8Array(a);
+        \\  };
+        \\  TextEncoder.prototype.encoding='utf-8';
+        \\}
+        \\if(typeof TextDecoder==='undefined'){
+        \\  globalThis.TextDecoder=function(enc,opts){this.encoding=(enc||'utf-8').toLowerCase();this.fatal=!!(opts&&opts.fatal);this.ignoreBOM=!!(opts&&opts.ignoreBOM);};
+        \\  TextDecoder.prototype.decode=function(buf){
+        \\    if(!buf||buf.byteLength===0)return'';
+        \\    var a=buf instanceof Uint8Array?buf:new Uint8Array(buf.buffer||buf);
+        \\    var s='',i=0;
+        \\    function isCont(b){return b>=0x80&&b<=0xBF;}
+        \\    while(i<a.length){var b=a[i];
+        \\      if(b<0x80){s+=String.fromCharCode(b);i++;}
+        \\      else if(b<0xC2){s+=String.fromCharCode(0xFFFD);i++;}
+        \\      else if(b<0xE0){
+        \\        if(i+1>=a.length||!isCont(a[i+1])){s+=String.fromCharCode(0xFFFD);i++;}
+        \\        else{s+=String.fromCharCode(((b&0x1F)<<6)|(a[i+1]&0x3F));i+=2;}
+        \\      }else if(b<0xF0){
+        \\        if(i+2>=a.length||!isCont(a[i+1])||!isCont(a[i+2])){s+=String.fromCharCode(0xFFFD);i++;}
+        \\        else{var cp3=((b&0x0F)<<12)|((a[i+1]&0x3F)<<6)|(a[i+2]&0x3F);
+        \\          if(cp3<0x800){s+=String.fromCharCode(0xFFFD);i++;}
+        \\          else{s+=String.fromCharCode(cp3);i+=3;}}
+        \\      }else if(b<0xF5){
+        \\        if(i+3>=a.length||!isCont(a[i+1])||!isCont(a[i+2])||!isCont(a[i+3])){s+=String.fromCharCode(0xFFFD);i++;}
+        \\        else{var cp4=((b&0x07)<<18)|((a[i+1]&0x3F)<<12)|((a[i+2]&0x3F)<<6)|(a[i+3]&0x3F);
+        \\          if(cp4<0x10000||cp4>0x10FFFF){s+=String.fromCharCode(0xFFFD);i++;}
+        \\          else{cp4-=0x10000;s+=String.fromCharCode(0xD800+(cp4>>10),0xDC00+(cp4&0x3FF));i+=4;}}
+        \\      }else{s+=String.fromCharCode(0xFFFD);i++;}
+        \\    }return s;
+        \\  };
+        \\}
     ;
 
     /// HTML §3.2.6 / §3.2.6.1 DOMStringMap (dataset) polyfill for kotori.
