@@ -238,6 +238,11 @@ pub const KotoriRuntime = struct {
         // Required by encoding .any.* WPT tests.
         _ = self.eval(text_encoder_polyfill_js);
 
+        // WHATWG URL §6: globalThis.URLSearchParams constructor.
+        // Run before url_polyfill_js so URL's searchParams getter can use
+        // new URLSearchParams().
+        _ = self.eval(url_search_params_polyfill_js);
+
         return self;
     }
 
@@ -5591,12 +5596,16 @@ pub const KotoriRuntime = struct {
         \\    this.search=p.search;
         \\    this.hash=p.hash;
         \\    this.origin=p.origin;
-        \\    this.searchParams={
-        \\      _data:{},
-        \\      get:function(n){return Object.prototype.hasOwnProperty.call(this._data,n)?this._data[n]:null;},
-        \\      has:function(n){return Object.prototype.hasOwnProperty.call(this._data,n);},
-        \\      toString:function(){return '';}
-        \\    };
+        \\    this.searchParams=null;
+        \\    try{Object.defineProperty(this,'searchParams',{
+        \\      get:function(){
+        \\        if(this._sp)return this._sp;
+        \\        this._sp=new URLSearchParams(this.search?this.search.replace(/^\\?/,''):'');
+        \\        return this._sp;
+        \\      },
+        \\      set:function(v){this._sp=v;},
+        \\      configurable:true,enumerable:true
+        \\    });}catch(e){}
         \\  }
         \\  URL.prototype.toString=function(){return this.href;};
         \\  if(typeof globalThis.URL==='undefined')globalThis.URL=URL;
@@ -6496,6 +6505,71 @@ pub const KotoriRuntime = struct {
         \\    }return s;
         \\  };
         \\}
+    ;
+
+    /// WHATWG URL §6: URLSearchParams polyfill for kotori.
+    /// Pure-JS implementation with full append/delete/entries/forEach/get/
+    /// getAll/has/set/sort/size/toString/iterator support plus proper
+    /// application/x-www-form-urlencoded serialization.
+    const url_search_params_polyfill_js =
+        \\(function(){
+        \\  "use strict";
+        \\  if(typeof URLSearchParams!=='undefined'&&URLSearchParams.prototype&&URLSearchParams.prototype.sort)return;
+        \\  function URLSearchParams(init){
+        \\    this._e=[];
+        \\    if(init===undefined||init===null){
+        \\      this.toString=function(){return '';};return;
+        \\    }
+        \\    if(typeof init==='string'){
+        \\      var s=init.charAt(0)==='?'?init.substring(1):init;
+        \\      if(s){
+        \\        var pairs=s.split('&');
+        \\        for(var i=0;i<pairs.length;i++){
+        \\          var eq=pairs[i].indexOf('=');
+        \\          var n,v;
+        \\          if(eq>=0){n=pairs[i].substring(0,eq);v=pairs[i].substring(eq+1);}
+        \\          else{n=pairs[i];v='';}
+        \\          var replP=function(t){return t.split('+').join(' ');};
+        \\          this._e.push([decodeURIComponent(replP(n)),decodeURIComponent(replP(v))]);
+        \\        }
+        \\      }
+        \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&init[Symbol.iterator]){
+        \\      var it=init[Symbol.iterator](),r;
+        \\      while(!(r=it.next()).done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);}
+        \\    }else if(typeof init==='object'){
+        \\      var keys=Object.keys(init);
+        \\      for(var i=0;i<keys.length;i++)this._e.push([String(keys[i]),String(init[keys[i]])]);
+        \\    }
+        \\  }
+        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).split('%20').join('+')+'='+encodeURIComponent(p[1]).split('%20').join('+');}).join('&');};
+        \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
+        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);};
+        \\  URLSearchParams.prototype["delete"]=function(n,v){
+        \\    n=String(n);var hasVal=arguments.length>=2;var nv=hasVal?String(v):null;
+        \\    this._e=this._e.filter(function(p){return !(p[0]===n&&(!hasVal||p[1]===nv));});
+        \\  };
+        \\  URLSearchParams.prototype.get=function(n){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
+        \\  URLSearchParams.prototype.getAll=function(n){n=String(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
+        \\  URLSearchParams.prototype.has=function(n,v){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(arguments.length<2||this._e[i][1]===String(v)))return true;return false;};
+        \\  URLSearchParams.prototype.set=function(n,v){
+        \\    n=String(n);v=String(v);var found=false,e=this._e;
+        \\    for(var i=0;i<e.length;i++){
+        \\      if(e[i][0]===n){
+        \\        if(!found){e[i][1]=v;found=true;}
+        \\        else{e.splice(i,1);i--;}
+        \\      }
+        \\    }
+        \\    if(!found)e.push([n,v]);
+        \\  };
+        \\  URLSearchParams.prototype.sort=function(){this._e.sort(function(a,b){return a[0]<b[0]?-1:a[0]>b[0]?1:0;});};
+        \\  try{Object.defineProperty(URLSearchParams.prototype,'size',{get:function(){return this._e.length;},configurable:true,enumerable:true});}catch(e){}
+        \\  URLSearchParams.prototype.forEach=function(cb,thisArg){for(var i=0;i<this._e.length;i++)cb.call(thisArg,this._e[i][1],this._e[i][0],this);};
+        \\  URLSearchParams.prototype.entries=function(){var i=0,e=this._e;return{next:function(){if(i<e.length){var v=[e[i][0],e[i][1]];i++;return{value:v,done:false};}return{value:undefined,done:true};}};};
+        \\  URLSearchParams.prototype.keys=function(){var i=0,e=this._e;return{next:function(){return i<e.length?{value:e[i++][0],done:false}:{value:undefined,done:true};}};};
+        \\  URLSearchParams.prototype.values=function(){var i=0,e=this._e;return{next:function(){return i<e.length?{value:e[i++][1],done:false}:{value:undefined,done:true};}};};
+        \\  if(typeof Symbol!=='undefined'&&Symbol.iterator)URLSearchParams.prototype[Symbol.iterator]=URLSearchParams.prototype.entries;
+        \\  globalThis.URLSearchParams=URLSearchParams;
+        \\})();
     ;
 
     /// HTML §3.2.6 / §3.2.6.1 DOMStringMap (dataset) polyfill for kotori.
