@@ -6579,11 +6579,11 @@ pub const KotoriRuntime = struct {
         \\  Blob.prototype.arrayBuffer=function(){var b=new ArrayBuffer(this._data.length);var v=new Uint8Array(b);for(var i=0;i<this._data.length;i++)v[i]=this._data.charCodeAt(i);return Promise.resolve(b);};
         \\  Blob.prototype.slice=function(s,e,t){return new Blob([this._data.slice(s,e)],{type:t||this.type});};
         \\}
-        \\if(typeof File==='undefined'){
+        \\{ // always overwrite stub from file_input_polyfill_js (Wave 158)
         \\  globalThis.File=function(parts,name,opts){
         \\    Blob.call(this,parts,opts);this.name=name;this.lastModified=(opts&&opts.lastModified)||Date.now();
         \\  };
-        \\  File.prototype=Object.create(Blob.prototype);File.prototype.constructor=File;
+        \\  File.prototype.__proto__=Blob.prototype;File.prototype.constructor=File;
         \\}
         \\if(typeof FileReader==='undefined'){
         \\  globalThis.FileReader=function(){this.readyState=0;this.result=null;this.error=null;this.onload=null;this.onerror=null;this.onloadend=null;};
