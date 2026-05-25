@@ -250,22 +250,31 @@ const CascadeEntry = struct {
     specificity: u32,
     source_order: u32,
     origin: Origin,
+    layer_order: u16 = UNLAYERED_KEY,
 
     fn priority(self: CascadeEntry) u64 {
-        // Sort key: important bit (63), origin (56-62), specificity (24-55), source_order (0-23)
-        // Per CSS Cascading Level 5: for !important declarations, specificity order is REVERSED
-        // (lower specificity wins, so we invert the specificity bits to make lower spec sort higher).
+        // Sort key: [important:1][origin:7][layer:16][specificity:32][source_order:8] = 64 bits
+        // Per CSS Cascading Level 5:
+        //   - normal flow: higher layer_order = higher priority (unlayered = 0xFFFF highest)
+        //   - !important: layer_order is REVERSED within same origin
+        //     (layer 0's !important beats layer 1's !important)
+        //   - !important: specificity is also REVERSED
         var p: u64 = 0;
+        const source_clamped: u8 = @intCast(@min(self.source_order, 0xFF));
         if (self.decl.important) {
             p |= @as(u64, 1) << 63;
             p |= @as(u64, @intFromEnum(self.origin)) << 56;
+            // Reversed layer: lower layer_order → higher priority for !important
+            p |= @as(u64, 0xFFFF -% self.layer_order) << 40;
             // Inverted specificity: lower specificity → higher sort position → wins
-            p |= @as(u64, 0xFFFFFFFF - self.specificity) << 24;
+            p |= @as(u64, 0xFFFFFFFF - self.specificity) << 8;
         } else {
             p |= @as(u64, @intFromEnum(self.origin)) << 56;
-            p |= @as(u64, self.specificity) << 24;
+            // Normal layer: higher layer_order → higher priority
+            p |= @as(u64, self.layer_order) << 40;
+            p |= @as(u64, self.specificity) << 8;
         }
-        p |= @as(u64, @min(self.source_order, 0xFFFFFF));
+        p |= @as(u64, source_clamped);
         return p;
     }
 };
@@ -327,12 +336,25 @@ pub fn cascade(
     // 4c. Extract @keyframes rules
     extractKeyframes(author_sheet.rules, &result.keyframes, arena);
 
-    // 5. Flatten @media rules and collect applicable style rules
+    // 4d. Build CSS @layer order map from author stylesheet declarations
+    var layer_order_map = try buildLayerOrderMap(author_sheet.rules, arena);
+    // Anonymous layers get auto-assigned order after all named layers.
+    var max_named_order: u16 = 0;
+    var map_iter = layer_order_map.valueIterator();
+    while (map_iter.next()) |ord| {
+        if (ord.* >= max_named_order) max_named_order = ord.* + 1;
+    }
+    const next_anon_order: u16 = max_named_order;
+
+    // 5. Flatten rules (resolve @media, @container, @layer) and collect applicable style rules.
+    // Use combined layer map for both UA and author; UA rules stay unlayered by default.
     var ua_rules: std.ArrayList(FlatRule) = .empty;
-    try flattenRules(ua_sheet.rules, vw, vh, &ua_rules, arena);
+    var ua_next_anon: u16 = next_anon_order;
+    try flattenRules(ua_sheet.rules, vw, vh, &ua_rules, arena, &layer_order_map, &ua_next_anon, UNLAYERED_KEY);
 
     var author_rules: std.ArrayList(FlatRule) = .empty;
-    try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena);
+    var author_next_anon: u16 = next_anon_order;
+    try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena, &layer_order_map, &author_next_anon, UNLAYERED_KEY);
 
     // 6. Root VarMap (empty — per-element scoping builds VarMaps during walk)
     var root_vars = VarMap.init(arena);
@@ -362,12 +384,99 @@ pub fn cascade(
     return result;
 }
 
+// ── Layer key encoding (hierarchical, for parent-beats-child ordering) ─
+
+/// Hierarchical layer key: 4 nibbles encoding a tree path.
+/// Nibble 3 (MSB, bits 12-15): level 0 index or 0xF (sentinel = unused/higher priority)
+/// Nibble 2 (bits 8-11): level 1 index or 0xF
+/// Nibble 1 (bits 4-7): level 2 index or 0xF
+/// Nibble 0 (bits 0-3): level 3 index or 0xF
+///
+/// Priority: higher key = higher priority. Unlayered = 0xFFFF (all sentinels).
+/// Example: [0] = 0x0FFF, [0,0] = 0x00FF, [1] = 0x1FFF
+/// Comparison: parent [0] > child [0,0], later sibling [1] > [0]
+
+pub const UNLAYERED_KEY: u16 = 0xFFFF;
+
+fn makeTopLevelLayerKey(index: u4) u16 {
+    return (@as(u16, index) << 12) | 0x0FFF;
+}
+
+fn makeSubLayerKey(parent_key: u16, child_index: u4) u16 {
+    // Find first sentinel (0xF) nibble from MSB and place child_index there.
+    const n3: u4 = @truncate((parent_key >> 12) & 0xF);
+    const n2: u4 = @truncate((parent_key >> 8) & 0xF);
+    const n1: u4 = @truncate((parent_key >> 4) & 0xF);
+    const n0: u4 = @truncate(parent_key & 0xF);
+
+    if (n3 == 0xF) return ((@as(u16, child_index) << 12) | 0x0FFF);
+    if (n2 == 0xF) return ((@as(u16, n3) << 12) | (@as(u16, child_index) << 8) | 0x00FF);
+    if (n1 == 0xF) return ((@as(u16, n3) << 12) | (@as(u16, n2) << 8) | (@as(u16, child_index) << 4) | 0x000F);
+    if (n0 == 0xF) return ((@as(u16, n3) << 12) | (@as(u16, n2) << 8) | (@as(u16, n1) << 4) | @as(u16, child_index));
+
+    // Max depth reached (4 levels) — return parent (should not happen in practice)
+    return parent_key;
+}
+
+/// Build a map from layer name to order index by scanning @layer declarations.
+fn buildLayerOrderMap(
+    rules: []const ast.Rule,
+    allocator: std.mem.Allocator,
+) !std.StringHashMap(u16) {
+    var map = std.StringHashMap(u16).init(allocator);
+    var next_order: u16 = 0;
+    try scanLayerDecls(rules, &map, &next_order);
+    return map;
+}
+
+/// Recursively scan rules for @layer declarations and ordering statements.
+fn scanLayerDecls(
+    rules: []const ast.Rule,
+    map: *std.StringHashMap(u16),
+    next_order: *u16,
+) !void {
+    for (rules) |rule| {
+        switch (rule) {
+            .layer => |lr| {
+                // Ordering statements: @layer name1, name2;
+                if (lr.ordering.len > 0) {
+                    for (lr.ordering) |name| {
+                        // Only assign if not already in map (first declaration wins)
+                        if (!map.contains(name)) {
+                            try map.put(name, next_order.*);
+                            next_order.* += 1;
+                        }
+                    }
+                } else if (lr.name) |name| {
+                    // @layer name { ... } — if not already ordered, auto-assign
+                    if (!map.contains(name)) {
+                        try map.put(name, next_order.*);
+                        next_order.* += 1;
+                    }
+                } else {
+                    // Anonymous layer — will get auto-assigned order in flattenRules
+                }
+                // Recurse into layer content
+                try scanLayerDecls(lr.rules, map, next_order);
+            },
+            .media => |mr| {
+                try scanLayerDecls(mr.rules, map, next_order);
+            },
+            .container => |cr| {
+                try scanLayerDecls(cr.rules, map, next_order);
+            },
+            else => {},
+        }
+    }
+}
+
 // ── Flattened rule (after @media evaluation) ──────────────────────────
 
 const FlatRule = struct {
     selectors: []ast.Selector,
     declarations: []Declaration,
     source_order: u32,
+    layer_order: u16 = UNLAYERED_KEY,
 };
 
 fn flattenRules(
@@ -376,6 +485,9 @@ fn flattenRules(
     vh: f32,
     out: *std.ArrayList(FlatRule),
     arena: std.mem.Allocator,
+    layer_map: *const std.StringHashMap(u16),
+    next_anon_order: *u16,
+    current_key: u16,
 ) !void {
     for (rules) |rule| {
         switch (rule) {
@@ -385,19 +497,48 @@ fn flattenRules(
                     .selectors = sr.selectors,
                     .declarations = sr.declarations,
                     .source_order = sr.source_order,
+                    .layer_order = current_key,
                 });
             },
             .media => |mr| {
                 if (media.evaluateMediaQuery(mr.query.raw, vw, vh)) {
-                    try flattenRules(mr.rules, vw, vh, out, arena);
+                    try flattenRules(mr.rules, vw, vh, out, arena, layer_map, next_anon_order, current_key);
                 }
             },
             .container => |cr| {
                 // Evaluate container query conditions against viewport width as approximation.
                 // Full container query support would require layout-time evaluation.
                 if (evaluateContainerQuery(cr.query.raw, vw, vh)) {
-                    try flattenRules(cr.rules, vw, vh, out, arena);
+                    try flattenRules(cr.rules, vw, vh, out, arena, layer_map, next_anon_order, current_key);
                 }
+            },
+            .layer => |lr| {
+                // Determine this layer's key (hierarchical tree path).
+                var layer_key = current_key;
+                if (lr.name) |name| {
+                    // Named layer: look up index from ordering map.
+                    if (layer_map.get(name)) |ord| {
+                        const idx: u4 = @truncate(ord);
+                        if (current_key == UNLAYERED_KEY) {
+                            layer_key = makeTopLevelLayerKey(idx);
+                        } else {
+                            layer_key = makeSubLayerKey(current_key, idx);
+                        }
+                    }
+                } else {
+                    // Anonymous layer: auto-assign next sibling index at this nesting level.
+                    const idx: u4 = @truncate(next_anon_order.*);
+                    next_anon_order.* += 1;
+                    if (current_key == UNLAYERED_KEY) {
+                        layer_key = makeTopLevelLayerKey(idx);
+                    } else {
+                        layer_key = makeSubLayerKey(current_key, idx);
+                    }
+                }
+                // Recurse into this layer's rules with the new key.
+                // Use a fresh counter so sibling @layer blocks at the same nesting level get consecutive indices.
+                var inner_anon_counter: u16 = 0;
+                try flattenRules(lr.rules, vw, vh, out, arena, layer_map, &inner_anon_counter, layer_key);
             },
             else => {},
         }
@@ -535,6 +676,9 @@ fn extractFontFaces(rules: []const ast.Rule, out: *std.ArrayListUnmanaged(FontFa
             .container => |cr| {
                 extractFontFaces(cr.rules, out, arena);
             },
+            .layer => |lr| {
+                extractFontFaces(lr.rules, out, arena);
+            },
             else => {},
         }
     }
@@ -554,6 +698,9 @@ fn extractKeyframes(rules: []const ast.Rule, out: *std.StringHashMapUnmanaged(as
             },
             .container => |cr| {
                 extractKeyframes(cr.rules, out, arena);
+            },
+            .layer => |lr| {
+                extractKeyframes(lr.rules, out, arena);
             },
             else => {},
         }
@@ -651,6 +798,7 @@ const IndexedFlatRule = struct {
     selector: selectors.ParsedSelector,
     declarations: []const Declaration,
     source_order: u32,
+    layer_order: u16 = UNLAYERED_KEY,
 };
 
 fn buildFlatRuleIndex(rules: []const FlatRule, arena: std.mem.Allocator) !FlatRuleIndex {
@@ -669,6 +817,7 @@ fn buildFlatRuleIndex(rules: []const FlatRule, arena: std.mem.Allocator) !FlatRu
                     .selector = parsed,
                     .declarations = rule.declarations,
                     .source_order = rule.source_order,
+                    .layer_order = rule.layer_order,
                 };
                 const key = findKeySelector(parsed.components);
                 switch (key) {
@@ -1030,6 +1179,7 @@ fn collectMatching(
                     .specificity = rule.selector.specificity.toU32(),
                     .source_order = rule.source_order,
                     .origin = origin,
+                    .layer_order = rule.layer_order,
                 });
             }
         }
@@ -1051,6 +1201,7 @@ fn collectMatching(
                                 .specificity = rule.selector.specificity.toU32(),
                                 .source_order = rule.source_order,
                                 .origin = origin,
+                                .layer_order = rule.layer_order,
                             });
                         }
                     }
@@ -1074,6 +1225,7 @@ fn collectMatching(
                                 .specificity = rule.selector.specificity.toU32(),
                                 .source_order = rule.source_order,
                                 .origin = origin,
+                                .layer_order = rule.layer_order,
                             });
                         }
                     }
@@ -1094,6 +1246,7 @@ fn collectMatching(
                             .specificity = rule.selector.specificity.toU32(),
                             .source_order = rule.source_order,
                             .origin = origin,
+                            .layer_order = rule.layer_order,
                         });
                     }
                 }

@@ -386,6 +386,7 @@ pub const Rule = union(enum) {
     keyframes: KeyframesRule,
     font_face: FontFaceRule,
     import: ImportRule,
+    layer: LayerRule,
 };
 
 pub const ImportRule = struct {
@@ -420,6 +421,16 @@ pub const KeyframesRule = struct {
 
 pub const FontFaceRule = struct {
     declarations: []Declaration,
+};
+
+pub const LayerRule = struct {
+    /// null = anonymous layer (auto-assigned order).
+    /// non-null = named layer; may have empty `rules` for declaration-only.
+    name: ?[]const u8,
+    /// Names from an ordering statement like `@layer name1, name2;`
+    /// (rules is empty for these). Each name is a separate layer in order.
+    ordering: []const []const u8,
+    rules: []Rule,
 };
 
 pub const Stylesheet = struct {

@@ -79,6 +79,7 @@ pub const Keyword = enum {
     initial,
     unset,
     revert,
+    revert_layer,
     // Display
     block,
     inline_,

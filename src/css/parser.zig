@@ -664,43 +664,79 @@ pub const Parser = struct {
         //   @layer { rules }       — anonymous layer
         //   @layer name;           — layer declaration (no content)
         //   @layer name, name2;    — layer ordering statement
-        // We treat layers as transparent: parse inner rules and flatten them.
         const first_t = self.skipWhitespace();
         if (first_t.type == .eof) return null;
 
         if (first_t.type == .open_curly) {
             // @layer { rules } — anonymous layer, parse inner rules
             const rules = try self.parseRuleList();
-            // Return as media rule with empty query (always matches)
-            return .{ .media = .{
-                .query = .{ .raw = "" },
+            return .{ .layer = .{
+                .name = null,
+                .ordering = &[_][]const u8{},
                 .rules = rules,
             } };
         }
 
         if (first_t.type == .semicolon) {
-            // @layer name; — declaration only, skip
+            // @layer; — bare declaration, skip
             return null;
         }
 
-        // Skip layer name tokens until '{' or ';'
-        while (true) {
-            const t = self.peekToken();
-            if (t.type == .open_curly or t.type == .semicolon or t.type == .eof) break;
-            _ = self.nextToken();
+        // Collect layer name tokens. Could be a single identifier (name),
+        // or comma-separated list of identifiers (name1, name2, ...).
+        // Token: identifier, comma, or the first identifier.
+        var name_list: std.ArrayList([]const u8) = .empty;
+        var current_name: ?[]const u8 = null;
+
+        // Process the first token we already consumed with skipWhitespace
+        if (first_t.type == .ident or first_t.type == .function) {
+            current_name = first_t.text(self.source);
+        } else if (first_t.type == .comma) {
+            // Just a comma, continue
         }
 
-        const next = self.nextToken();
-        if (next.type == .open_curly) {
-            // @layer name { rules }
-            const rules = try self.parseRuleList();
-            return .{ .media = .{
-                .query = .{ .raw = "" },
-                .rules = rules,
-            } };
+        while (true) {
+            const t = self.nextToken();
+            if (t.type == .open_curly or t.type == .semicolon or t.type == .eof) {
+                // End of name list — add final name if present
+                if (current_name) |n| {
+                    try name_list.append(self.alloc(), n);
+                }
+                if (t.type == .semicolon or t.type == .eof) {
+                    // @layer name; or @layer name, name2;
+                    return .{ .layer = .{
+                        .name = null,
+                        .ordering = try name_list.toOwnedSlice(self.alloc()),
+                        .rules = &[_]ast.Rule{},
+                    } };
+                }
+                // t.type == .open_curly => @layer name { rules }
+                const rules = try self.parseRuleList();
+                const layer_name: ?[]const u8 = if (name_list.items.len > 0) name_list.items[0] else null;
+                return .{ .layer = .{
+                    .name = layer_name,
+                    .ordering = &[_][]const u8{},
+                    .rules = rules,
+                } };
+            }
+            if (t.type == .comma) {
+                if (current_name) |n| {
+                    try name_list.append(self.alloc(), n);
+                    current_name = null;
+                }
+                continue;
+            }
+            if (t.type == .ident or t.type == .function) {
+                if (current_name) |n| {
+                    // Two consecutive identifiers — multi-word name?
+                    // But we already have .ordering case handled. Just skip to next token.
+                    _ = n;
+                }
+                current_name = t.text(self.source);
+                continue;
+            }
+            // Skip any other tokens
         }
-        // @layer name; — semicolon ends it
-        return null;
     }
 
     fn parseImportRule(self: *Parser) ParseError!?ast.Rule {

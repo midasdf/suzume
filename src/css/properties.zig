@@ -2658,6 +2658,7 @@ fn parseCssWideKeyword(s: []const u8) ?values.Keyword {
     if (eqlIgnoreCase(s, "initial")) return .initial;
     if (eqlIgnoreCase(s, "unset")) return .unset;
     if (eqlIgnoreCase(s, "revert")) return .revert;
+    if (eqlIgnoreCase(s, "revert-layer")) return .revert_layer;
     return null;
 }
 
