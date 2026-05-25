@@ -238,6 +238,10 @@ pub const KotoriRuntime = struct {
         // Required by encoding .any.* WPT tests.
         _ = self.eval(text_encoder_polyfill_js);
 
+        // FileAPI §6-§8 — Blob, File, FileReader polyfill.
+        // Unlocks FileAPI .any.* WPT tests.
+        _ = self.eval(blob_file_polyfill_js);
+
         // WHATWG URL §6: globalThis.URLSearchParams constructor.
         // Run before url_polyfill_js so URL's searchParams getter can use
         // new URLSearchParams().
@@ -6505,6 +6509,37 @@ pub const KotoriRuntime = struct {
         \\      }else{s+=String.fromCharCode(0xFFFD);i++;}
         \\    }return s;
         \\  };
+        \\}
+    ;
+
+    /// FileAPI §6-§8: Blob, File, FileReader polyfill for kotori.
+    /// Mirrors QuickJS polyfill in web_api.zig. Provides Blob (type/size/
+    /// slice/text/arrayBuffer), File (name/lastModified), and FileReader
+    /// (readAsText/readAsArrayBuffer/readAsDataURL/abort).
+    const blob_file_polyfill_js =
+        \\if(typeof Blob==='undefined'){
+        \\  globalThis.Blob=function(parts,opts){
+        \\    this.type=(opts&&opts.type)||'';
+        \\    var s='';if(parts)for(var i=0;i<parts.length;i++)s+=typeof parts[i]==='string'?parts[i]:String(parts[i]);
+        \\    this._data=s;this.size=s.length;
+        \\  };
+        \\  Blob.prototype.text=function(){return Promise.resolve(this._data);};
+        \\  Blob.prototype.arrayBuffer=function(){var b=new ArrayBuffer(this._data.length);var v=new Uint8Array(b);for(var i=0;i<this._data.length;i++)v[i]=this._data.charCodeAt(i);return Promise.resolve(b);};
+        \\  Blob.prototype.slice=function(s,e,t){return new Blob([this._data.slice(s,e)],{type:t||this.type});};
+        \\}
+        \\if(typeof File==='undefined'){
+        \\  globalThis.File=function(parts,name,opts){
+        \\    Blob.call(this,parts,opts);this.name=name;this.lastModified=(opts&&opts.lastModified)||Date.now();
+        \\  };
+        \\  File.prototype=Object.create(Blob.prototype);File.prototype.constructor=File;
+        \\}
+        \\if(typeof FileReader==='undefined'){
+        \\  globalThis.FileReader=function(){this.readyState=0;this.result=null;this.error=null;this.onload=null;this.onerror=null;this.onloadend=null;};
+        \\  FileReader.EMPTY=0;FileReader.LOADING=1;FileReader.DONE=2;
+        \\  FileReader.prototype.readAsText=function(blob){var self=this;self.readyState=1;blob.text().then(function(t){self.result=t;self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
+        \\  FileReader.prototype.readAsArrayBuffer=function(blob){var self=this;self.readyState=1;blob.arrayBuffer().then(function(b){self.result=b;self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
+        \\  FileReader.prototype.readAsDataURL=function(blob){var self=this;self.readyState=1;blob.text().then(function(t){self.result='data:'+(blob.type||'')+';base64,'+btoa(t);self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
+        \\  FileReader.prototype.abort=function(){this.readyState=2;if(this.onerror)this.onerror({target:this});};
         \\}
     ;
 
