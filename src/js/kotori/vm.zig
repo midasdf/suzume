@@ -556,6 +556,30 @@ pub const VM = struct {
                                 continue;
                             } else |_| {}
                         }
+                        // TypedArray / ArrayBuffer special: "length" and
+                        // "byteLength" are virtual properties — they have no
+                        // own-property entry but are observable via bracket
+                        // access (L1171-1180, L1451-1461) and must therefore
+                        // also report HasProperty==true per §10.1.9.
+                        if (obj.obj_type == .typed_array or obj.obj_type == .array_buffer) {
+                            const name_str = self.pool.get(lhs.asStringId()) orelse "";
+                            if (std.mem.eql(u8, name_str, "length")) {
+                                self.push(JsValue.initBool(true));
+                                continue;
+                            }
+                            if (std.mem.eql(u8, name_str, "byteLength")) {
+                                self.push(JsValue.initBool(true));
+                                continue;
+                            }
+                            // Numeric index (e.g. "0", "1", …) — within bounds?
+                            // (TypedArrays only; ArrayBuffer has no indexed access.)
+                            if (obj.obj_type == .typed_array) {
+                                if (std.fmt.parseInt(usize, name_str, 10)) |idx| {
+                                    self.push(JsValue.initBool(idx < typedArrayLen(obj)));
+                                    continue;
+                                } else |_| {}
+                            }
+                        }
                         // ECMA-262 §13.10.2 `in`: true if HasProperty(obj, key)
                         // returns true. Data props + accessor descriptors on
                         // the prototype chain both count; `getProperty` returns
@@ -4123,9 +4147,20 @@ pub const VM = struct {
     fn nativeArraySlice(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         if (!this.isObject()) return JsValue.undefined_val;
         const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const len: i64 = @intCast(obj.data.array.items.len);
+        var len: i64 = 0;
+        var is_typed: bool = false;
+
+        // Determine length based on object type
+        if (obj.obj_type == .array) {
+            len = @intCast(obj.data.array.items.len);
+        } else if (obj.obj_type == .typed_array) {
+            len = @intCast(typedArrayLen(obj));
+            is_typed = true;
+        } else {
+            return JsValue.undefined_val;
+        }
+
         var start: i64 = if (args.len > 0) clampToI64(args[0]) else 0;
         var end: i64 = if (args.len > 1) clampToI64(args[1]) else len;
         if (start < 0) start = @max(start + len, 0);
@@ -4138,9 +4173,21 @@ pub const VM = struct {
         try vm.objects.append(vm.allocator, new_arr);
         const s: usize = @intCast(start);
         const e: usize = @intCast(end);
-        for (obj.data.array.items[s..e]) |item| {
-            try new_arr.data.array.append(vm.allocator, item);
+
+        if (is_typed) {
+            const bytes = objectBytes(obj) orelse return JsValue.undefined_val;
+            const kind = if (obj.data == .typed_array_data) obj.data.typed_array_data.kind else object_mod.TypedArrayKind.u8_t;
+            const esz = kind.elementSize();
+            var i: usize = s;
+            while (i < e) : (i += 1) {
+                try new_arr.data.array.append(vm.allocator, typedArrayGetElement(kind, bytes, i * esz));
+            }
+        } else {
+            for (obj.data.array.items[s..e]) |item| {
+                try new_arr.data.array.append(vm.allocator, item);
+            }
         }
+
         return JsValue.initObject(new_arr);
     }
 
@@ -6507,6 +6554,22 @@ pub const VM = struct {
         }
         const tag = switch (obj.obj_type) {
             .array => "[object Array]",
+            .typed_array => blk: {
+                const kind = if (obj.data == .typed_array_data) obj.data.typed_array_data.kind else object_mod.TypedArrayKind.u8_t;
+                break :blk switch (kind) {
+                    .u8_t => "[object Uint8Array]",
+                    .i8_t => "[object Int8Array]",
+                    .u16_t => "[object Uint16Array]",
+                    .i16_t => "[object Int16Array]",
+                    .u32_t => "[object Uint32Array]",
+                    .i32_t => "[object Int32Array]",
+                    .f32_t => "[object Float32Array]",
+                    .f64_t => "[object Float64Array]",
+                    .u64_big => "[object BigUint64Array]",
+                    .i64_big => "[object BigInt64Array]",
+                    .u8_clamped => "[object Uint8ClampedArray]",
+                };
+            },
             .regexp => "[object RegExp]",
             .proxy => blk: {
                 // For Proxies, walk the target's @@toStringTag first; if the
