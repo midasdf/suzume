@@ -1417,6 +1417,40 @@ pub fn elementRemove(
     return quickjs.JS_UNDEFINED();
 }
 
+
+// ── Namespace helpers for cloneNode ──────────────────────────────────
+
+/// Map Lexbor namespace ID → W3C namespace URI string.
+/// Lexbor HTML-document ns IDs (observed in dom_selector.zig):
+/// 1=HTML, 2=MATH, 3=SVG, 4=XLINK, 5=XML, 6=XMLNS
+fn nsIdToUriStr(ns_id: usize) ?[]const u8 {
+    return switch (ns_id) {
+        1 => "http://www.w3.org/1999/xhtml",
+        2 => "http://www.w3.org/1998/Math/MathML",
+        3 => "http://www.w3.org/2000/svg",
+        4 => "http://www.w3.org/1999/xlink",
+        5 => "http://www.w3.org/XML/1998/namespace",
+        6 => "http://www.w3.org/2000/xmlns/",
+        else => null,
+    };
+}
+
+/// Map a JS namespaceURI value → Lexbor ns ID.
+/// Used when createElementNS sets JS namespaceURI but not the Lexbor ns field.
+fn nsValToNsId(c: *qjs.JSContext, ns_val: qjs.JSValue) usize {
+    const ns_str = qjs.JS_ToCString(c, ns_val);
+    if (ns_str == null) return 0;
+    defer qjs.JS_FreeCString(c, ns_str);
+    const ns_slice = std.mem.span(ns_str.?);
+    if (std.mem.eql(u8, ns_slice, "http://www.w3.org/1999/xhtml")) return 1;
+    if (std.mem.eql(u8, ns_slice, "http://www.w3.org/1998/Math/MathML")) return 2;
+    if (std.mem.eql(u8, ns_slice, "http://www.w3.org/2000/svg")) return 3;
+    if (std.mem.eql(u8, ns_slice, "http://www.w3.org/1999/xlink")) return 4;
+    if (std.mem.eql(u8, ns_slice, "http://www.w3.org/XML/1998/namespace")) return 5;
+    if (std.mem.eql(u8, ns_slice, "http://www.w3.org/2000/xmlns/")) return 6;
+    return 0;
+}
+
 pub fn elementCloneNode(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -1514,9 +1548,18 @@ pub fn elementCloneNode(
     const tag_ptr = lxb_dom_element_local_name(src_elem, &tag_len);
     if (tag_ptr == null) return quickjs.JS_NULL();
 
+    // Preserve source namespace (critical for SVG/MathML cloning).
+    // lxb_dom_document_create_element always creates in the HTML namespace
+    // for HTML-type documents.  We copy the source's Lexbor ns ID so the
+    // clone inherits the correct namespace for serialization / selection.
+    const src_ns: usize = src_elem.node.ns;
+
     // Create new element with same tag
     const new_elem = lxb_dom_document_create_element(doc, tag_ptr.?, tag_len, null) orelse return quickjs.JS_NULL();
     const new_node: *lxb.lxb_dom_node_t = @ptrCast(new_elem);
+
+    // Restore namespace on the clone (fix: SVG/MathML elements clone to correct ns)
+    new_elem.node.ns = src_ns;
 
     // Copy all attributes
     var attr: ?*anyopaque = lxb_dom_element_first_attribute_noi(src_elem);
@@ -1554,13 +1597,51 @@ pub fn elementCloneNode(
     }
 
     const result = api.wrapNode(c, new_node);
-    // Preserve namespace-related JS properties from source
+
+    // Preserve namespaceURI (fix: SVG/MathML cloning).
+    // The JS prototype default is always "http://www.w3.org/1999/xhtml", which is
+    // wrong for SVG/MathML elements.  Two sources of truth exist:
+    //   1. Lexbor node.ns field (parser-created elements — always correct)
+    //   2. JS per-instance namespaceURI override (createElementNS — may differ
+    //      from Lexbor ns when QJS createElementNS sets JS property but not ns field)
+    // Prefer explicit JS override when it differs from the HTML default; otherwise
+    // compute from the Lexbor ns field.
     const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
-    if (!quickjs.JS_IsUndefined(ns_val)) {
-        _ = qjs.JS_SetPropertyStr(c, result, "namespaceURI", ns_val);
-    } else {
-        qjs.JS_FreeValue(c, ns_val);
+    const html_ns_str = "http://www.w3.org/1999/xhtml";
+
+    // Compare as C strings to detect explicit namespaceURI overrides
+    const ns_cstr = if (!quickjs.JS_IsUndefined(ns_val)) qjs.JS_ToCString(c, ns_val) else null;
+    defer if (ns_cstr) |s| qjs.JS_FreeCString(c, s);
+    defer qjs.JS_FreeValue(c, ns_val);
+
+    var ns_was_set = false;
+    if (ns_cstr) |ns_s| {
+        const ns_slice = std.mem.span(ns_s);
+        // If source has an explicit per-instance namespaceURI override
+        // (e.g. createElementNS-created SVG), use it directly.
+        if (!std.mem.eql(u8, ns_slice, html_ns_str)) {
+            _ = qjs.JS_SetPropertyStr(c, result, "namespaceURI", ns_val);
+            ns_was_set = true;
+
+            // Also fix the Lexbor ns field: createElementNS in QJS sets the JS
+            // property but leaves node.ns as HTML (1).  Map the explicit NS URI
+            // back to the correct ns ID so serialization/selection is correct.
+            const ns_from_js = nsValToNsId(c, ns_val);
+            if (ns_from_js > 0) {
+                new_elem.node.ns = ns_from_js;
+            }
+        }
     }
+
+    // Fallback: compute namespaceURI from Lexbor ns ID (for parser-created elements)
+    if (!ns_was_set) {
+        const uri = nsIdToUriStr(src_ns);
+        if (uri) |u| {
+            _ = qjs.JS_SetPropertyStr(c, result, "namespaceURI", qjs.JS_NewStringLen(c, u.ptr, u.len));
+        }
+    }
+
+    // Preserve prefix from source
     const prefix_val = qjs.JS_GetPropertyStr(c, this_val, "prefix");
     if (!quickjs.JS_IsNull(prefix_val) and !quickjs.JS_IsUndefined(prefix_val)) {
         _ = qjs.JS_SetPropertyStr(c, result, "prefix", prefix_val);
