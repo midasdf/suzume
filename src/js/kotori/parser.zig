@@ -373,10 +373,17 @@ pub const Parser = struct {
                     'f' => { try buf.append(self.allocator,12); i += 1; },
                     'v' => { try buf.append(self.allocator,11); i += 1; },
                     'x' => {
-                        // \xNN — 2-digit hex
+                        // \xNN — 2-digit hex. Non-ASCII bytes (0x80-0xFF)
+                        // represent Latin-1 code points. Emit as valid UTF-8
+                        // (2-byte encoding) so the string stays well-formed.
                         if (i + 2 < raw.len) {
                             if (std.fmt.parseInt(u8, raw[i + 1 .. i + 3], 16)) |byte| {
-                                try buf.append(self.allocator,byte);
+                                if (byte < 0x80) {
+                                    try buf.append(self.allocator, byte);
+                                } else {
+                                    try buf.append(self.allocator, 0xC0 | (byte >> 6));
+                                    try buf.append(self.allocator, 0x80 | (byte & 0x3F));
+                                }
                                 i += 3;
                             } else |_| {
                                 try buf.append(self.allocator,'\\');

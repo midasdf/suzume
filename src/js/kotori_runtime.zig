@@ -6500,11 +6500,12 @@ pub const KotoriRuntime = struct {
         \\    var s='',i=0;
         \\    // UTF-16 decode (little-endian, big-endian, auto-detect)
         \\    if(this.encoding==='utf-16le'||this.encoding==='utf-16be'||this.encoding==='utf-16'){
-        \\      var isLE=this.encoding==='utf-16le';
-        \\      if(this.encoding==='utf-16'&&a.length>=2){
-        \\        if(a[0]===0xFF&&a[1]===0xFE){isLE=true;i=2;}
-        \\        else if(a[0]===0xFE&&a[1]===0xFF){isLE=false;i=2;}
-        \\      }else if(!this.ignoreBOM&&a.length>=2){
+      \\      var isLE=this.encoding==='utf-16le'||this.encoding==='utf-16';
+      \\      if(this.encoding==='utf-16'&&a.length>=2){
+      \\        if(a[0]===0xFF&&a[1]===0xFE){isLE=true;i=2;}
+      \\        else if(a[0]===0xFE&&a[1]===0xFF){isLE=false;i=2;}
+      \\        // else: no BOM — keep isLE=true (Encoding §6.2 step 4, default LE)
+      \\      }else if(!this.ignoreBOM&&a.length>=2){
         \\        if((isLE&&a[0]===0xFF&&a[1]===0xFE)||(!isLE&&a[0]===0xFE&&a[1]===0xFF))i=2;
         \\      }
         \\      while(i<a.length){
