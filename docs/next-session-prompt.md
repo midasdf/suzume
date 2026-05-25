@@ -1,87 +1,79 @@
 # suzume ブラウザ — 次セッションのプロンプト
 
 TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
-プラン: `~/.claude/plans/sleepy-puzzling-shell.md`
 
-## 前セッション成果（2026-03-25）
+## 前回セッション成果（2026-05-26 ultrawork）
 
-### 25 commits pushed to main
+### 12 commits, 9 waves (149-158)
 
-### WPTスコア
-| Area | Start | End | Δ subtests |
-|------|-------|-----|-----------|
-| dom/nodes | 9.5% | **37.6%** | +1500 |
-| classList | 630 | **1060** | +430 |
-| css-color | 14.6% | **~24%** | +500 |
-| css-text | 50.9% | **52.3%** | +27 |
-| css-values | 31.8% | ~33% | +47 |
-| css-variables | 24.0% | ~32% | +33 |
-| css-display | 68.2% | ~69% | +4 |
-| css-selectors | 43.1% | ~47% | +30 |
-| css-box | 97.4% | 97.4% | 0 |
-| html/dom | new | **27.8%** | baseline |
-| dom/events | new | **13.5%** | baseline |
-| css/cssom-view | new | **26.4%** | baseline |
-| xhr | new | **18.7%** | baseline |
+| Wave | Commit | 内容 |
+|------|--------|------|
+| 149 | d49fb07 | Event() ctor rejects empty-type per spec |
+| 150 | 54e24ed | WheelEvent ctor: deltaX/Y/Z/deltaMode |
+| 151 | 72d7e51+df87186 | TextEncoder/TextDecoder UTF-8 polyfill + surrogate fix |
+| 152 | 9e48f0a | URLSearchParams full API (17/27 WPT) |
+| 153 | 977edd0 | FocusEvent + InputEvent native constructors |
+| 154 | df9a9ec | VM: nativeArraySlice + `in` for TypedArrays |
+| 155 | 021d3bf | Blob/File/FileReader polyfill |
+| 156 | bc03d12+e47c843 | UTF-16LE/BE decode + \\xHH parser fix |
+| 157 | fb92edf | TextDecoder stream decode + pending bytes |
+| 158 | a042934 | instanceof fix: File.prototype chain |
 
-### 主要実装
-- **WebDriver server** (21 endpoints, --webdriver=PORT)
-- **DOMException constructor** (assert_throws_dom対応) — classList +430テスト
-- **CSS Color 4**: hwb, oklab, oklch, lab, lch, color() — +500テスト
-- **window/self globals** + Named access on Window
-- **:is()/:where()** OR-semantics matching
-- **classList DOMTokenList**: toString, toggle force, unique tokens, validation
-- **text-wrap/tab-size/hyphens** properties
-- **calc()** distributive expansion, NaN/Infinity clamping
-- **var()** resolution in getPropertyValue
-- **Node.isEqualNode** structural equality
-- **element.localName, namespaceURI, prefix**
-- **Parallel WPT runner** (run_wpt_parallel.sh)
-- **round()/mod()/rem()** CSS math functions
-- **opacity %** support + clamp
-- **color() computed value** serialization (color(srgb ...) format)
+### WPT改善（.any.* tests）
+- `encoding/api-basics`: 0 → **6/6 PASS**
+- `encoding/api-surrogates-utf8`: 0 → **7/7 PASS**
+- `urlsearchparams-constructor`: 0 → **17/27 PASS**
+- `events/Event-constructors`: 13 → **14/14 PASS**
 
-### WPT非CSSエリアのベースライン
-- url: 0% (テスト4件、ERR)
-- encoding: 未測定
-- html/syntax: 2.6% (パーサー適合性、reftest多)
-- fetch: 未測定 (236テスト)
-- websockets: 未測定 (126テスト)
-- webstorage: 0% (timeout問題)
-- FileAPI: 4.8%
+### 主要変更ファイル
+- `src/js/kotori_runtime.zig` — +700 lines (6 polyfills)
+- `src/js/kotori_dom.zig` — +90 lines (4 constructors + fix)
+- `src/js/kotori/vm.zig` — +67 lines (3 operations)
+- `src/js/kotori/parser.zig` — +10 lines (bug fix)
 
-## 次セッション方針
-
-### 基礎→上位の順序で進める
-```
-URL/Encoding → HTML Parser → DOM → CSSOM → CSS → Layout → Web APIs
-```
-
-### 優先タスク
-1. **DOM core** — dom/events改善、Node.cloneNode深化、ChildNodeミキシン
-2. **html/dom** — Document properties、element interfaces
-3. **CSSOM** — CSSStyleSheet、CSSRule、matchMedia
-4. **css-cascade** — @layer実装（1.9%→）
-5. **css-selectors** — querySelectorAll内:is()/:where()
-
-### 残りの大きな実装項目（全部やる）
-- @layer (CSS Cascade 5) — css-cascade 1.9%
-- Shadow DOM — 228テスト
-- color-mix() / relative color syntax — css-color +1600テスト
-- DOMParser (XML/XHTML) — dom/nodes ERR多数
-- Service Workers / Web Workers完全化
-- CSS Grid/Flexbox reftests
-- position:sticky
-- :has() selector matching
-
-## ビルド・テスト
-
+## ビルド（重要）
 ```bash
-# ビルド（.zig-cacheが古い場合はrm -rf .zig-cache zig-out）
-zig build
+# GCC 16/glibc 2.43 の .sframe 問題回避
+# /tmp/libc-min/ は再起動後に再作成が必要
+zig build --libc /tmp/libc-min/libc.txt
+```
+libc-min の中身: stripped crt1.o (no .sframe) + dynamic .so symlinks + libc_nonshared.a
 
-# 並列WPTテスト
-./tests/wpt/run_wpt_parallel.sh --jobs 4 css/css-box
+## 次セッション優先タスク（4項目全部）
+
+### 1. VM改善
+- `instanceof` に `Object.create()` チェーン対応を追加（ネイティブ側）
+  - 参考: vm.zig:486-515 の `nativeInstanceOf`、walk は `lhs_obj.prototype` を辿る
+  - 問題: `Object.create(Blob.prototype)` で作られた `File.prototype` のプロトタイプチェーンを instanceof が検出しない
+- `+ ''` 暗黙的 toString 強制変換の修正
+  - 参考: vm.zig:2932 `stringConcat` → `formatValue` fast path（Proxy再帰回避のため意図的）
+
+### 2. Polyfill継続
+- `AbortController` + `AbortSignal`（web_api.zig:2677-2688 にJS実装あり → kotori_runtime.zig に注入）
+- `DOMParser`（XML/XHTMLパース）
+- `MutationObserver`
+- `CustomEvent` コンストラクタ（kotori_dom.zig に追加、WheelEventパターン踏襲）
+
+### 3. CSS Cascade @layer
+- `src/css/parser.zig:662-704` に @layer 構文解析は既存（透過扱い）
+- `src/css/cascade.zig` (3971行) にレイヤー優先度システム追加
+- 全テストが reftest（visual比較）のため検証が難しい
+- 必要なもの: layer ID追跡、cascade順序付け、revert-layer キーワード
+- **大きい機能。複数コミットに分割推奨。**
+
+### 4. DOMコア
+- `Node.cloneNode` の名前空間クローン
+  - 参考: `src/js/dom_node.zig:1420` `elementCloneNode`
+  - SVG要素を暗黙のHTML名前空間でクローンしてしまう問題
+- `ChildNode` ミックスインのカバレッジ拡大
+  - `before/after/replaceWith/remove` は QuickJS側・kotori側両方に実装済み
+  - エッジケーステスト（CharacterData全種、DocumentType等）
+
+### WPTテストの制約
+- `.any.js` テスト（JS-only）は file:// で直接動作
+- `.any.html` / HTML-pageテストはHTTPサーバー経由だと不安定（hang/timeout）
+- ハイブリッド方式: ローカルHTMLがHTTPから testharness.js + .any.js を読み込む（動作確認済み、遅い）
+- CSS系テストは reftest（視覚比較）が中心 → JSで検証不可
 ./tests/wpt/run_wpt_parallel.sh --jobs 4 dom/nodes
 ./tests/wpt/run_wpt_parallel.sh --jobs 4 html/dom
 
