@@ -508,7 +508,16 @@ pub const VM = struct {
                             cur = if (p.obj_type == .proxy)
                                 try self.proxyGetPrototype(p)
                             else
-                                p.prototype;
+                                p.prototype orelse blk: {
+                                    // Fallback: Object.create()-constructed chains
+                                    // where the prototype field may be null but
+                                    // the chain is reachable via __proto__ lookup.
+                                    const __proto_sid = try self.pool.intern("__proto__");
+                                    if (p.getProperty(__proto_sid)) |pv| {
+                                        if (pv.isObject()) break :blk pv.asJsObject();
+                                    }
+                                    break :blk null;
+                                };
                         }
                         self.push(JsValue.initBool(found));
                     } else {
@@ -2930,15 +2939,39 @@ pub const VM = struct {
     }
 
     fn stringConcat(self: *VM, a: JsValue, b: JsValue) !JsValue {
-        // Keep this path on the cheap formatValue fast-path; the user-toString
-        // ToPrimitive route lives in `nativeStringConstructor` (the explicit
-        // `String()` call). Mixing the toString dispatch into every `+`
-        // regression-bombs because the Proxy get trap can itself perform
-        // concatenation and recurse during WPT harness setup.
         var buf_a: [64]u8 = undefined;
         var buf_b: [64]u8 = undefined;
-        const a_str = formatValue(self.pool, a, &buf_a);
-        const b_str = formatValue(self.pool, b, &buf_b);
+
+        const toString_sid = try self.pool.intern("toString");
+        const obj_proto_to_string: ?JsValue = if (self.object_proto) |op| op.getProperty(toString_sid) else null;
+
+        // Returns true if val is a non-Proxy object whose toString (found via
+        // prototype-chain lookup) differs from Object.prototype.toString,
+        // i.e. the object has a user-defined or built-in-specialized toString.
+        const hasCustomToString = struct {
+            fn check(val: JsValue, ts_sid: StringId, default_ts: ?JsValue) bool {
+                if (!val.isObject()) return false;
+                const obj = val.asJsObject();
+                if (obj.obj_type == .proxy) return false;
+                const obj_ts = obj.getProperty(ts_sid);
+                if (obj_ts) |ots| {
+                    if (default_ts) |dts| return ots.bits != dts.bits;
+                    return true;
+                }
+                return false;
+            }
+        }.check;
+
+        const a_str = if (hasCustomToString(a, toString_sid, obj_proto_to_string))
+            try self.toStringValue(a, &buf_a)
+        else
+            formatValue(self.pool, a, &buf_a);
+
+        const b_str = if (hasCustomToString(b, toString_sid, obj_proto_to_string))
+            try self.toStringValue(b, &buf_b)
+        else
+            formatValue(self.pool, b, &buf_b);
+
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(self.allocator);
         try buf.appendSlice(self.allocator, a_str);
