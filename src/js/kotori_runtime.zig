@@ -6493,10 +6493,21 @@ pub const KotoriRuntime = struct {
         \\      ucs2:'utf-16le','iso-10646-ucs-2':'utf-16le'};
         \\    this.encoding=labels[label]||label;
         \\    this.fatal=!!(opts&&opts.fatal);this.ignoreBOM=!!(opts&&opts.ignoreBOM);
+        \\    this._pending=null; // Encoding §9.2 step 5 — pending buffer for stream decode
         \\  };
-        \\  TextDecoder.prototype.decode=function(buf){
-        \\    if(!buf||buf.byteLength===0)return'';
+        \\  TextDecoder.prototype.decode=function(buf,opts){
+        \\    var stream=!!(opts&&opts.stream);
+        \\    // Encoding §9.2 step 7-8: flush on null/undefined input
+        \\    if(buf===undefined||buf===null||buf.byteLength===0){
+        \\      if(this._pending){var r=String.fromCharCode(0xFFFD);this._pending=null;return r;}
+        \\      return'';
+        \\    }
         \\    var a=buf instanceof Uint8Array?buf:new Uint8Array(buf.buffer||buf);
+        \\    // Prepend pending bytes from previous stream decode (Encoding §9.2 step 6)
+        \\    if(this._pending){
+        \\      var c=new Uint8Array(this._pending.length+a.length);
+        \\      c.set(this._pending);c.set(a,this._pending.length);a=c;this._pending=null;
+        \\    }
         \\    var s='',i=0;
         \\    // UTF-16 decode (little-endian, big-endian, auto-detect)
         \\    if(this.encoding==='utf-16le'||this.encoding==='utf-16be'||this.encoding==='utf-16'){
@@ -6509,10 +6520,13 @@ pub const KotoriRuntime = struct {
         \\        if((isLE&&a[0]===0xFF&&a[1]===0xFE)||(!isLE&&a[0]===0xFE&&a[1]===0xFF))i=2;
         \\      }
         \\      while(i<a.length){
-        \\        if(i+1>=a.length){s+=String.fromCharCode(0xFFFD);break;}
+        \\        if(i+1>=a.length){if(stream){this._pending=a.slice(i);break;}else{s+=String.fromCharCode(0xFFFD);break;}}
         \\        var w=isLE?(a[i]|(a[i+1]<<8)):((a[i]<<8)|a[i+1]);i+=2;
         \\        if(w>=0xD800&&w<=0xDBFF){ // high surrogate
-        \\          if(i+1>=a.length){s+=String.fromCharCode(0xFFFD);break;}
+        \\          if(i+1>=a.length){
+        \\            if(stream){this._pending=a.slice(i-2);break;} // save from high surrogate
+        \\            else{s+=String.fromCharCode(0xFFFD);break;}
+        \\          }
         \\          var w2=isLE?(a[i]|(a[i+1]<<8)):((a[i]<<8)|a[i+1]);
         \\          if(w2>=0xDC00&&w2<=0xDFFF){s+=String.fromCodePoint(0x10000+((w-0xD800)<<10)+(w2-0xDC00));i+=2;}
         \\          else{s+=String.fromCharCode(0xFFFD);}
@@ -6526,16 +6540,22 @@ pub const KotoriRuntime = struct {
         \\      if(b<0x80){s+=String.fromCharCode(b);i++;}
         \\      else if(b<0xC2){s+=String.fromCharCode(0xFFFD);i++;}
         \\      else if(b<0xE0){
-        \\        if(i+1>=a.length||!isCont(a[i+1])){s+=String.fromCharCode(0xFFFD);i++;}
-        \\        else{s+=String.fromCharCode(((b&0x1F)<<6)|(a[i+1]&0x3F));i+=2;}
+        \\        if(i+1>=a.length||!isCont(a[i+1])){
+        \\          if(stream&&i+1>=a.length){this._pending=a.slice(i);break;} // save trailing for stream
+        \\          else{s+=String.fromCharCode(0xFFFD);i++;}
+        \\        }else{s+=String.fromCharCode(((b&0x1F)<<6)|(a[i+1]&0x3F));i+=2;}
         \\      }else if(b<0xF0){
-        \\        if(i+2>=a.length||!isCont(a[i+1])||!isCont(a[i+2])){s+=String.fromCharCode(0xFFFD);i++;}
-        \\        else{var cp3=((b&0x0F)<<12)|((a[i+1]&0x3F)<<6)|(a[i+2]&0x3F);
+        \\        if(i+2>=a.length||!isCont(a[i+1])||!isCont(a[i+2])){
+        \\          if(stream&&i+2>=a.length){this._pending=a.slice(i);break;} // save trailing for stream
+        \\          else{s+=String.fromCharCode(0xFFFD);i++;}
+        \\        }else{var cp3=((b&0x0F)<<12)|((a[i+1]&0x3F)<<6)|(a[i+2]&0x3F);
         \\          if(cp3<0x800){s+=String.fromCharCode(0xFFFD);i++;}
         \\          else{s+=String.fromCharCode(cp3);i+=3;}}
         \\      }else if(b<0xF5){
-        \\        if(i+3>=a.length||!isCont(a[i+1])||!isCont(a[i+2])||!isCont(a[i+3])){s+=String.fromCharCode(0xFFFD);i++;}
-        \\        else{var cp4=((b&0x07)<<18)|((a[i+1]&0x3F)<<12)|((a[i+2]&0x3F)<<6)|(a[i+3]&0x3F);
+        \\        if(i+3>=a.length||!isCont(a[i+1])||!isCont(a[i+2])||!isCont(a[i+3])){
+        \\          if(stream&&i+3>=a.length){this._pending=a.slice(i);break;} // save trailing for stream
+        \\          else{s+=String.fromCharCode(0xFFFD);i++;}
+        \\        }else{var cp4=((b&0x07)<<18)|((a[i+1]&0x3F)<<12)|((a[i+2]&0x3F)<<6)|(a[i+3]&0x3F);
         \\          if(cp4<0x10000||cp4>0x10FFFF){s+=String.fromCharCode(0xFFFD);i++;}
         \\          else{s+=String.fromCodePoint(cp4);i+=4;}}
         \\      }else{s+=String.fromCharCode(0xFFFD);i++;}
