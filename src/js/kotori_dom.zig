@@ -1483,7 +1483,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // FocusEvent.prototype → UIEvent.prototype (UI Events §3.4)
     const focus_proto = try vm.createObj(.{});
     focus_proto.prototype = ui_proto;
-    try registerEventCtor(vm, "FocusEvent", focus_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "FocusEvent", focus_proto, proto_sid, &nativeFocusEventConstructor);
+
+    // InputEvent.prototype → UIEvent.prototype (UI Events §4)
+    const input_proto = try vm.createObj(.{});
+    input_proto.prototype = ui_proto;
+    try registerEventCtorWithFn(vm, "InputEvent", input_proto, proto_sid, &nativeInputEventConstructor);
 
     // CompositionEvent.prototype → UIEvent.prototype (UI Events §3.6)
     const comp_proto = try vm.createObj(.{});
@@ -4841,6 +4846,7 @@ fn resolveCreateEventInterface(input: []const u8) ?[]const u8 {
         .{ .alias = "focusevent", .ctor = "FocusEvent" },
         .{ .alias = "hashchangeevent", .ctor = "HashChangeEvent" },
         .{ .alias = "htmlevents", .ctor = "Event" },
+        .{ .alias = "inputevent", .ctor = "InputEvent" },
         .{ .alias = "keyboardevent", .ctor = "KeyboardEvent" },
         .{ .alias = "messageevent", .ctor = "MessageEvent" },
         .{ .alias = "mouseevent", .ctor = "MouseEvent" },
@@ -7080,6 +7086,61 @@ fn nativeKeyboardEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsV
     obj.setProperty(vm.allocator, try vm.pool.intern("charCode"), JsValue.initNumber(0)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("keyCode"), JsValue.initNumber(0)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("which"), JsValue.initNumber(0)) catch {};
+    return ev_val;
+}
+
+/// FocusEvent ctor: extends UIEvent with relatedTarget. UI Events §3.4
+fn nativeFocusEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeUIEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    // relatedTarget defaults to null (already null from base Event)
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("relatedTarget") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                obj.setProperty(vm.allocator, sid, v) catch {};
+            }
+        }
+    }
+    return ev_val;
+}
+
+/// InputEvent ctor: extends UIEvent with data/isComposing/inputType. UI Events §4
+fn nativeInputEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeUIEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var data_sid: StringId = try vm.pool.intern("");
+    var is_composing = false;
+    var input_type_sid: StringId = try vm.pool.intern("");
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("data") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isString()) data_sid = v.asStringId();
+            }
+        }
+        if (vm.pool.intern("isComposing") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isTruthy()) is_composing = true;
+            }
+        }
+        if (vm.pool.intern("inputType") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isString()) input_type_sid = v.asStringId();
+            }
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("data"), JsValue.initString(data_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("isComposing"), JsValue.initBool(is_composing)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("inputType"), JsValue.initString(input_type_sid)) catch {};
     return ev_val;
 }
 
