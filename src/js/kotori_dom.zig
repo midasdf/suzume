@@ -1469,6 +1469,11 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(mouse_proto, "initMouseEvent", &nativeInitMouseEvent);
     try registerEventCtorWithFn(vm, "MouseEvent", mouse_proto, proto_sid, &nativeMouseEventConstructor);
 
+    // WheelEvent.prototype → MouseEvent.prototype (UI Events §3.4)
+    const wheel_proto = try vm.createObj(.{});
+    wheel_proto.prototype = mouse_proto;
+    try registerEventCtorWithFn(vm, "WheelEvent", wheel_proto, proto_sid, &nativeWheelEventConstructor);
+
     // KeyboardEvent.prototype → UIEvent.prototype (UI Events §3.5)
     const kb_proto = try vm.createObj(.{});
     kb_proto.prototype = ui_proto;
@@ -4840,6 +4845,7 @@ fn resolveCreateEventInterface(input: []const u8) ?[]const u8 {
         .{ .alias = "messageevent", .ctor = "MessageEvent" },
         .{ .alias = "mouseevent", .ctor = "MouseEvent" },
         .{ .alias = "mouseevents", .ctor = "MouseEvent" },
+        .{ .alias = "wheelevent", .ctor = "WheelEvent" },
         // NOTE: MutationEvent / MutationEvents / ProgressEvent are intentionally
         // absent — current DOM §4.5 eventInterfaceTable removed them, and
         // Document-createEvent.https.html explicitly asserts they throw
@@ -6969,6 +6975,48 @@ fn nativeMouseEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValu
     obj.setProperty(vm.allocator, try vm.pool.intern("button"), JsValue.initNumber(button)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("buttons"), JsValue.initNumber(buttons)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("relatedTarget"), related) catch {};
+    return ev_val;
+}
+
+/// WheelEvent ctor: extends MouseEvent with delta properties. UI Events §3.4
+fn nativeWheelEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeMouseEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var deltaX: f64 = 0;
+    var deltaY: f64 = 0;
+    var deltaZ: f64 = 0;
+    var deltaMode: f64 = 0; // DOM_DELTA_PIXEL
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("deltaX") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isNumber()) deltaX = v.asNumber();
+            }
+        }
+        if (vm.pool.intern("deltaY") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isNumber()) deltaY = v.asNumber();
+            }
+        }
+        if (vm.pool.intern("deltaZ") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isNumber()) deltaZ = v.asNumber();
+            }
+        }
+        if (vm.pool.intern("deltaMode") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isNumber()) deltaMode = v.asNumber();
+            }
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("deltaX"), JsValue.initNumber(deltaX)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("deltaY"), JsValue.initNumber(deltaY)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("deltaZ"), JsValue.initNumber(deltaZ)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("deltaMode"), JsValue.initNumber(deltaMode)) catch {};
     return ev_val;
 }
 
