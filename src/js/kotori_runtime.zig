@@ -6465,6 +6465,7 @@ pub const KotoriRuntime = struct {
         \\if(typeof TextEncoder==='undefined'){
         \\  globalThis.TextEncoder=function(){};
         \\  TextEncoder.prototype.encode=function(s){
+        \\    if(s===undefined||s===null)return new Uint8Array(0);
         \\    var a=[];for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);
         \\      if(c>=0xD800&&c<=0xDBFF){
         \\        var lo=s.charCodeAt(i+1);
@@ -6500,7 +6501,7 @@ pub const KotoriRuntime = struct {
         \\        if(i+3>=a.length||!isCont(a[i+1])||!isCont(a[i+2])||!isCont(a[i+3])){s+=String.fromCharCode(0xFFFD);i++;}
         \\        else{var cp4=((b&0x07)<<18)|((a[i+1]&0x3F)<<12)|((a[i+2]&0x3F)<<6)|(a[i+3]&0x3F);
         \\          if(cp4<0x10000||cp4>0x10FFFF){s+=String.fromCharCode(0xFFFD);i++;}
-        \\          else{cp4-=0x10000;s+=String.fromCharCode(0xD800+(cp4>>10),0xDC00+(cp4&0x3FF));i+=4;}}
+        \\          else{s+=String.fromCodePoint(cp4);i+=4;}}
         \\      }else{s+=String.fromCharCode(0xFFFD);i++;}
         \\    }return s;
         \\  };
