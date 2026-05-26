@@ -228,6 +228,10 @@ const inherited_properties = [_]PropertyId{
     .visibility,
     .list_style_type,
     .text_overflow,
+    .word_spacing,
+    .text_decoration_color,
+    .text_decoration_thickness,
+    .text_underline_offset,
 };
 
 fn isInherited(prop: PropertyId) bool {
@@ -1389,6 +1393,10 @@ fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
     style.list_style_type = parent.list_style_type;
     style.text_overflow = parent.text_overflow;
     style.text_indent = parent.text_indent;
+    style.word_spacing = parent.word_spacing;
+    style.text_decoration_color = parent.text_decoration_color;
+    style.text_decoration_thickness = parent.text_decoration_thickness;
+    style.text_underline_offset = parent.text_underline_offset;
 }
 
 fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: PropertyId) void {
@@ -1471,6 +1479,15 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .align_items => style.align_items = parent.align_items,
         .align_self => style.align_self = parent.align_self,
         .align_content => style.align_content = parent.align_content,
+        .gap => { style.gap = parent.gap; style.row_gap = parent.row_gap; },
+        .row_gap => style.row_gap = parent.row_gap,
+        .column_gap => style.gap = parent.gap,
+        .min_width => style.min_width = parent.min_width,
+        .min_height => style.min_height = parent.min_height,
+        .max_width => style.max_width = parent.max_width,
+        .max_height => style.max_height = parent.max_height,
+        .overflow_x => style.overflow_x = parent.overflow_x,
+        .overflow_y => style.overflow_y = parent.overflow_y,
         else => {},
     }
 }
