@@ -689,6 +689,15 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 if (box.style.display == .list_item and box.list_index > 0) {
                     paintListMarker(box, surface, fonts, scroll_y, scroll_x_eff, clip_top, clip_bottom);
                 }
+
+                // ── Form control rendering ──────────────────────────────────
+                // Render <input>, <button>, <select>, <textarea> elements
+                // with their platform-appropriate visual styling.
+                if (box.dom_node) |dn| {
+                    if (dn.tagName()) |tag| {
+                        paintFormControl(box, tag, surface, fonts, scroll_y, scroll_x_eff, clip_top, clip_bottom, effective_opacity);
+                    }
+                }
             }
 
             // Paint children with overflow clipping
@@ -1079,6 +1088,201 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
         .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
         blitGlyphClipped,
     );
+}
+
+/// Paint form control elements (input, button, select, textarea).
+/// Renders appropriate visual styling for each form element type.
+fn paintFormControl(
+    box: *const Box,
+    tag: []const u8,
+    surface: *Surface,
+    fonts: *FontCache,
+    scroll_y: f32,
+    scroll_x: f32,
+    clip_top: i32,
+    clip_bottom: i32,
+    effective_opacity: f32,
+) void {
+    const bbox = box.borderBox();
+    const bx: i32 = @as(i32, @intFromFloat(bbox.x)) - @as(i32, @intFromFloat(scroll_x));
+    const by: i32 = @intFromFloat(bbox.y - scroll_y);
+    const bw: i32 = @intFromFloat(@max(bbox.width, 0));
+    const bh: i32 = @intFromFloat(@max(bbox.height, 0));
+    if (bw <= 0 or bh <= 0) return;
+    if (by + bh < clip_top or by > clip_bottom) return;
+
+    const sx_i: i32 = @intFromFloat(scroll_x);
+
+    if (std.mem.eql(u8, tag, "input")) {
+        // Input element: white background, 1px solid gray border, text content
+        const input_bg = Surface.applyOpacity(Surface.argbToColour(0xFFFFFFFF), effective_opacity);
+        const input_border = Surface.applyOpacity(Surface.argbToColour(0xFF808080), effective_opacity);
+
+        surface.fillRect(bx, by, bw, bh, input_bg);
+        // Border: draw 1px edges (single-pixel)
+        if (bh >= 2) {
+            surface.fillRect(bx, by, bw, 1, input_border); // top
+            surface.fillRect(bx, by + bh - 1, bw, 1, input_border); // bottom
+        }
+        if (bw >= 2) {
+            surface.fillRect(bx, by, 1, bh, input_border); // left
+            surface.fillRect(bx + bw - 1, by, 1, bh, input_border); // right
+        }
+
+        // Render input value text if present
+        if (box.text) |value| {
+            if (value.len > 0) {
+                const colour = Surface.applyOpacity(Surface.argbToColour(box.style.color), effective_opacity);
+                const size_px: u32 = @intFromFloat(box.style.font_size_px);
+                const tr = fonts.getRenderer(size_px) orelse return;
+                const padded_x = @as(i32, @intFromFloat(box.content.x)) - sx_i + 4;
+                const m = tr.measure(value);
+                const text_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent;
+                if (text_y - m.ascent <= clip_bottom and text_y >= clip_top) {
+                    tr.renderGlyphs(
+                        value,
+                        padded_x,
+                        text_y,
+                        BlitCtx,
+                        .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+                        blitGlyphClipped,
+                    );
+                }
+            }
+        }
+    } else if (std.mem.eql(u8, tag, "button")) {
+        // Button element: rounded rectangle, gray background, centered text
+        const btn_bg = Surface.applyOpacity(Surface.argbToColour(0xFFE0E0E0), effective_opacity);
+        const btn_border = Surface.applyOpacity(Surface.argbToColour(0xFFA0A0A0), effective_opacity);
+        const radius: i32 = 4;
+
+        // Background with rounded corners
+        surface.fillRoundedRect(bx, by, bw, bh, radius, btn_bg);
+
+        // Border: 1px rounded (simplified: draw edge rects clipped by radius)
+        if (bh >= 2) {
+            surface.fillRect(bx + radius, by, bw - radius * 2, 1, btn_border); // top center
+            surface.fillRect(bx + radius, by + bh - 1, bw - radius * 2, 1, btn_border); // bottom center
+        }
+        if (bw >= 2) {
+            surface.fillRect(bx, by + radius, 1, bh - radius * 2, btn_border); // left center
+            surface.fillRect(bx + bw - 1, by + radius, 1, bh - radius * 2, btn_border); // right center
+        }
+        // Corner dots (simplified approximation)
+        if (radius > 0) {
+            surface.fillRect(bx, by, radius, 1, btn_border);
+            surface.fillRect(bx, by, 1, radius, btn_border);
+            surface.fillRect(bx + bw - radius, by, radius, 1, btn_border);
+            surface.fillRect(bx + bw - 1, by, 1, radius, btn_border);
+            surface.fillRect(bx, by + bh - 1, radius, 1, btn_border);
+            surface.fillRect(bx, by + bh - radius, 1, radius, btn_border);
+            surface.fillRect(bx + bw - radius, by + bh - 1, radius, 1, btn_border);
+            surface.fillRect(bx + bw - 1, by + bh - radius, 1, radius, btn_border);
+        }
+
+        // Render button label text centered
+        if (box.text) |label| {
+            if (label.len > 0) {
+                const colour = Surface.applyOpacity(Surface.argbToColour(box.style.color), effective_opacity);
+                const size_px: u32 = @intFromFloat(box.style.font_size_px);
+                const tr = fonts.getRenderer(size_px) orelse return;
+                const m = tr.measure(label);
+                const text_x = bx + @divTrunc(bw - m.width, 2);
+                const text_y = by + @divTrunc(bh - m.height, 2) + m.ascent;
+                if (text_y - m.ascent <= clip_bottom and text_y >= clip_top) {
+                    tr.renderGlyphs(
+                        label,
+                        text_x,
+                        text_y,
+                        BlitCtx,
+                        .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+                        blitGlyphClipped,
+                    );
+                }
+            }
+        }
+    } else if (std.mem.eql(u8, tag, "select")) {
+        // Select element: rectangle with dropdown arrow indicator
+        const sel_bg = Surface.applyOpacity(Surface.argbToColour(0xFFFFFFFF), effective_opacity);
+        const sel_border = Surface.applyOpacity(Surface.argbToColour(0xFF808080), effective_opacity);
+
+        surface.fillRect(bx, by, bw, bh, sel_bg);
+        // Border
+        if (bh >= 2) {
+            surface.fillRect(bx, by, bw, 1, sel_border);
+            surface.fillRect(bx, by + bh - 1, bw, 1, sel_border);
+        }
+        if (bw >= 2) {
+            surface.fillRect(bx, by, 1, bh, sel_border);
+            surface.fillRect(bx + bw - 1, by, 1, bh, sel_border);
+        }
+
+        // Dropdown arrow indicator (simplified: small triangle)
+        const arrow_x = bx + bw - 16;
+        const arrow_y = by + @divTrunc(bh, 2) - 3;
+        const arrow_color = Surface.applyOpacity(Surface.argbToColour(0xFF404040), effective_opacity);
+        surface.fillRect(arrow_x, arrow_y, 3, 1, arrow_color);
+        surface.fillRect(arrow_x + 1, arrow_y + 1, 5, 1, arrow_color);
+        surface.fillRect(arrow_x + 2, arrow_y + 2, 7, 1, arrow_color);
+
+        // Render selected option text
+        if (box.text) |option_text| {
+            if (option_text.len > 0) {
+                const colour = Surface.applyOpacity(Surface.argbToColour(box.style.color), effective_opacity);
+                const size_px: u32 = @intFromFloat(box.style.font_size_px);
+                const tr = fonts.getRenderer(size_px) orelse return;
+                const padded_x = @as(i32, @intFromFloat(box.content.x)) - sx_i + 4;
+                const m = tr.measure(option_text);
+                const text_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent;
+                if (text_y - m.ascent <= clip_bottom and text_y >= clip_top) {
+                    tr.renderGlyphs(
+                        option_text,
+                        padded_x,
+                        text_y,
+                        BlitCtx,
+                        .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+                        blitGlyphClipped,
+                    );
+                }
+            }
+        }
+    } else if (std.mem.eql(u8, tag, "textarea")) {
+        // Textarea: white background, gray border, multiline text
+        const ta_bg = Surface.applyOpacity(Surface.argbToColour(0xFFFFFFFF), effective_opacity);
+        const ta_border = Surface.applyOpacity(Surface.argbToColour(0xFF808080), effective_opacity);
+
+        surface.fillRect(bx, by, bw, bh, ta_bg);
+        // Border
+        if (bh >= 2) {
+            surface.fillRect(bx, by, bw, 1, ta_border);
+            surface.fillRect(bx, by + bh - 1, bw, 1, ta_border);
+        }
+        if (bw >= 2) {
+            surface.fillRect(bx, by, 1, bh, ta_border);
+            surface.fillRect(bx + bw - 1, by, 1, bh, ta_border);
+        }
+
+        if (box.text) |content| {
+            if (content.len > 0) {
+                const colour = Surface.applyOpacity(Surface.argbToColour(box.style.color), effective_opacity);
+                const size_px: u32 = @intFromFloat(box.style.font_size_px);
+                const tr = fonts.getRenderer(size_px) orelse return;
+                const padded_x = @as(i32, @intFromFloat(box.content.x)) - sx_i + 4;
+                const m = tr.measure(content);
+                const text_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent;
+                if (text_y - m.ascent <= clip_bottom and text_y >= clip_top) {
+                    tr.renderGlyphs(
+                        content,
+                        padded_x,
+                        text_y,
+                        BlitCtx,
+                        .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+                        blitGlyphClipped,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Paint a background image with CSS background-size, background-position, and background-repeat.
