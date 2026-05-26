@@ -5607,7 +5607,16 @@ pub const KotoriRuntime = struct {
         \\    var colonIdx=out.host.indexOf(':');
         \\    if(colonIdx!==-1){out.hostname=out.host.substring(0,colonIdx);out.port=out.host.substring(colonIdx+1);}
         \\    else{out.hostname=out.host;out.port='';}
-        \\    out.origin=out.protocol+'//'+out.host;
+        \\    // Canonicalize hostname per URL Standard §4.4
+        \\    out.hostname=out.hostname.toLowerCase();
+        \\    out.host=out.host.toLowerCase();
+        \\    // Origin per URL Standard §4.8: opaque origin for non-special schemes
+        \\    var proto=out.protocol.toLowerCase().replace(/:$/,'');
+        \\    if(proto==='http'||proto==='https'||proto==='ws'||proto==='wss'||proto==='ftp'){
+        \\      out.origin=(proto==='https'||proto==='wss'?'https://':'http://')+out.host;
+        \\    }else{
+        \\      out.origin='null';
+        \\    }
         \\    return out;
         \\  }
         \\  function resolveURL(input,base){
@@ -5619,7 +5628,22 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    var lastSlash=b.pathname.lastIndexOf('/');
         \\    var dir=lastSlash!==-1?b.pathname.substring(0,lastSlash+1):'/';
-        \\    return b.origin+dir+input;
+        \\    var result=b.origin+dir+input;
+        \\    // Resolve . and .. path segments (URL Standard §4.4)
+        \\    var qi2=result.indexOf('?');var hi2=result.indexOf('#');
+        \\    var qs2='';var ha2='';
+        \\    if(qi2!==-1){qs2=result.substring(qi2);if(hi2>qi2){ha2=result.substring(hi2);result=result.substring(0,hi2);}else result=result.substring(0,qi2);}
+        \\    else if(hi2!==-1){ha2=result.substring(hi2);result=result.substring(0,hi2);}
+        \\    var segs=result.split('/');
+        \\    var res=[];
+        \\    for(var si=0;si<segs.length;si++){
+        \\      var s=segs[si];
+        \\      if(s===''||s==='.')continue;
+        \\      if(s==='..')res.pop();else res.push(s);
+        \\    }
+        \\    result=res.join('/');
+        \\    if(result.charAt(0)!=='/')result='/'+result;
+        \\    return result+qs2+ha2;
         \\  }
         \\  function URL(url,base){
         \\    if(!(this instanceof URL))throw new TypeError("Constructor URL requires 'new'");
@@ -5689,6 +5713,7 @@ pub const KotoriRuntime = struct {
         \\    if(arguments.length===0||(url===undefined&&base===undefined))return null;
         \\    try{return new URL(url!==undefined?String(url):url,base!==undefined?String(base):base);}catch(e){return null;}
         \\  };
+        \\  URL.prototype.toJSON=function(){return this.href;};
         \\  if(typeof globalThis.URL==='undefined')globalThis.URL=URL;
         \\  // Augment self.location with getter-derived fields. setDocumentUrl
         \\  // overwrites location.href post-init, so static fields get stale.
