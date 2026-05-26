@@ -1706,6 +1706,34 @@ fn applyDeclaration(
                 style.text_decoration = .{ .overline = true };
             }
         },
+        .text_decoration_color => {
+            if (eqlIgnoreCase(trimmed, "currentcolor") or eqlIgnoreCase(trimmed, "currentColor")) {
+                style.text_decoration_color = 0; // 0 = use text color
+            } else if (properties.parseColor(trimmed)) |c| {
+                style.text_decoration_color = c.toArgb();
+            }
+        },
+        .text_decoration_style => {
+            // Parse silently: solid, double, dotted, dashed, wavy
+            // We only support solid rendering currently; value is valid as long as parseable
+            if (eqlIgnoreCase(trimmed, "solid") or eqlIgnoreCase(trimmed, "double") or
+                eqlIgnoreCase(trimmed, "dotted") or eqlIgnoreCase(trimmed, "dashed") or
+                eqlIgnoreCase(trimmed, "wavy")) {}
+        },
+        .text_decoration_thickness => {
+            if (eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "from-font")) {
+                style.text_decoration_thickness = 0; // 0 = auto (1px default)
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.text_decoration_thickness = px;
+            }
+        },
+        .text_underline_offset => {
+            if (eqlIgnoreCase(trimmed, "auto")) {
+                style.text_underline_offset = 0; // 0 = auto
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.text_underline_offset = px;
+            }
+        },
         .text_transform => {
             if (eqlIgnoreCase(trimmed, "none")) style.text_transform = .none else if (eqlIgnoreCase(trimmed, "uppercase")) style.text_transform = .uppercase else if (eqlIgnoreCase(trimmed, "lowercase")) style.text_transform = .lowercase else if (eqlIgnoreCase(trimmed, "capitalize")) style.text_transform = .capitalize;
         },

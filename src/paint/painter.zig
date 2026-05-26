@@ -662,6 +662,24 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 // Paint borders
                 paintBorders(box, surface, scroll_y, scroll_x_eff);
 
+                // Paint CSS outline (drawn outside border box, does not affect layout)
+                if (box.style.outline_width > 0) {
+                    const outline_bw: i32 = @intFromFloat(box.style.outline_width);
+                    if (outline_bw > 0) {
+                        const outline_colour = Surface.argbToColour(box.style.outline_color);
+                        const obox = box.borderBox();
+                        const ox: i32 = @as(i32, @intFromFloat(obox.x - scroll_x_eff)) - outline_bw;
+                        const oy: i32 = @as(i32, @intFromFloat(obox.y - scroll_y)) - outline_bw;
+                        const ow: i32 = @as(i32, @intFromFloat(@max(obox.width, 0))) + outline_bw * 2;
+                        const oh: i32 = @as(i32, @intFromFloat(@max(obox.height, 0))) + outline_bw * 2;
+                        // Draw 4 edge rects (top, bottom, left, right)
+                        surface.fillRect(ox, oy, ow, outline_bw, outline_colour); // top
+                        surface.fillRect(ox, oy + oh - outline_bw, ow, outline_bw, outline_colour); // bottom
+                        surface.fillRect(ox, oy, outline_bw, oh, outline_colour); // left
+                        surface.fillRect(ox + ow - outline_bw, oy, outline_bw, oh, outline_colour); // right
+                    }
+                }
+
                 // Paint <hr> line
                 if (box.is_hr) {
                     paintHr(box, surface, scroll_y, scroll_x_eff, clip_top, clip_bottom);
@@ -898,13 +916,17 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 const line_right = draw_x + @as(i32, @intFromFloat(@max(line.width, 0)));
                 if (line_right < clip.left or draw_x > clip.right) continue;
 
+                // Apply CSS text-transform (uppercase, lowercase, capitalize)
+                var text_buf: [4096]u8 = undefined;
+                const render_text = transformText(line.text, box.style.text_transform, &text_buf);
+
                 // Paint text-shadow first (rendered behind the text)
                 if (has_text_shadow) {
                     const shadow_colour = Surface.argbToColour(box.style.text_shadow_color);
                     const shadow_off_x: i32 = @intFromFloat(box.style.text_shadow_x);
                     const shadow_off_y: i32 = @intFromFloat(box.style.text_shadow_y);
                     tr.renderGlyphs(
-                        line.text,
+                        render_text,
                         draw_x + shadow_off_x,
                         draw_y + shadow_off_y,
                         BlitCtx,
@@ -914,7 +936,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 }
 
                 tr.renderGlyphs(
-                    line.text,
+                    render_text,
                     draw_x,
                     draw_y,
                     BlitCtx,
@@ -924,7 +946,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
 
                 // Draw ellipsis "…" after truncated text
                 if (line.ellipsis) {
-                    const text_metrics = tr.measure(line.text);
+                    const text_metrics = tr.measure(render_text);
                     const ellipsis_x = draw_x + @as(i32, @intCast(text_metrics.width));
                     tr.renderGlyphs(
                         "\xe2\x80\xa6",
@@ -936,17 +958,34 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     );
                 }
 
+                // Determine decoration color: use text_decoration_color if set, else text color
+                const deco_colour_argb = if (box.style.text_decoration_color != 0)
+                    box.style.text_decoration_color
+                else
+                    box.style.color;
+                const deco_colour = Surface.argbToColour(deco_colour_argb);
+                // Default thickness: use text_decoration_thickness if > 0, else 1px
+                const deco_thickness: i32 = if (box.style.text_decoration_thickness > 0)
+                    @intFromFloat(box.style.text_decoration_thickness)
+                else
+                    1;
+
                 // Draw underline based on CSS text-decoration only
                 const draw_underline = box.style.text_decoration.underline;
                 if (draw_underline) {
-                    const underline_y = draw_y + 2; // 2px below baseline
+                    // Auto offset: 2px below baseline, or use text-underline-offset if set
+                    const underline_offset: i32 = if (box.style.text_underline_offset > 0)
+                        @intFromFloat(box.style.text_underline_offset)
+                    else
+                        2;
+                    const underline_y = draw_y + underline_offset;
                     if (underline_y >= clip_top and underline_y < clip_bottom) {
                         surface.fillRect(
                             draw_x,
                             underline_y,
                             @intFromFloat(@max(line.width, 0)),
-                            1,
-                            colour,
+                            deco_thickness,
+                            deco_colour,
                         );
                     }
                 }
@@ -959,8 +998,8 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                             draw_x,
                             strike_y,
                             @intFromFloat(@max(line.width, 0)),
-                            1,
-                            colour,
+                            deco_thickness,
+                            deco_colour,
                         );
                     }
                 }
@@ -973,8 +1012,8 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                             draw_x,
                             overline_y,
                             @intFromFloat(@max(line.width, 0)),
-                            1,
-                            colour,
+                            deco_thickness,
+                            deco_colour,
                         );
                     }
                 }
@@ -1374,4 +1413,36 @@ pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
         },
     }
     return null;
+}
+
+/// Apply CSS text-transform to text, writing result into buf.
+/// Returns the transformed slice (may be shorter than text due to case folding).
+fn transformText(text: []const u8, transform: ComputedStyle.TextTransform, buf: []u8) []const u8 {
+    if (buf.len < text.len) return text; // buffer too small, skip transform
+    @memcpy(buf[0..text.len], text);
+    switch (transform) {
+        .none => return text,
+        .uppercase => {
+            for (buf[0..text.len]) |*c| {
+                if (c.* >= 'a' and c.* <= 'z') c.* -= 32;
+            }
+            return buf[0..text.len];
+        },
+        .lowercase => {
+            for (buf[0..text.len]) |*c| {
+                if (c.* >= 'A' and c.* <= 'Z') c.* += 32;
+            }
+            return buf[0..text.len];
+        },
+        .capitalize => {
+            var cap_next = true;
+            for (buf[0..text.len]) |*c| {
+                if (cap_next and c.* >= 'a' and c.* <= 'z') {
+                    c.* -= 32;
+                }
+                cap_next = c.* == ' ' or c.* == '\t' or c.* == '\n' or c.* == '-' or c.* == '\"';
+            }
+            return buf[0..text.len];
+        },
+    }
 }
