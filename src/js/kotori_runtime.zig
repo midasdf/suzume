@@ -5631,21 +5631,49 @@ pub const KotoriRuntime = struct {
         \\    var p=parseURL(url);
         \\    this.href=p.href;
         \\    this.protocol=p.protocol;
-        \\    this.host=p.host;
         \\    this.hostname=p.hostname;
         \\    this.port=p.port;
         \\    this.pathname=p.pathname;
-        \\    this.search=p.search;
         \\    this.hash=p.hash;
         \\    this.origin=p.origin;
+        \\    this.host=p.host;
+        \\    var _sp=null,_q=p.search||'';
+        \\    var _self=this;
+        \\    try{Object.defineProperty(this,'search',{
+        \\      get:function(){return _sp&&_sp._e.length?'?'+_sp.toString():_q;},
+        \\      set:function(v){
+        \\        v=String(v);
+        \\        if(v&&v!==''&&v.charAt(0)!=='?')v='?'+v;
+        \\        _q=v;
+        \\        if(_sp){
+        \\          _sp._e.length=0;
+        \\          var s=v&&v.charAt(0)==='?'?v.substring(1):v;
+        \\          if(s&&s.length){
+        \\            var pairs=s.split('&');
+        \\            for(var i=0;i<pairs.length;i++){
+        \\              if(pairs[i]==='')continue;
+        \\              var eq=pairs[i].indexOf('=');
+        \\              var n,val;
+        \\              if(eq>=0){n=pairs[i].substring(0,eq);val=pairs[i].substring(eq+1);}
+        \\              else{n=pairs[i];val='';}
+        \\              _sp._e.push([decodeURIComponent(n.replace(/\\+/g,' ')),decodeURIComponent(val.replace(/\\+/g,' '))]);
+        \\            }
+        \\          }
+        \\        }
+        \\        var h=_self.href,qi=h.indexOf('?'),hi=h.indexOf('#');
+        \\        var base=qi!==-1?h.substring(0,qi):(hi!==-1?h.substring(0,hi):h);
+        \\        _self.href=base+v+(hi!==-1?h.substring(hi):'');
+        \\      },
+        \\      configurable:true,enumerable:true
+        \\    });}catch(e){}
         \\    this.searchParams=null;
         \\    try{Object.defineProperty(this,'searchParams',{
         \\      get:function(){
-        \\        if(this._sp)return this._sp;
-        \\        this._sp=new URLSearchParams(this.search?this.search.replace(/^\\?/,''):'');
-        \\        return this._sp;
+        \\        if(_sp)return _sp;
+        \\        _sp=new URLSearchParams(_q&&_q.charAt(0)==='?'?_q.substring(1):_q||'');
+        \\        return _sp;
         \\      },
-        \\      set:function(v){this._sp=v;},
+        \\      set:function(v){throw new TypeError('Cannot set URL property "searchParams"');},
         \\      configurable:true,enumerable:true
         \\    });}catch(e){}
         \\  }
@@ -6643,14 +6671,13 @@ pub const KotoriRuntime = struct {
         \\  if(typeof URLSearchParams!=='undefined'&&URLSearchParams.prototype&&URLSearchParams.prototype.sort)return;
         \\  function URLSearchParams(init){
         \\    this._e=[];
-        \\    if(init===undefined||init===null){
-        \\      this.toString=function(){return '';};return;
-        \\    }
+        \\    if(init===undefined||init===null)return;
         \\    if(typeof init==='string'){
         \\      var s=init.charAt(0)==='?'?init.substring(1):init;
         \\      if(s){
         \\        var pairs=s.split('&');
         \\        for(var i=0;i<pairs.length;i++){
+        \\          if(pairs[i]==='')continue;
         \\          var eq=pairs[i].indexOf('=');
         \\          var n,v;
         \\          if(eq>=0){n=pairs[i].substring(0,eq);v=pairs[i].substring(eq+1);}
@@ -6687,12 +6714,12 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    if(!found)e.push([n,v]);
         \\  };
-        \\  URLSearchParams.prototype.sort=function(){this._e.sort(function(a,b){return a[0]<b[0]?-1:a[0]>b[0]?1:0;});};
+        \\  URLSearchParams.prototype.sort=function(){var e=this._e,i;for(i=0;i<e.length;i++)e[i]._$i=i;e.sort(function(a,b){var ak=a[0],bk=b[0];for(var j=0;j<ak.length&&j<bk.length;j++){var ca=ak.charCodeAt(j),cb=bk.charCodeAt(j);if(ca!==cb)return ca-cb;}var d=ak.length-bk.length;return d?d:a._$i-b._$i;});for(i=0;i<e.length;i++)delete e[i]._$i;};
         \\  try{Object.defineProperty(URLSearchParams.prototype,'size',{get:function(){return this._e.length;},configurable:true,enumerable:true});}catch(e){}
         \\  URLSearchParams.prototype.forEach=function(cb,thisArg){for(var i=0;i<this._e.length;i++)cb.call(thisArg,this._e[i][1],this._e[i][0],this);};
-        \\  URLSearchParams.prototype.entries=function(){var i=0,e=this._e;return{next:function(){if(i<e.length){var v=[e[i][0],e[i][1]];i++;return{value:v,done:false};}return{value:undefined,done:true};}};};
-        \\  URLSearchParams.prototype.keys=function(){var i=0,e=this._e;return{next:function(){return i<e.length?{value:e[i++][0],done:false}:{value:undefined,done:true};}};};
-        \\  URLSearchParams.prototype.values=function(){var i=0,e=this._e;return{next:function(){return i<e.length?{value:e[i++][1],done:false}:{value:undefined,done:true};}};};
+        \\  URLSearchParams.prototype.entries=function(){var i=0,e=this._e;var it={next:function(){if(i<e.length){var v=[e[i][0],e[i][1]];i++;return{value:v,done:false};}return{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
+        \\  URLSearchParams.prototype.keys=function(){var i=0,e=this._e;var it={next:function(){return i<e.length?{value:e[i++][0],done:false}:{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
+        \\  URLSearchParams.prototype.values=function(){var i=0,e=this._e;var it={next:function(){return i<e.length?{value:e[i++][1],done:false}:{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
         \\  if(typeof Symbol!=='undefined'&&Symbol.iterator)URLSearchParams.prototype[Symbol.iterator]=URLSearchParams.prototype.entries;
         \\  globalThis.URLSearchParams=URLSearchParams;
         \\})();
@@ -7484,26 +7511,75 @@ pub const KotoriRuntime = struct {
         \\  // Stub ReadableStream / WritableStream / TransformStream if the native
         \\  // kotori VM did not install them. Mirrors the stubs in web_api.zig.
         \\  if (typeof ReadableStream === 'undefined') {
-        \\    globalThis.ReadableStream = function(src) {
+        \\    globalThis.ReadableStream = function(underlyingSource) {
+        \\      var src = underlyingSource || {};
         \\      this._src = src;
         \\      this._queue = [];
         \\      this._closed = false;
+        \\      this._errored = false;
+        \\      this._error = null;
+        \\      this._pullWaiters = [];
+        \\
+        \\      var self = this;
+        \\      var controller = {
+        \\        enqueue: function(chunk) {
+        \\          self._queue.push(chunk);
+        \\          var waiters = self._pullWaiters.splice(0);
+        \\          for (var i = 0; i < waiters.length; i++) waiters[i]();
+        \\        },
+        \\        close: function() {
+        \\          self._closed = true;
+        \\          var waiters = self._pullWaiters.splice(0);
+        \\          for (var i = 0; i < waiters.length; i++) waiters[i]();
+        \\        },
+        \\        error: function(e) {
+        \\          self._errored = true;
+        \\          self._error = e;
+        \\          var waiters = self._pullWaiters.splice(0);
+        \\          for (var i = 0; i < waiters.length; i++) waiters[i]();
+        \\        }
+        \\      };
+        \\
+        \\      this._controller = controller;
+        \\      this._started = false;
+        \\      this._pulling = false;
+        \\
+        \\      // Call start synchronously
+        \\      if (typeof src.start === 'function') {
+        \\        try {
+        \\          src.start(controller);
+        \\        } catch (e) {
+        \\          controller.error(e);
+        \\        }
+        \\      }
+        \\      this._started = true;
         \\    };
+        \\
         \\    ReadableStream.prototype.getReader = function() {
         \\      var rs = this;
         \\      return {
         \\        read: function() {
-        \\          if (rs._queue.length > 0)
-        \\            return Promise.resolve({ value: rs._queue.shift(), done: false });
-        \\          if (rs._closed)
-        \\            return Promise.resolve({ value: undefined, done: true });
-        \\          return new Promise(function(resolve) {
-        \\            var check = function() {
-        \\              if (rs._queue.length > 0) resolve({ value: rs._queue.shift(), done: false });
-        \\              else if (rs._closed) resolve({ value: undefined, done: true });
-        \\              else setTimeout(check, 10);
-        \\            };
-        \\            check();
+        \\          // Fast path: return synchronously if data/close already available
+        \\          if (rs._errored) return Promise.reject(rs._error);
+        \\          if (rs._queue.length > 0) return Promise.resolve({ value: rs._queue.shift(), done: false });
+        \\          if (rs._closed) return Promise.resolve({ value: undefined, done: true });
+        \\          // Need more data — try pull(), then wait
+        \\          return new Promise(function(resolve, reject) {
+        \\            function attemptRead() {
+        \\              if (rs._errored) { reject(rs._error); return; }
+        \\              if (rs._queue.length > 0) { resolve({ value: rs._queue.shift(), done: false }); return; }
+        \\              if (rs._closed) { resolve({ value: undefined, done: true }); return; }
+        \\              // Try pull()
+        \\              if (typeof rs._src.pull === 'function' && !rs._pulling) {
+        \\                rs._pulling = true;
+        \\                try { rs._src.pull(rs._controller); } catch (e) { rs._pulling = false; reject(e); return; }
+        \\                rs._pulling = false;
+        \\                if (rs._queue.length > 0 || rs._closed) { attemptRead(); return; }
+        \\              }
+        \\              // Wait for enqueue/close/error
+        \\              rs._pullWaiters.push(function() { attemptRead(); });
+        \\            }
+        \\            attemptRead();
         \\          });
         \\        },
         \\        releaseLock: function() {},
@@ -7512,6 +7588,66 @@ pub const KotoriRuntime = struct {
         \\    };
         \\    ReadableStream.prototype.cancel = function() {
         \\      this._closed = true; return Promise.resolve();
+        \\    };
+        \\
+        \\    // ReadableStream.from(iterable) — static
+        \\    ReadableStream.from = function(iterable) {
+        \\      var rs = new ReadableStream({
+        \\        start: function(ctrl) {
+        \\          if (iterable && typeof iterable[Symbol.iterator] === 'function') {
+        \\            var it = iterable[Symbol.iterator]();
+        \\            for (var entry = it.next(); !entry.done; entry = it.next()) {
+        \\              ctrl.enqueue(entry.value);
+        \\            }
+        \\          }
+        \\          ctrl.close();
+        \\        }
+        \\      });
+        \\      return rs;
+        \\    };
+        \\
+        \\    // readable.pipeThrough(transform) — returns transform.readable
+        \\    // First drains source synchronously, then falls back to async pumping
+        \\    ReadableStream.prototype.pipeThrough = function(transform) {
+        \\      var source = this;
+        \\      var writable = transform.writable;
+        \\      if (!writable) throw new TypeError('transform.writable is undefined');
+        \\      var writer = writable.getWriter();
+        \\      // Synchronously drain chunks already in source queue
+        \\      try {
+        \\        while (source._queue.length > 0) {
+        \\          writer.write(source._queue.shift());
+        \\        }
+        \\        if (source._closed) { writer.close(); return transform.readable; }
+        \\      } catch (e) {}
+        \\      // Source not done — async pump for remaining data
+        \\      var reader = source.getReader();
+        \\      function pump() {
+        \\        reader.read().then(function(result) {
+        \\          if (result.done) { writer.close(); return; }
+        \\          try { writer.write(result.value); } catch (e) {}
+        \\          pump();
+        \\        });
+        \\      }
+        \\      pump();
+        \\      return transform.readable;
+        \\    };
+        \\
+        \\    // readable.pipeTo(dest) — returns Promise
+        \\    ReadableStream.prototype.pipeTo = function(dest) {
+        \\      var source = this;
+        \\      var writer = dest.getWriter();
+        \\      var reader = source.getReader();
+        \\      return new Promise(function(resolve, reject) {
+        \\        function pump() {
+        \\          reader.read().then(function(result) {
+        \\            if (result.done) { writer.close(); resolve(); return; }
+        \\            try { writer.write(result.value); } catch (e) { reject(e); return; }
+        \\            pump();
+        \\          }).catch(reject);
+        \\        }
+        \\        pump();
+        \\      });
         \\    };
         \\  }
         \\
