@@ -386,6 +386,14 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                     if (max_h_s) |mh| {
                         if (stretched_h > mh) stretched_h = mh;
                     }
+                    // Also clamp by min-height for correct child layout.
+                    const min_h_s: f32 = switch (child.style.min_height) {
+                        .px => |mh| mh,
+                        .percent => |pct| pct * container_cross / 100.0,
+                        .auto => 0,
+                        else => 0,
+                    };
+                    if (stretched_h < min_h_s) stretched_h = min_h_s;
                     // Re-layout the item's block children with the clamped definite
                     // height so `height: <pct>` descendants resolve correctly.
                     block.relayoutChildrenWithContainingHeight(child, fonts, stretched_h);
@@ -501,6 +509,14 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 if (max_h_a) |mh| {
                     if (stretched_height_a > mh) stretched_height_a = mh;
                 }
+                // CSS Flexbox L1 §9.4: clamp by min-height (% resolves against container cross).
+                const min_h_a: f32 = switch (child.style.min_height) {
+                    .px => |mh| mh,
+                    .percent => |pct| pct * container_cross2 / 100.0,
+                    .auto => 0, // min-height:auto on flex items = min-content size (handled elsewhere)
+                    else => 0,
+                };
+                if (stretched_height_a < min_h_a) stretched_height_a = min_h_a;
                 if (switch (child.style.height) {
                     .auto => true,
                     else => false,
@@ -534,6 +550,14 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 if (max_h_limit) |mh| {
                     if (stretched_height > mh) stretched_height = mh;
                 }
+                // Apply min-height clamping (resolving % against container cross).
+                const min_h_limit: f32 = switch (child.style.min_height) {
+                    .px => |mh| mh,
+                    .percent => |pct| pct * container_cross2 / 100.0,
+                    .auto => 0,
+                    else => 0,
+                };
+                if (stretched_height < min_h_limit) stretched_height = min_h_limit;
                 if (switch (child.style.height) {
                     .auto => true,
                     else => false,
