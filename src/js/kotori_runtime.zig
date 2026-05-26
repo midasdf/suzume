@@ -5629,6 +5629,7 @@ pub const KotoriRuntime = struct {
         \\      url=resolveURL(url,base);
         \\    }
         \\    var p=parseURL(url);
+        \\    if(p.port&&(!/^[0-9]+$/.test(p.port)||parseInt(p.port,10)>65535))throw new TypeError("Invalid URL port");
         \\    this.href=p.href;
         \\    this.protocol=p.protocol;
         \\    this.hostname=p.hostname;
@@ -5640,7 +5641,7 @@ pub const KotoriRuntime = struct {
         \\    var _sp=null,_q=p.search||'';
         \\    var _self=this;
         \\    try{Object.defineProperty(this,'search',{
-        \\      get:function(){return _sp&&_sp._e.length?'?'+_sp.toString():_q;},
+        \\      get:function(){if(_sp){var _s=_sp.toString();return _s?'?'+_s:'';}return _q||'';},
         \\      set:function(v){
         \\        v=String(v);
         \\        if(v&&v!==''&&v.charAt(0)!=='?')v='?'+v;
@@ -5656,7 +5657,7 @@ pub const KotoriRuntime = struct {
         \\              var _n,_val;
         \\              if(_eq>=0){_n=_pairs[_i].substring(0,_eq);_val=_pairs[_i].substring(_eq+1);}
         \\              else{_n=_pairs[_i];_val='';}
-        \\              _sp._e.push([decodeURIComponent(_n.replace(/\\+/g,' ')),decodeURIComponent(_val.replace(/\\+/g,' '))]);
+        \\              _sp._e.push([percentDecode(_n.replace(/\\+/g,' ')),percentDecode(_val.replace(/\\+/g,' '))]);
         \\            }
         \\          }
         \\        }
@@ -5671,6 +5672,7 @@ pub const KotoriRuntime = struct {
         \\      get:function(){
         \\        if(_sp)return _sp;
         \\        _sp=new URLSearchParams(_q||'');
+        \\        _sp._updateURL=function(){var s=_sp.toString();var v=s?'?'+s:'';_q=v;var h=_self.href,qi=h.indexOf('?'),hi=h.indexOf('#');var base=qi!==-1?h.substring(0,qi):(hi!==-1?h.substring(0,hi):h);_self.href=base+v+(hi!==-1?h.substring(hi):'');};
         \\        return _sp;
         \\      },
         \\      set:function(v){throw new TypeError('Cannot set URL property "searchParams"');},
@@ -6711,6 +6713,9 @@ pub const KotoriRuntime = struct {
         \\(function(){
         \\  "use strict";
         \\  if(typeof URLSearchParams!=='undefined'&&URLSearchParams.prototype&&URLSearchParams.prototype.sort)return;
+        \\  function percentDecode(s){try{return decodeURIComponent(s);}catch(e){var out='';for(var i=0;i<s.length;i++){if(s.charAt(i)==='%'&&i+2<s.length){var h=s.substring(i+1,i+3);if(/^[0-9A-Fa-f]{2}$/.test(h)){out+=decodeURIComponent(s.substring(i,i+3));i+=2;continue;}}out+=s.charAt(i);}return out;}}
+        \\  function cuAt(s,pos){var cp=s.charCodeAt(pos);return cp>=0x10000?0xD800+((cp-0x10000)>>10):pos<s.length?cp:-1;}
+        \\  function cuLen(s){var l=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);l+=c>=0x10000?2:1;}return l;}
         \\  function URLSearchParams(init){
         \\    this._e=[];
         \\    if(init===undefined||init===null)return;
@@ -6725,23 +6730,29 @@ pub const KotoriRuntime = struct {
         \\          if(eq>=0){n=pairs[i].substring(0,eq);v=pairs[i].substring(eq+1);}
         \\          else{n=pairs[i];v='';}
         \\          var replP=function(t){return t.split('+').join(' ');};
-        \\          this._e.push([decodeURIComponent(replP(n)),decodeURIComponent(replP(v))]);
+        \\          this._e.push([percentDecode(replP(n)),percentDecode(replP(v))]);
         \\        }
         \\      }
+        \\    }else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
+        \\    else if(init&&typeof init.entries==='function'&&!init[Symbol.iterator]){
+        \\      var it=init.entries();
+        \\      var r=it.next?it.next():null;
+        \\      while(r&&!r.done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);r=it.next?it.next():null;}
         \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&init[Symbol.iterator]){
         \\      var it=init[Symbol.iterator](),r;
-        \\      while(!(r=it.next()).done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);}
-        \\    }else if(typeof init==='object'){
+        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length<2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([String(p[0]),String(p[1])]);}
+        \\    }else if(typeof init==='object'||typeof init==='function'){
         \\      var keys=Object.keys(init);
         \\      for(var i=0;i<keys.length;i++)this._e.push([String(keys[i]),String(init[keys[i]])]);
         \\    }
         \\  }
-        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).replace(/%20/g,'+')+'='+encodeURIComponent(p[1]).replace(/%20/g,'+');}).join('&');};
+        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).replace(/%20/g,'+').replace(/%2A/g,'*')+'='+encodeURIComponent(p[1]).replace(/%20/g,'+').replace(/%2A/g,'*');}).join('&');};
         \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
-        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);};
+        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);if(this._updateURL)this._updateURL();};
         \\  URLSearchParams.prototype["delete"]=function(n,v){
-        \\    n=String(n);var hasVal=arguments.length>=2;var nv=hasVal?String(v):null;
+        \\    n=String(n);var hasVal=v!==undefined;var nv=hasVal?String(v):null;
         \\    this._e=this._e.filter(function(p){return !(p[0]===n&&(!hasVal||p[1]===nv));});
+        \\    if(this._updateURL)this._updateURL();
         \\  };
         \\  URLSearchParams.prototype.get=function(n){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
         \\  URLSearchParams.prototype.getAll=function(n){n=String(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
@@ -6755,13 +6766,14 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\    if(!found)e.push([n,v]);
+        \\    if(this._updateURL)this._updateURL();
         \\  };
-        \\  URLSearchParams.prototype.sort=function(){var e=this._e,i;for(i=0;i<e.length;i++)e[i]._$i=i;e.sort(function(a,b){var ak=a[0],bk=b[0];for(var j=0;j<ak.length&&j<bk.length;j++){var ca=ak.charCodeAt(j),cb=bk.charCodeAt(j);if(ca!==cb)return ca-cb;}var d=ak.length-bk.length;return d?d:a._$i-b._$i;});for(i=0;i<e.length;i++)delete e[i]._$i;};
+        \\  URLSearchParams.prototype.sort=function(){var e=this._e,i;for(i=0;i<e.length;i++)e[i]._$i=i;e.sort(function(a,b){var ak=a[0],bk=b[0];var j=0;while(j<ak.length||j<bk.length){var ca=cuAt(ak,j),cb=cuAt(bk,j);if(ca===-1&&cb===-1)break;if(ca===-1)return -1*cb;if(cb===-1)return ca;if(ca!==cb)return ca-cb;j++;}return a._$i-b._$i;});for(i=0;i<e.length;i++)delete e[i]._$i;if(this._updateURL)this._updateURL();};
         \\  try{Object.defineProperty(URLSearchParams.prototype,'size',{get:function(){return this._e.length;},configurable:true,enumerable:true});}catch(e){}
         \\  URLSearchParams.prototype.forEach=function(cb,thisArg){for(var i=0;i<this._e.length;i++)cb.call(thisArg,this._e[i][1],this._e[i][0],this);};
-        \\  URLSearchParams.prototype.entries=function(){var i=0,e=this._e;var it={next:function(){if(i<e.length){var v=[e[i][0],e[i][1]];i++;return{value:v,done:false};}return{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
-        \\  URLSearchParams.prototype.keys=function(){var i=0,e=this._e;var it={next:function(){return i<e.length?{value:e[i++][0],done:false}:{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
-        \\  URLSearchParams.prototype.values=function(){var i=0,e=this._e;var it={next:function(){return i<e.length?{value:e[i++][1],done:false}:{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
+        \\  URLSearchParams.prototype.entries=function(){var self=this,i=0;var it={next:function(){if(i<self._e.length){var v=[self._e[i][0],self._e[i][1]];i++;return{value:v,done:false};}return{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
+        \\  URLSearchParams.prototype.keys=function(){var self=this,i=0;var it={next:function(){return i<self._e.length?{value:self._e[i++][0],done:false}:{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
+        \\  URLSearchParams.prototype.values=function(){var self=this,i=0;var it={next:function(){return i<self._e.length?{value:self._e[i++][1],done:false}:{value:undefined,done:true};}};if(typeof Symbol!=='undefined'&&Symbol.iterator)it[Symbol.iterator]=function(){return this;};return it;};
         \\  if(typeof Symbol!=='undefined'&&Symbol.iterator)URLSearchParams.prototype[Symbol.iterator]=URLSearchParams.prototype.entries;
         \\  globalThis.URLSearchParams=URLSearchParams;
         \\})();
