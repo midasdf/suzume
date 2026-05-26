@@ -5646,17 +5646,17 @@ pub const KotoriRuntime = struct {
         \\        if(v&&v!==''&&v.charAt(0)!=='?')v='?'+v;
         \\        _q=v;
         \\        if(_sp){
-        \\          _sp._e.length=0;
-        \\          var s=v&&v.charAt(0)==='?'?v.substring(1):v;
-        \\          if(s&&s.length){
-        \\            var pairs=s.split('&');
-        \\            for(var i=0;i<pairs.length;i++){
-        \\              if(pairs[i]==='')continue;
-        \\              var eq=pairs[i].indexOf('=');
-        \\              var n,val;
-        \\              if(eq>=0){n=pairs[i].substring(0,eq);val=pairs[i].substring(eq+1);}
-        \\              else{n=pairs[i];val='';}
-        \\              _sp._e.push([decodeURIComponent(n.replace(/\\+/g,' ')),decodeURIComponent(val.replace(/\\+/g,' '))]);
+        \\          _sp._e=[];
+        \\          var _s=v&&v.charAt(0)==='?'?v.substring(1):v;
+        \\          if(_s&&_s.length){
+        \\            var _pairs=_s.split('&');
+        \\            for(var _i=0;_i<_pairs.length;_i++){
+        \\              if(_pairs[_i]==='')continue;
+        \\              var _eq=_pairs[_i].indexOf('=');
+        \\              var _n,_val;
+        \\              if(_eq>=0){_n=_pairs[_i].substring(0,_eq);_val=_pairs[_i].substring(_eq+1);}
+        \\              else{_n=_pairs[_i];_val='';}
+        \\              _sp._e.push([decodeURIComponent(_n.replace(/\\+/g,' ')),decodeURIComponent(_val.replace(/\\+/g,' '))]);
         \\            }
         \\          }
         \\        }
@@ -5678,6 +5678,15 @@ pub const KotoriRuntime = struct {
         \\    });}catch(e){}
         \\  }
         \\  URL.prototype.toString=function(){return this.href;};
+        \\  URL.prototype.toJSON=function(){return this.href;};
+        \\  // WHATWG URL Standard static methods
+        \\  URL.canParse=function(url,base){
+        \\    try{URL.parse(url,base);return true;}catch(e){return false;}
+        \\  };
+        \\  URL.parse=function(url,base){
+        \\    if(url===undefined||url===null){return null;}
+        \\    try{return new URL(String(url),base!==undefined?String(base):undefined);}catch(e){return null;}
+        \\  };
         \\  if(typeof globalThis.URL==='undefined')globalThis.URL=URL;
         \\  // Augment self.location with getter-derived fields. setDocumentUrl
         \\  // overwrites location.href post-init, so static fields get stale.
@@ -6554,9 +6563,17 @@ pub const KotoriRuntime = struct {
         \\    var label=(enc||'utf-8').toLowerCase();
         \\    // Encoding §4.12 label → canonical name mapping
         \\    var labels={'unicode-1-1-utf-8':'utf-8',utf8:'utf-8',unicode11utf8:'utf-8',
-        \\      unicode20utf8:'utf-8','x-utf8':'utf-8','utf-16le':'utf-16le','utf-16':'utf-16',
+        \\      unicode20utf8:'utf-8','x-utf8':'utf-8','utf-16le':'utf-16le','utf-16':'utf-16le',
         \\      'utf-16be':'utf-16be',csunicode:'utf-16le',unicodefffe:'utf-16be',
-        \\      ucs2:'utf-16le','iso-10646-ucs-2':'utf-16le'};
+        \\      ucs2:'utf-16le','iso-10646-ucs-2':'utf-16le',
+        \\      ascii:'windows-1252','iso-8859-1':'windows-1252',latin1:'windows-1252',
+        \\      'iso-8859-2':'iso-8859-2','iso-8859-15':'iso-8859-15',
+        \\      'windows-1252':'windows-1252','ansi_x3.4-1968':'windows-1252',
+        \\      'iso-ir-6':'windows-1252','iso646-us':'windows-1252',us:'windows-1252',
+        \\      ibm367:'windows-1252',cp367:'windows-1252',csascii:'windows-1252',
+        \\      'iso-8859-1:1987':'windows-1252','iso_8859-1:1987':'windows-1252',
+        \\      'iso-ir-100':'windows-1252','iso_8859-1':'windows-1252',latin1l:'windows-1252',
+        \\      csisolatin1:'windows-1252',iso88591:'windows-1252','iso_8859-1:1987rb':'windows-1252'};
         \\    this.encoding=labels[label]||label;
         \\    this.fatal=!!(opts&&opts.fatal);this.ignoreBOM=!!(opts&&opts.ignoreBOM);
         \\    this._pending=null; // Encoding §9.2 step 5 — pending buffer for stream decode

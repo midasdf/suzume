@@ -444,32 +444,41 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     }
 
     // Apply min/max width constraints
+    // box-sizing: border-box: specified min/max-width refers to border box,
+    // so the content-box constraint must subtract padding+border.
+    const bs_w = if (box.style.box_sizing == .border_box) pad_h + bdr_h else 0;
     switch (box.style.min_width) {
         .px => |mw| {
-            if (box.content.width < mw) box.content.width = mw;
+            const adjusted = @max(mw - bs_w, 0);
+            if (box.content.width < adjusted) box.content.width = adjusted;
         },
         .percent => |pct| {
             const mw = pct * containing_width / 100.0;
-            if (box.content.width < mw) box.content.width = mw;
+            const adjusted = @max(mw - bs_w, 0);
+            if (box.content.width < adjusted) box.content.width = adjusted;
         },
         .calc => |expr| {
             if (cascade_mod.resolveCalcPct(expr, containing_width, box.style.font_size_px)) |mw| {
-                if (box.content.width < mw) box.content.width = mw;
+                const adjusted = @max(mw - bs_w, 0);
+                if (box.content.width < adjusted) box.content.width = adjusted;
             }
         },
         else => {},
     }
     switch (box.style.max_width) {
         .px => |mw| {
-            if (box.content.width > mw) box.content.width = mw;
+            const adjusted = @max(mw - bs_w, 0);
+            if (box.content.width > adjusted) box.content.width = adjusted;
         },
         .percent => |pct| {
             const mw = pct * containing_width / 100.0;
-            if (box.content.width > mw) box.content.width = mw;
+            const adjusted = @max(mw - bs_w, 0);
+            if (box.content.width > adjusted) box.content.width = adjusted;
         },
         .calc => |expr| {
             if (cascade_mod.resolveCalcPct(expr, containing_width, box.style.font_size_px)) |mw| {
-                if (box.content.width > mw) box.content.width = mw;
+                const adjusted = @max(mw - bs_w, 0);
+                if (box.content.width > adjusted) box.content.width = adjusted;
             }
         },
         else => {},
@@ -610,20 +619,26 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     }
 
     // Apply min/max height constraints
+    // box-sizing: border-box: specified min/max-height refers to border box,
+    // so the content-box constraint must subtract padding+border.
+    const bs_h = if (box.style.box_sizing == .border_box) pad_v2 + bdr_v2 else 0;
     switch (box.style.min_height) {
         .px => |mh| {
-            if (box.content.height < mh) box.content.height = mh;
+            const adjusted = @max(mh - bs_h, 0);
+            if (box.content.height < adjusted) box.content.height = adjusted;
         },
         .percent => |pct| {
             if (viewport_height > 0) {
                 const mh = pct * viewport_height / 100.0;
-                if (box.content.height < mh) box.content.height = mh;
+                const adjusted = @max(mh - bs_h, 0);
+                if (box.content.height < adjusted) box.content.height = adjusted;
             }
         },
         .calc => |expr| {
             if (viewport_height > 0) {
                 if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |mh| {
-                    if (box.content.height < mh) box.content.height = mh;
+                    const adjusted = @max(mh - bs_h, 0);
+                    if (box.content.height < adjusted) box.content.height = adjusted;
                 }
             }
         },
@@ -631,18 +646,21 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     }
     switch (box.style.max_height) {
         .px => |mh| {
-            if (box.content.height > mh) box.content.height = mh;
+            const adjusted = @max(mh - bs_h, 0);
+            if (box.content.height > adjusted) box.content.height = adjusted;
         },
         .percent => |pct| {
             if (viewport_height > 0) {
                 const mh = pct * viewport_height / 100.0;
-                if (box.content.height > mh) box.content.height = mh;
+                const adjusted = @max(mh - bs_h, 0);
+                if (box.content.height > adjusted) box.content.height = adjusted;
             }
         },
         .calc => |expr| {
             if (viewport_height > 0) {
                 if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |mh| {
-                    if (box.content.height > mh) box.content.height = mh;
+                    const adjusted = @max(mh - bs_h, 0);
+                    if (box.content.height > adjusted) box.content.height = adjusted;
                 }
             }
         },
@@ -2017,40 +2035,88 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
 }
 
 /// Layout pre-formatted text, splitting on newlines.
+/// For white-space: pre — only newline breaks, no wrapping.
+/// For white-space: pre-wrap / break-spaces — also wraps at container boundary.
 fn layoutPreText(box: *Box, text: []const u8, base_x: f32, base_y: f32, container_width: f32, text_renderer: anytype, line_height: f32, ascent: f32, allocator: std.mem.Allocator) void {
-    _ = container_width;
+    const do_wrap = box.style.white_space == .pre_wrap or box.style.white_space == .break_spaces;
     var total_height: f32 = 0;
     var max_width: f32 = 0;
     var start: usize = 0;
 
+    const break_flags = breakFlagsFromStyle(box.style);
+
     var i: usize = 0;
     while (i <= text.len) : (i += 1) {
         if (i == text.len or text[i] == '\n') {
-            const line_text = text[start..i];
-            if (line_text.len > 0) {
-                const lm = text_renderer.measure(line_text);
-                const lw: f32 = @floatFromInt(lm.width);
-                box.lines.append(allocator, .{
-                    .x = base_x,
-                    .y = base_y + total_height,
-                    .width = lw,
-                    .height = line_height,
-                    .text = line_text,
-                    .ascent = ascent,
-                }) catch {};
-                if (lw > max_width) max_width = lw;
+            const seg_text = text[start..i];
+            if (do_wrap and container_width > 0 and seg_text.len > 0) {
+                // pre-wrap / break-spaces: may need to wrap at container boundary too
+                var seg_start: usize = 0;
+                while (seg_start < seg_text.len) {
+                    if (findBreakPoint(seg_text, seg_start, container_width, text_renderer, break_flags)) |break_pos| {
+                        const line_text = seg_text[seg_start..break_pos];
+                        if (line_text.len > 0) {
+                            const lm = text_renderer.measure(line_text);
+                            const lw: f32 = @floatFromInt(lm.width);
+                            box.lines.append(allocator, .{
+                                .x = base_x,
+                                .y = base_y + total_height,
+                                .width = lw,
+                                .height = line_height,
+                                .text = line_text,
+                                .ascent = ascent,
+                            }) catch {};
+                            total_height += line_height;
+                            if (lw > max_width) max_width = lw;
+                        }
+                        seg_start = break_pos;
+                    } else {
+                        // Remaining segment fits on one line (or first char doesn't fit — force at least 1 char)
+                        const line_text = seg_text[seg_start..];
+                        if (line_text.len > 0) {
+                            const lm = text_renderer.measure(line_text);
+                            const lw: f32 = @floatFromInt(lm.width);
+                            box.lines.append(allocator, .{
+                                .x = base_x,
+                                .y = base_y + total_height,
+                                .width = lw,
+                                .height = line_height,
+                                .text = line_text,
+                                .ascent = ascent,
+                            }) catch {};
+                            total_height += line_height;
+                            if (lw > max_width) max_width = lw;
+                        }
+                        break;
+                    }
+                }
             } else {
-                // Empty line
-                box.lines.append(allocator, .{
-                    .x = base_x,
-                    .y = base_y + total_height,
-                    .width = 0,
-                    .height = line_height,
-                    .text = "",
-                    .ascent = ascent,
-                }) catch {};
+                // pre mode (no wrapping): put entire segment on one line
+                if (seg_text.len > 0) {
+                    const lm = text_renderer.measure(seg_text);
+                    const lw: f32 = @floatFromInt(lm.width);
+                    box.lines.append(allocator, .{
+                        .x = base_x,
+                        .y = base_y + total_height,
+                        .width = lw,
+                        .height = line_height,
+                        .text = seg_text,
+                        .ascent = ascent,
+                    }) catch {};
+                    if (lw > max_width) max_width = lw;
+                } else {
+                    // Empty line
+                    box.lines.append(allocator, .{
+                        .x = base_x,
+                        .y = base_y + total_height,
+                        .width = 0,
+                        .height = line_height,
+                        .text = "",
+                        .ascent = ascent,
+                    }) catch {};
+                }
+                total_height += line_height;
             }
-            total_height += line_height;
             start = i + 1;
         }
     }

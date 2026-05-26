@@ -215,6 +215,7 @@ pub fn build(b: *std.Build) void {
         .name = "suzume",
         .root_module = exe_mod,
     });
+    exe.link_gc_sections = true;
 
     // Link all static libraries
     exe.root_module.linkLibrary(lexbor_lib);
