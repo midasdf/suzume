@@ -5670,7 +5670,7 @@ pub const KotoriRuntime = struct {
         \\    try{Object.defineProperty(this,'searchParams',{
         \\      get:function(){
         \\        if(_sp)return _sp;
-        \\        _sp=new URLSearchParams(_q&&_q.charAt(0)==='?'?_q.substring(1):_q||'');
+        \\        _sp=new URLSearchParams(_q||'');
         \\        return _sp;
         \\      },
         \\      set:function(v){throw new TypeError('Cannot set URL property "searchParams"');},
@@ -5681,11 +5681,11 @@ pub const KotoriRuntime = struct {
         \\  URL.prototype.toJSON=function(){return this.href;};
         \\  // WHATWG URL Standard static methods
         \\  URL.canParse=function(url,base){
-        \\    try{URL.parse(url,base);return true;}catch(e){return false;}
+        \\    try{return URL.parse(url,base)!==null;}catch(e){return false;}
         \\  };
         \\  URL.parse=function(url,base){
-        \\    if(url===undefined||url===null){return null;}
-        \\    try{return new URL(String(url),base!==undefined?String(base):undefined);}catch(e){return null;}
+        \\    if(arguments.length===0||(url===undefined&&base===undefined))return null;
+        \\    try{return new URL(url!==undefined?String(url):url,base!==undefined?String(base):base);}catch(e){return null;}
         \\  };
         \\  if(typeof globalThis.URL==='undefined')globalThis.URL=URL;
         \\  // Augment self.location with getter-derived fields. setDocumentUrl
@@ -5741,6 +5741,21 @@ pub const KotoriRuntime = struct {
         \\      },
         \\      configurable:true,enumerable:true
         \\    });}catch(e){}
+        \\  }
+        \\  // JSON.stringify monkey-patch to support toJSON (needed by URL.prototype.toJSON)
+        \\  if(typeof globalThis.JSON!=='undefined'&&globalThis.JSON.stringify&&!globalThis.JSON.__toJSON_patched){
+        \\    var _origStringify=globalThis.JSON.stringify;
+        \\    globalThis.JSON.stringify=function(val, replacer, space){
+        \\      return JSON.stringify._toJSONSerialize(val, replacer, space);
+        \\    };
+        \\    // Recursive serializer that checks for toJSON
+        \\    globalThis.JSON.stringify._toJSONSerialize=function(val, replacer, space){
+        \\      if(val!==null&&typeof val==='object'&&typeof val.toJSON==='function'){
+        \\        val=val.toJSON();
+        \\      }
+        \\      return _origStringify.call(globalThis.JSON, val, replacer, space);
+        \\    };
+        \\    globalThis.JSON.__toJSON_patched=true;
         \\  }
         \\})();
     ;
@@ -6560,7 +6575,17 @@ pub const KotoriRuntime = struct {
         \\}
         \\if(typeof TextDecoder==='undefined'){
         \\  globalThis.TextDecoder=function(enc,opts){
-        \\    var label=(enc||'utf-8').toLowerCase();
+        \\    // Encoding §10.2 step 2-3: label validation
+        \\    var _label;
+        \\    if(enc===undefined||enc===null){_label='utf-8';}
+        \\    else if(typeof enc==='object'&&enc!==null&&typeof enc.toString==='function'){
+        \\      var ts=enc.toString();
+        \\      if(typeof ts!=='string')throw new TypeError('toString returned non-string');
+        \\      _label=ts;
+        \\    }else{_label=String(enc);}
+        \\    if(_label==='')throw new RangeError('Encoding label must not be empty');
+        \\    var label=_label.toLowerCase();
+        \\    // Only support encoding labels that are valid per Encoding §4.12
         \\    // Encoding §4.12 label → canonical name mapping
         \\    var labels={'unicode-1-1-utf-8':'utf-8',utf8:'utf-8',unicode11utf8:'utf-8',
         \\      unicode20utf8:'utf-8','x-utf8':'utf-8','utf-16le':'utf-16le','utf-16':'utf-16le',
@@ -7710,7 +7735,7 @@ pub const KotoriRuntime = struct {
         \\  // TextDecoderStream — wraps TextDecoder as a TransformStream
         \\  if (typeof TextDecoderStream === 'undefined') {
         \\    globalThis.TextDecoderStream = function(encoding, options) {
-        \\      var decoder = new TextDecoder(encoding || 'utf-8', options || {});
+        \\      var decoder = new TextDecoder(encoding, options || {});
         \\      var bufQueue = [];
         \\      var self = this;
         \\
