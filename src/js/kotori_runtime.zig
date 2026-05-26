@@ -273,6 +273,18 @@ pub const KotoriRuntime = struct {
         // any missing detail accessor on the prototype.
         _ = self.eval(customevent_polyfill_js);
 
+        // Console API polyfill — adds missing methods (count, countReset,
+        // time, timeLog, timeEnd, group, groupCollapsed, groupEnd, table,
+        // assert, debug, info, trace, dir, clear) to globalThis.console.
+        // Uses `if (!c.METHOD) c.METHOD = ...` pattern to avoid overwriting
+        // native kotori VM console methods (log/warn/error/etc.).
+        _ = self.eval(console_polyfill_js);
+
+        // Streams API — TextDecoderStream + TextEncoderStream polyfill.
+        // Installs globals needed by encoding/streams/*.any.html WPT tests.
+        // Depends on TextDecoder/TextEncoder from text_encoder_polyfill_js.
+        _ = self.eval(streams_polyfill_js);
+
         return self;
     }
 
@@ -6655,7 +6667,7 @@ pub const KotoriRuntime = struct {
         \\      for(var i=0;i<keys.length;i++)this._e.push([String(keys[i]),String(init[keys[i]])]);
         \\    }
         \\  }
-        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).split('%20').join('+')+'='+encodeURIComponent(p[1]).split('%20').join('+');}).join('&');};
+        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).replace(/%20/g,'+')+'='+encodeURIComponent(p[1]).replace(/%20/g,'+');}).join('&');};
         \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
         \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);};
         \\  URLSearchParams.prototype["delete"]=function(n,v){
@@ -6664,7 +6676,7 @@ pub const KotoriRuntime = struct {
         \\  };
         \\  URLSearchParams.prototype.get=function(n){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
         \\  URLSearchParams.prototype.getAll=function(n){n=String(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
-        \\  URLSearchParams.prototype.has=function(n,v){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(arguments.length<2||this._e[i][1]===String(v)))return true;return false;};
+        \\  URLSearchParams.prototype.has=function(n,v){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(v===undefined||this._e[i][1]===String(v)))return true;return false;};
         \\  URLSearchParams.prototype.set=function(n,v){
         \\    n=String(n);v=String(v);var found=false,e=this._e;
         \\    for(var i=0;i<e.length;i++){
@@ -7369,6 +7381,307 @@ pub const KotoriRuntime = struct {
         \\  };
         \\  globalThis.CustomEvent = CustomEvent;
         \\  try { Object.defineProperty(CustomEvent, 'name', { value: 'CustomEvent', configurable: true }); } catch(e) {}
+        \\})();
+    ;
+
+    /// Console API polyfill — adds missing methods to globalThis.console.
+    /// Kotori VM already registers log/warn/error/info/debug/dir/assert/time/
+    /// timeEnd/timeLog/count/countReset/clear/trace/group/groupCollapsed/groupEnd/
+    /// table natively via vm.zig initBuiltins(). This polyfill fills gaps in
+    /// environments where those native bindings are absent, using the pattern
+    /// `if (!c.METHOD) c.METHOD = ...` to avoid overwriting native methods.
+    const console_polyfill_js =
+        \\(function(){
+        \\  "use strict";
+        \\  var c = globalThis.console;
+        \\  if (!c) { c = {}; globalThis.console = c; }
+        \\
+        \\  // Count tracking
+        \\  c._counts = c._counts || {};
+        \\  if (!c.count) c.count = function(label) {
+        \\    var l = String(label || 'default');
+        \\    c._counts[l] = (c._counts[l] || 0) + 1;
+        \\    c.log(l + ': ' + c._counts[l]);
+        \\  };
+        \\  if (!c.countReset) c.countReset = function(label) {
+        \\    var l = String(label || 'default');
+        \\    c._counts[l] = 0;
+        \\    c.log(l + ': 0');
+        \\  };
+        \\
+        \\  // Timer tracking
+        \\  c._timers = c._timers || {};
+        \\  if (!c.time) c.time = function(label) {
+        \\    var l = String(label || 'default');
+        \\    c._timers[l] = Date.now();
+        \\  };
+        \\  if (!c.timeLog) c.timeLog = function(label) {
+        \\    var l = String(label || 'default');
+        \\    if (c._timers[l] !== undefined) c.log(l + ': ' + (Date.now() - c._timers[l]) + ' ms');
+        \\  };
+        \\  if (!c.timeEnd) c.timeEnd = function(label) {
+        \\    var l = String(label || 'default');
+        \\    if (c._timers[l] !== undefined) {
+        \\      c.log(l + ': ' + (Date.now() - c._timers[l]) + ' ms');
+        \\      delete c._timers[l];
+        \\    }
+        \\  };
+        \\
+        \\  // Grouping
+        \\  c._groupIndent = c._groupIndent || '';
+        \\  if (!c.group) c.group = function(label) {
+        \\    if (label !== undefined) c.log(c._groupIndent + label);
+        \\    c._groupIndent += '  ';
+        \\  };
+        \\  if (!c.groupCollapsed) c.groupCollapsed = c.group;
+        \\  if (!c.groupEnd) c.groupEnd = function() {
+        \\    c._groupIndent = (c._groupIndent || '').slice(0, -2) || '';
+        \\  };
+        \\
+        \\  // Table
+        \\  if (!c.table) c.table = function(data) {
+        \\    c.log(typeof data === 'object' ? JSON.stringify(data, null, 1) : String(data));
+        \\  };
+        \\
+        \\  // Assert
+        \\  if (!c.assert) c.assert = function(cond) {
+        \\    if (!cond) {
+        \\      var args = Array.prototype.slice.call(arguments, 1);
+        \\      c.error('Assertion failed' + (args.length ? ': ' + args.join(' ') : ''));
+        \\    }
+        \\  };
+        \\
+        \\  // Aliases
+        \\  if (!c.debug) c.debug = c.log;
+        \\  if (!c.info) c.info = c.log;
+        \\
+        \\  // Trace
+        \\  if (!c.trace) c.trace = function() {
+        \\    try { throw new Error(); } catch (e) { c.log(e.stack || 'trace'); }
+        \\  };
+        \\
+        \\  // Dir
+        \\  if (!c.dir) c.dir = function(item) {
+        \\    c.log(typeof item === 'object' ? JSON.stringify(item) : String(item));
+        \\  };
+        \\
+        \\  // Clear (no-op)
+        \\  if (!c.clear) c.clear = function() {};
+        \\})();
+    ;
+
+    /// Streams API — TextDecoderStream + TextEncoderStream polyfill.
+    /// These are TransformStream-based wrappers around TextDecoder/TextEncoder
+    /// that provide readable/writable stream interfaces. WPT tests for the
+    /// Encoding Standard exercise the streaming decode path
+    /// (encoding/streams/*.any.html).
+    /// Requires TextDecoder/TextEncoder (text_encoder_polyfill_js) registered
+    /// earlier in init().
+    const streams_polyfill_js =
+        \\(function(){
+        \\  "use strict";
+        \\
+        \\  // Stub ReadableStream / WritableStream / TransformStream if the native
+        \\  // kotori VM did not install them. Mirrors the stubs in web_api.zig.
+        \\  if (typeof ReadableStream === 'undefined') {
+        \\    globalThis.ReadableStream = function(src) {
+        \\      this._src = src;
+        \\      this._queue = [];
+        \\      this._closed = false;
+        \\    };
+        \\    ReadableStream.prototype.getReader = function() {
+        \\      var rs = this;
+        \\      return {
+        \\        read: function() {
+        \\          if (rs._queue.length > 0)
+        \\            return Promise.resolve({ value: rs._queue.shift(), done: false });
+        \\          if (rs._closed)
+        \\            return Promise.resolve({ value: undefined, done: true });
+        \\          return new Promise(function(resolve) {
+        \\            var check = function() {
+        \\              if (rs._queue.length > 0) resolve({ value: rs._queue.shift(), done: false });
+        \\              else if (rs._closed) resolve({ value: undefined, done: true });
+        \\              else setTimeout(check, 10);
+        \\            };
+        \\            check();
+        \\          });
+        \\        },
+        \\        releaseLock: function() {},
+        \\        cancel: function() { rs._closed = true; return Promise.resolve(); }
+        \\      };
+        \\    };
+        \\    ReadableStream.prototype.cancel = function() {
+        \\      this._closed = true; return Promise.resolve();
+        \\    };
+        \\  }
+        \\
+        \\  if (typeof WritableStream === 'undefined') {
+        \\    globalThis.WritableStream = function(sink) {
+        \\      this._sink = sink || {};
+        \\    };
+        \\    WritableStream.prototype.getWriter = function() {
+        \\      var ws = this;
+        \\      return {
+        \\        write: function(chunk) {
+        \\          if (ws._sink.write) return Promise.resolve(ws._sink.write(chunk));
+        \\          return Promise.resolve();
+        \\        },
+        \\        close: function() {
+        \\          if (ws._sink.close) ws._sink.close();
+        \\          return Promise.resolve();
+        \\        },
+        \\        releaseLock: function() {},
+        \\        abort: function() { return Promise.resolve(); }
+        \\      };
+        \\    };
+        \\  }
+        \\
+        \\  if (typeof TransformStream === 'undefined') {
+        \\    globalThis.TransformStream = function(transformer) {
+        \\      var chunks = [];
+        \\      var rc = { enqueue: function(c) { chunks.push(c); } };
+        \\      var self = this;
+        \\      this.readable = new ReadableStream({
+        \\        start: function(ctrl) {},
+        \\        pull: function(ctrl) { if (chunks.length) ctrl.enqueue(chunks.shift()); }
+        \\      });
+        \\      this.writable = new WritableStream({
+        \\        write: function(chunk) {
+        \\          if (transformer && transformer.transform) transformer.transform(chunk, rc);
+        \\          else rc.enqueue(chunk);
+        \\        }
+        \\      });
+        \\    };
+        \\  }
+        \\
+        \\  // TextDecoderStream — wraps TextDecoder as a TransformStream
+        \\  if (typeof TextDecoderStream === 'undefined') {
+        \\    globalThis.TextDecoderStream = function(encoding, options) {
+        \\      var decoder = new TextDecoder(encoding || 'utf-8', options || {});
+        \\      var bufQueue = [];
+        \\      var self = this;
+        \\
+        \\      this._encoding = decoder.encoding;
+        \\      this._fatal = decoder.fatal;
+        \\      this._ignoreBOM = decoder.ignoreBOM;
+        \\
+        \\      this._readable = new ReadableStream({
+        \\        start: function(ctrl) { self._readerCtrl = ctrl; },
+        \\        pull: function(ctrl) {
+        \\          if (bufQueue.length > 0) {
+        \\            var chunksToDecode = bufQueue.splice(0);
+        \\            // Concatenate and decode
+        \\            var totalLen = 0;
+        \\            for (var i = 0; i < chunksToDecode.length; i++) totalLen += chunksToDecode[i].length;
+        \\            var merged = new Uint8Array(totalLen);
+        \\            var off = 0;
+        \\            for (var i = 0; i < chunksToDecode.length; i++) {
+        \\              merged.set(chunksToDecode[i], off);
+        \\              off += chunksToDecode[i].length;
+        \\            }
+        \\            ctrl.enqueue(decoder.decode(merged, { stream: true }));
+        \\          }
+        \\        }
+        \\      });
+        \\
+        \\      this._writable = new WritableStream({
+        \\        write: function(chunk) {
+        \\          if (chunk instanceof Uint8Array) {
+        \\            bufQueue.push(chunk);
+        \\            if (self._readerCtrl && self._readerCtrl.enqueue) {
+        \\              // Drain immediately
+        \\              var toDecode = bufQueue.splice(0);
+        \\              var totalLen = 0;
+        \\              for (var i = 0; i < toDecode.length; i++) totalLen += toDecode[i].length;
+        \\              var merged = new Uint8Array(totalLen);
+        \\              var off = 0;
+        \\              for (var i = 0; i < toDecode.length; i++) {
+        \\                merged.set(toDecode[i], off);
+        \\                off += toDecode[i].length;
+        \\              }
+        \\              self._readerCtrl.enqueue(decoder.decode(merged, { stream: true }));
+        \\            }
+        \\          } else if (ArrayBuffer.isView && ArrayBuffer.isView(chunk)) {
+        \\            bufQueue.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+        \\          } else if (chunk instanceof ArrayBuffer) {
+        \\            bufQueue.push(new Uint8Array(chunk));
+        \\          }
+        \\        },
+        \\        close: function() {
+        \\          var remaining = decoder.decode();
+        \\          if (remaining) self._readerCtrl.enqueue(remaining);
+        \\          self._readerCtrl.close();
+        \\        }
+        \\      });
+        \\    };
+        \\
+        \\    Object.defineProperty(TextDecoderStream.prototype, 'encoding', {
+        \\      get: function() { return this._encoding; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    Object.defineProperty(TextDecoderStream.prototype, 'fatal', {
+        \\      get: function() { return this._fatal; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    Object.defineProperty(TextDecoderStream.prototype, 'ignoreBOM', {
+        \\      get: function() { return this._ignoreBOM; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    Object.defineProperty(TextDecoderStream.prototype, 'readable', {
+        \\      get: function() { return this._readable; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    Object.defineProperty(TextDecoderStream.prototype, 'writable', {
+        \\      get: function() { return this._writable; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\  }
+        \\
+        \\  // TextEncoderStream — wraps TextEncoder as a TransformStream
+        \\  if (typeof TextEncoderStream === 'undefined') {
+        \\    globalThis.TextEncoderStream = function() {
+        \\      var encoder = new TextEncoder();
+        \\      var self = this;
+        \\      var encChunks = [];
+        \\
+        \\      this._readable = new ReadableStream({
+        \\        start: function(ctrl) { self._encCtrl = ctrl; },
+        \\        pull: function(ctrl) {
+        \\          if (encChunks.length > 0) {
+        \\            var all = encChunks.splice(0);
+        \\            for (var i = 0; i < all.length; i++) ctrl.enqueue(all[i]);
+        \\          }
+        \\        }
+        \\      });
+        \\
+        \\      this._writable = new WritableStream({
+        \\        write: function(chunk) {
+        \\          var encoded = encoder.encode(String(chunk));
+        \\          encChunks.push(encoded);
+        \\          if (self._encCtrl && self._encCtrl.enqueue) {
+        \\            var all = encChunks.splice(0);
+        \\            for (var i = 0; i < all.length; i++) self._encCtrl.enqueue(all[i]);
+        \\          }
+        \\        },
+        \\        close: function() {
+        \\          if (self._encCtrl) self._encCtrl.close();
+        \\        }
+        \\      });
+        \\    };
+        \\
+        \\    Object.defineProperty(TextEncoderStream.prototype, 'encoding', {
+        \\      get: function() { return 'utf-8'; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    Object.defineProperty(TextEncoderStream.prototype, 'readable', {
+        \\      get: function() { return this._readable; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    Object.defineProperty(TextEncoderStream.prototype, 'writable', {
+        \\      get: function() { return this._writable; },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\  }
         \\})();
     ;
 
