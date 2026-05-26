@@ -6758,8 +6758,9 @@ pub const KotoriRuntime = struct {
         \\          this._e.push([percentDecode(replP(n)),percentDecode(replP(v))]);
         \\        }
         \\      }
-        \\    }else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
-        \\    else if(init&&typeof init.entries==='function'&&!init[Symbol.iterator]){
+        \\    }else if(Array.isArray(init)){for(var i=0;i<init.length;i++)this._e.push([String(init[i][0]),String(init[i][1])]);}
+        \\    else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
+        \\    else if(init&&typeof init.entries==='function'){
         \\      var it=init.entries();
         \\      var r=it.next?it.next():null;
         \\      while(r&&!r.done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);r=it.next?it.next():null;}
@@ -6775,8 +6776,9 @@ pub const KotoriRuntime = struct {
         \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
         \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);if(this._updateURL)this._updateURL();};
         \\  URLSearchParams.prototype["delete"]=function(n,v){
-        \\    n=String(n);var hasVal=v!==undefined;var nv=hasVal?String(v):null;
-        \\    this._e=this._e.filter(function(p){return !(p[0]===n&&(!hasVal||p[1]===nv));});
+        \\    n=String(n);var hasVal=v!==undefined;var nv=hasVal?String(v):null;var e=this._e;
+        \\    var newE=[];for(var i=0;i<e.length;i++){if(!(e[i][0]===n&&(!hasVal||e[i][1]===nv)))newE.push(e[i]);}
+        \\    this._e=newE;
         \\    if(this._updateURL)this._updateURL();
         \\  };
         \\  URLSearchParams.prototype.get=function(n){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
