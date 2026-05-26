@@ -5707,10 +5707,11 @@ pub const KotoriRuntime = struct {
         \\  URL.prototype.toJSON=function(){return this.href;};
         \\  // WHATWG URL Standard static methods
         \\  URL.canParse=function(url,base){
+        \\    if(url===undefined||url===null)return false;
         \\    try{return URL.parse(url,base)!==null;}catch(e){return false;}
         \\  };
         \\  URL.parse=function(url,base){
-        \\    if(arguments.length===0||(url===undefined&&base===undefined))return null;
+        \\    if(url===undefined||url===null)return null;
         \\    try{return new URL(url!==undefined?String(url):url,base!==undefined?String(base):base);}catch(e){return null;}
         \\  };
         \\  URL.prototype.toJSON=function(){return this.href;};
