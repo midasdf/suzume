@@ -8515,6 +8515,27 @@ pub const VM = struct {
         while (pos.* < s.len and (s[pos.*] == ' ' or s[pos.*] == '\t' or s[pos.*] == '\n' or s[pos.*] == '\r')) pos.* += 1;
     }
 
+    /// Encode a code point as WTF-8: like UTF-8 but lone surrogates get the
+    /// generalized 3-byte encoding, so JS string semantics (which permit
+    /// unpaired surrogates) survive the byte-pool round-trip.
+    fn appendWtf8(allocator: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), cp: u21) !void {
+        if (cp < 0x80) {
+            try buf.append(allocator, @intCast(cp));
+        } else if (cp < 0x800) {
+            try buf.append(allocator, @intCast(0xC0 | (cp >> 6)));
+            try buf.append(allocator, @intCast(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            try buf.append(allocator, @intCast(0xE0 | (cp >> 12)));
+            try buf.append(allocator, @intCast(0x80 | ((cp >> 6) & 0x3F)));
+            try buf.append(allocator, @intCast(0x80 | (cp & 0x3F)));
+        } else {
+            try buf.append(allocator, @intCast(0xF0 | (cp >> 18)));
+            try buf.append(allocator, @intCast(0x80 | ((cp >> 12) & 0x3F)));
+            try buf.append(allocator, @intCast(0x80 | ((cp >> 6) & 0x3F)));
+            try buf.append(allocator, @intCast(0x80 | (cp & 0x3F)));
+        }
+    }
+
     fn jsonParseString(vm: *VM, s: []const u8, pos: *usize) !JsValue {
         pos.* += 1; // skip opening "
         var buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -8526,9 +8547,37 @@ pub const VM = struct {
                     'n' => try buf.append(vm.allocator, '\n'),
                     'r' => try buf.append(vm.allocator, '\r'),
                     't' => try buf.append(vm.allocator, '\t'),
+                    'b' => try buf.append(vm.allocator, 0x08),
+                    'f' => try buf.append(vm.allocator, 0x0C),
                     '"' => try buf.append(vm.allocator, '"'),
                     '\\' => try buf.append(vm.allocator, '\\'),
                     '/' => try buf.append(vm.allocator, '/'),
+                    'u' => {
+                        // ECMA-404 \uXXXX escape, incl. surrogate pairs.
+                        // Previously fell into the catch-all and appended a
+                        // literal 'u' — "" decoded as "u0091".
+                        if (pos.* + 5 <= s.len) {
+                            if (std.fmt.parseInt(u16, s[pos.* + 1 .. pos.* + 5], 16)) |hi| {
+                                var cp: u21 = hi;
+                                pos.* += 4; // consume XXXX (loop tail consumes 'u' slot)
+                                if (hi >= 0xD800 and hi <= 0xDBFF and pos.* + 7 <= s.len and
+                                    s[pos.* + 1] == '\\' and s[pos.* + 2] == 'u')
+                                {
+                                    if (std.fmt.parseInt(u16, s[pos.* + 3 .. pos.* + 7], 16)) |lo| {
+                                        if (lo >= 0xDC00 and lo <= 0xDFFF) {
+                                            cp = 0x10000 + (@as(u21, hi - 0xD800) << 10) + (lo - 0xDC00);
+                                            pos.* += 6; // consume \uXXXX of the low half
+                                        }
+                                    } else |_| {}
+                                }
+                                try appendWtf8(vm.allocator, &buf, cp);
+                            } else |_| {
+                                try buf.append(vm.allocator, 'u');
+                            }
+                        } else {
+                            try buf.append(vm.allocator, 'u');
+                        }
+                    },
                     else => try buf.append(vm.allocator, s[pos.*]),
                 }
             } else {
