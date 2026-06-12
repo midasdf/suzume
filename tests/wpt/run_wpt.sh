@@ -120,16 +120,24 @@ if [ ! -d "$WPT_DIR/$AREA" ]; then
     exit 1
 fi
 
-# Generate HTML wrappers for .any.js tests (WPT convention)
+# Generate HTML wrappers for .any.js tests (WPT convention).
+# Honors `// META: script=...` dependency includes (e.g.
+# /common/subset-tests-by-key.js for url-constructor) the way the real
+# wptserve wrapper generation does. Without a ?include/?exclude variant
+# query the subset helpers run every subtest, so one wrapper covers all
+# variants.
 for anyjs in $(find "$AREA/" -name "*.any.js" 2>/dev/null); do
     wrapper="${anyjs%.any.js}.any.html"
     if [ ! -f "$wrapper" ]; then
-        cat > "$wrapper" << ANYEOF
-<!DOCTYPE html>
-<script src="/resources/testharness.js"></script>
-<script src="/resources/testharnessreport.js"></script>
-<script src="$(basename "$anyjs")"></script>
-ANYEOF
+        {
+            printf '<!DOCTYPE html>\n'
+            printf '<script src="/resources/testharness.js"></script>\n'
+            printf '<script src="/resources/testharnessreport.js"></script>\n'
+            grep -oP '^//\s*META:\s*script=\K\S+' "$anyjs" | while read -r dep; do
+                printf '<script src="%s"></script>\n' "$dep"
+            done
+            printf '<script src="%s"></script>\n' "$(basename "$anyjs")"
+        } > "$wrapper"
     fi
 done
 
