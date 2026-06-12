@@ -7,7 +7,7 @@
 const std = @import("std");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
-const url_parser = @import("../url/parser.zig");
+const url_parser = @import("url_parser");
 
 const allocator = std.heap.c_allocator;
 
@@ -135,7 +135,7 @@ fn urlToJsObject(ctx: *qjs.JSContext, url: *const url_parser.Url) !qjs.JSValue {
 
     // host (hostname:port or just hostname)
     if (url.host) |h| {
-        const hs = try @import("../url/host.zig").serializeHost(allocator, h);
+        const hs = try url_parser.serializeHost(allocator, h);
         defer allocator.free(hs);
         if (url.port) |p| {
             var buf: [5]u8 = undefined;

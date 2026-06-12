@@ -351,7 +351,7 @@ pub const Loader = struct {
 /// Returns a sentinel-terminated owned string.
 /// Uses the WHATWG URL parser for spec-compliant resolution.
 pub fn resolveUrl(allocator: std.mem.Allocator, base_str: []const u8, relative: []const u8) ![:0]const u8 {
-    const url_parser = @import("../url/parser.zig");
+    const url_parser = @import("url_parser");
 
     // Try parsing as absolute URL first (fast path)
     if (relative.len > 0) {

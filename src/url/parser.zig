@@ -9,6 +9,7 @@ const host_mod = @import("host.zig");
 const pe = @import("percent_encode.zig");
 
 pub const Host = host_mod.Host;
+pub const serializeHost = host_mod.serializeHost;
 
 pub const Path = union(enum) {
     list: std.ArrayListUnmanaged([]u8),

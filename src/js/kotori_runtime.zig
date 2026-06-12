@@ -6,9 +6,11 @@
 const std = @import("std");
 const kotori = @import("kotori");
 const kotori_dom = @import("kotori_dom");
+const url_parser = @import("url_parser");
 
 pub const VM = kotori.VM;
 const JsValue = kotori.JsValue;
+const JsObject = kotori.JsObject;
 const Compiler = kotori.Compiler;
 const Bytecode = kotori.Bytecode;
 const StringPool = kotori.StringPool;
@@ -179,11 +181,28 @@ pub const KotoriRuntime = struct {
         // document.activeElement getter (returns body when nothing focused).
         _ = self.eval(focus_polyfill_js);
 
+        // WHATWG URL Standard — native basic-URL-parser bindings consumed
+        // by the URL polyfill below. __suzume_url_parse(input, base?)
+        // returns a parsed field object (or null on failure);
+        // __suzume_url_can_parse returns a boolean.
+        {
+            const parse_fn = try self.vm.createObj(.{ .obj_type = .native_function });
+            parse_fn.data = .{ .native_fn = &nativeUrlParse };
+            try self.vm.globals.put(allocator, try pool.intern("__suzume_url_parse"), JsValue.initObject(parse_fn));
+            const can_parse_fn = try self.vm.createObj(.{ .obj_type = .native_function });
+            can_parse_fn.data = .{ .native_fn = &nativeUrlCanParse };
+            try self.vm.globals.put(allocator, try pool.intern("__suzume_url_can_parse"), JsValue.initObject(can_parse_fn));
+        }
+
         // WHATWG URL Standard — globalThis.URL constructor + Location
         // augmentation (pathname, protocol, host, etc. derived from href).
         // Tests like show-picker-cross-origin-iframe use
         // `new URL("...", self.location).pathname`.
         _ = self.eval(url_polyfill_js);
+
+        // Fetch §4.1 — wrap native fetch so relative request URLs
+        // resolve against document.URL (must run after url_polyfill_js).
+        _ = self.eval(fetch_resolve_polyfill_js);
 
         // DOM §2.7 — Event.prototype.returnValue accessor that derives
         // from defaultPrevented. The setter calls preventDefault when
@@ -5565,21 +5584,186 @@ pub const KotoriRuntime = struct {
         \\})();
     ;
 
-    /// WHATWG URL Standard — minimal `globalThis.URL` constructor +
+    // ── Native WHATWG URL bindings (src/url/parser.zig) ─────────────
+
+    /// Intern `value` and bind it on `obj` under `name`.
+    fn setStringProp(vm: *VM, obj: *JsObject, name: []const u8, value: []const u8) !void {
+        const key = try vm.pool.intern(name);
+        const val = try vm.pool.intern(value);
+        try obj.setProperty(vm.allocator, key, JsValue.initString(val));
+    }
+
+    /// URL Standard §4.8: serialize a URL's origin. Tuple origin for
+    /// special schemes (http/https/ws/wss/ftp), the inner URL's origin
+    /// for blob:, opaque origin ("null") for everything else including
+    /// file: (implementation-defined; matches WPT expectations).
+    fn urlOriginString(allocator: std.mem.Allocator, url: *const url_parser.Url) ![]u8 {
+        const special = std.mem.eql(u8, url.scheme, "http") or
+            std.mem.eql(u8, url.scheme, "https") or
+            std.mem.eql(u8, url.scheme, "ws") or
+            std.mem.eql(u8, url.scheme, "wss") or
+            std.mem.eql(u8, url.scheme, "ftp");
+        if (special) return url.serializeOrigin(allocator);
+        if (std.mem.eql(u8, url.scheme, "blob")) {
+            const inner_str = switch (url.path) {
+                .opaque_path => |p| p,
+                .list => |l| if (l.items.len > 0) l.items[0] else return allocator.dupe(u8, "null"),
+            };
+            var inner = (url_parser.parse(allocator, inner_str, null) catch null) orelse
+                return allocator.dupe(u8, "null");
+            defer inner.deinit();
+            // Guard against blob:blob:... recursion: inner must be special.
+            const inner_special = std.mem.eql(u8, inner.scheme, "http") or
+                std.mem.eql(u8, inner.scheme, "https") or
+                std.mem.eql(u8, inner.scheme, "ws") or
+                std.mem.eql(u8, inner.scheme, "wss") or
+                std.mem.eql(u8, inner.scheme, "ftp");
+            if (!inner_special) return allocator.dupe(u8, "null");
+            return inner.serializeOrigin(allocator);
+        }
+        return allocator.dupe(u8, "null");
+    }
+
+    /// Build the JS field object the URL polyfill class wraps:
+    /// href/origin/protocol/username/password/host/hostname/port/
+    /// pathname/search/hash plus `query` (search without "?", used to
+    /// seed searchParams).
+    fn urlRecordToJs(vm: *VM, url: *const url_parser.Url) anyerror!JsValue {
+        const a = vm.allocator;
+        const obj = try vm.createObj(.{});
+
+        const href = try url.serialize(a, false);
+        defer a.free(href);
+        try setStringProp(vm, obj, "href", href);
+
+        const origin = try urlOriginString(a, url);
+        defer a.free(origin);
+        try setStringProp(vm, obj, "origin", origin);
+
+        const proto = try std.fmt.allocPrint(a, "{s}:", .{url.scheme});
+        defer a.free(proto);
+        try setStringProp(vm, obj, "protocol", proto);
+
+        try setStringProp(vm, obj, "username", url.username);
+        try setStringProp(vm, obj, "password", url.password);
+
+        if (url.host) |h| {
+            const hs = try url_parser.serializeHost(a, h);
+            defer a.free(hs);
+            try setStringProp(vm, obj, "hostname", hs);
+            if (url.port) |p| {
+                const hp = try std.fmt.allocPrint(a, "{s}:{d}", .{ hs, p });
+                defer a.free(hp);
+                try setStringProp(vm, obj, "host", hp);
+                const ps = try std.fmt.allocPrint(a, "{d}", .{p});
+                defer a.free(ps);
+                try setStringProp(vm, obj, "port", ps);
+            } else {
+                try setStringProp(vm, obj, "host", hs);
+                try setStringProp(vm, obj, "port", "");
+            }
+        } else {
+            try setStringProp(vm, obj, "host", "");
+            try setStringProp(vm, obj, "hostname", "");
+            try setStringProp(vm, obj, "port", "");
+        }
+
+        switch (url.path) {
+            .list => |l| {
+                var buf: std.ArrayListUnmanaged(u8) = .empty;
+                defer buf.deinit(a);
+                for (l.items) |seg| {
+                    try buf.append(a, '/');
+                    try buf.appendSlice(a, seg);
+                }
+                if (l.items.len == 0) try buf.append(a, '/');
+                try setStringProp(vm, obj, "pathname", buf.items);
+            },
+            .opaque_path => |p| try setStringProp(vm, obj, "pathname", p),
+        }
+
+        if (url.query) |q| {
+            if (q.len > 0) {
+                const s = try std.fmt.allocPrint(a, "?{s}", .{q});
+                defer a.free(s);
+                try setStringProp(vm, obj, "search", s);
+            } else {
+                try setStringProp(vm, obj, "search", "");
+            }
+            try setStringProp(vm, obj, "query", q);
+        } else {
+            try setStringProp(vm, obj, "search", "");
+            try setStringProp(vm, obj, "query", "");
+        }
+
+        if (url.fragment) |f| {
+            if (f.len > 0) {
+                const s = try std.fmt.allocPrint(a, "#{s}", .{f});
+                defer a.free(s);
+                try setStringProp(vm, obj, "hash", s);
+            } else {
+                try setStringProp(vm, obj, "hash", "");
+            }
+        } else {
+            try setStringProp(vm, obj, "hash", "");
+        }
+
+        return JsValue.initObject(obj);
+    }
+
+    /// __suzume_url_parse(input, base?) → field object | null.
+    /// Runs the WHATWG basic URL parser (full host parsing, IDNA,
+    /// percent encoding) from src/url/parser.zig.
+    fn nativeUrlParse(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = VM.vmFromCtx(ctx);
+        if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+        const input = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+
+        var base: ?url_parser.Url = null;
+        defer if (base) |*b| b.deinit();
+        if (args.len > 1 and args[1].isString()) {
+            const base_str = vm.pool.get(args[1].asStringId()) orelse return JsValue.null_val;
+            base = (url_parser.parse(vm.allocator, base_str, null) catch null) orelse
+                return JsValue.null_val;
+        }
+
+        const base_ptr: ?*const url_parser.Url = if (base) |*b| b else null;
+        var url = (url_parser.parse(vm.allocator, input, base_ptr) catch null) orelse
+            return JsValue.null_val;
+        defer url.deinit();
+        return urlRecordToJs(vm, &url);
+    }
+
+    /// __suzume_url_can_parse(input, base?) → boolean.
+    fn nativeUrlCanParse(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = VM.vmFromCtx(ctx);
+        if (args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
+        const input = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
+
+        var base: ?url_parser.Url = null;
+        defer if (base) |*b| b.deinit();
+        if (args.len > 1 and args[1].isString()) {
+            const base_str = vm.pool.get(args[1].asStringId()) orelse
+                return JsValue.initBool(false);
+            base = (url_parser.parse(vm.allocator, base_str, null) catch null) orelse
+                return JsValue.initBool(false);
+        }
+
+        const base_ptr: ?*const url_parser.Url = if (base) |*b| b else null;
+        var url = (url_parser.parse(vm.allocator, input, base_ptr) catch null) orelse
+            return JsValue.initBool(false);
+        url.deinit();
+        return JsValue.initBool(true);
+    }
+
+    /// WHATWG URL Standard — `globalThis.URL` constructor backed by the
+    /// native parser (src/url/parser.zig via __suzume_url_parse), plus
     /// Location interface enrichment.
     ///
-    /// Why a polyfill instead of native: kotori's QuickJS path has a
-    /// full URL implementation (web_api.zig:1529 + dom_api.zig URL
-    /// bindings), but kotori VM doesn't share those bindings. Tests
-    /// like show-picker-cross-origin-iframe call
-    /// `new URL("...", self.location).pathname` — without URL global
-    /// they crash with `Cannot read properties of undefined`.
-    ///
-    /// Scope: parse `protocol://host:port/path?query#hash`, expose
-    /// href/protocol/host/hostname/port/pathname/search/hash/origin
-    /// plus `toString()`. URLSearchParams is a minimal stub. Not full
-    /// spec (no IDN, no percent-decoding); covers the WPT cases that
-    /// only inspect pathname / origin / toString output.
+    /// The class shell stays in JS (field stamping, searchParams
+    /// linkage) while all parsing/serialization runs in the native
+    /// basic URL parser: full host parsing, IDNA, percent encoding,
+    /// relative resolution, spec href normalization.
     ///
     /// Location augmentation: window.location.href is set in
     /// kotori_runtime.setDocumentUrl; this polyfill parses it and
@@ -5589,73 +5773,25 @@ pub const KotoriRuntime = struct {
     const url_polyfill_js =
         \\(function(){
         \\  if(typeof globalThis==='undefined')return;
+        \\  function percentDecode(s){try{return decodeURIComponent(s);}catch(e){var out='';for(var i=0;i<s.length;i++){if(s.charAt(i)==='%'&&i+2<s.length){var h=s.substring(i+1,i+3);if(/^[0-9A-Fa-f]{2}$/.test(h)){out+=decodeURIComponent(s.substring(i,i+3));i+=2;continue;}}out+=s.charAt(i);}return out;}}
+        \\  // Native-backed parse: full WHATWG basic URL parser. Returns a
+        \\  // stub for invalid input so location getters degrade gracefully.
         \\  function parseURL(url){
-        \\    var out={href:url,protocol:'',host:'',hostname:'',port:'',pathname:'/',search:'',hash:'',origin:''};
-        \\    var protoEnd=url.indexOf('://');
-        \\    if(protoEnd===-1){
-        \\      out.pathname=url;return out;
-        \\    }
-        \\    out.protocol=url.substring(0,protoEnd+1);
-        \\    var rest=url.substring(protoEnd+3);
-        \\    var hashIdx=rest.indexOf('#');
-        \\    if(hashIdx!==-1){out.hash=rest.substring(hashIdx);rest=rest.substring(0,hashIdx);}
-        \\    var searchIdx=rest.indexOf('?');
-        \\    if(searchIdx!==-1){out.search=rest.substring(searchIdx);rest=rest.substring(0,searchIdx);}
-        \\    var pathIdx=rest.indexOf('/');
-        \\    if(pathIdx!==-1){out.host=rest.substring(0,pathIdx);out.pathname=rest.substring(pathIdx);}
-        \\    else{out.host=rest;out.pathname='/';}
-        \\    var colonIdx=out.host.indexOf(':');
-        \\    if(colonIdx!==-1){out.hostname=out.host.substring(0,colonIdx);out.port=out.host.substring(colonIdx+1);}
-        \\    else{out.hostname=out.host;out.port='';}
-        \\    // Canonicalize hostname per URL Standard §4.4
-        \\    out.hostname=out.hostname.toLowerCase();
-        \\    out.host=out.host.toLowerCase();
-        \\    // Origin per URL Standard §4.8: opaque origin for non-special schemes
-        \\    var proto=out.protocol.toLowerCase().replace(/:$/,'');
-        \\    if(proto==='http'||proto==='https'||proto==='ws'||proto==='wss'||proto==='ftp'){
-        \\      out.origin=(proto==='https'||proto==='wss'?'https://':'http://')+out.host;
-        \\    }else{
-        \\      out.origin='null';
-        \\    }
-        \\    return out;
-        \\  }
-        \\  function resolveURL(input,base){
-        \\    if(input.indexOf('://')!==-1)return input;
-        \\    if(typeof base!=='string'||base.indexOf('://')===-1)return input;
-        \\    var b=parseURL(base);
-        \\    if(input.charAt(0)==='/'){
-        \\      return b.origin+input;
-        \\    }
-        \\    var lastSlash=b.pathname.lastIndexOf('/');
-        \\    var dir=lastSlash!==-1?b.pathname.substring(0,lastSlash+1):'/';
-        \\    var result=b.origin+dir+input;
-        \\    // Resolve . and .. path segments (URL Standard §4.4)
-        \\    var qi2=result.indexOf('?');var hi2=result.indexOf('#');
-        \\    var qs2='';var ha2='';
-        \\    if(qi2!==-1){qs2=result.substring(qi2);if(hi2>qi2){ha2=result.substring(hi2);result=result.substring(0,hi2);}else result=result.substring(0,qi2);}
-        \\    else if(hi2!==-1){ha2=result.substring(hi2);result=result.substring(0,hi2);}
-        \\    var segs=result.split('/');
-        \\    var res=[];
-        \\    for(var si=0;si<segs.length;si++){
-        \\      var s=segs[si];
-        \\      if(s===''||s==='.')continue;
-        \\      if(s==='..')res.pop();else res.push(s);
-        \\    }
-        \\    result=res.join('/');
-        \\    if(result.charAt(0)!=='/')result='/'+result;
-        \\    return result+qs2+ha2;
+        \\    var p=null;
+        \\    try{p=__suzume_url_parse(String(url));}catch(e){p=null;}
+        \\    if(p)return p;
+        \\    return {href:String(url),protocol:'',host:'',hostname:'',port:'',pathname:'',search:'',hash:'',origin:'null'};
         \\  }
         \\  function URL(url,base){
         \\    if(!(this instanceof URL))throw new TypeError("Constructor URL requires 'new'");
-        \\    if(typeof url!=='string')url=String(url);
-        \\    if(base!==undefined&&base!==null){
-        \\      if(typeof base!=='string')base=String(base);
-        \\      url=resolveURL(url,base);
-        \\    }
-        \\    var p=parseURL(url);
-        \\    if(p.port&&(!/^[0-9]+$/.test(p.port)||parseInt(p.port,10)>65535))throw new TypeError("Invalid URL port");
+        \\    var p;
+        \\    try{p=__suzume_url_parse(String(url),base===undefined?undefined:String(base));}
+        \\    catch(e){p=null;}
+        \\    if(!p)throw new TypeError("Failed to construct 'URL': Invalid URL");
         \\    this.href=p.href;
         \\    this.protocol=p.protocol;
+        \\    this.username=p.username||'';
+        \\    this.password=p.password||'';
         \\    this.hostname=p.hostname;
         \\    this.port=p.port;
         \\    this.pathname=p.pathname;
@@ -5705,16 +5841,18 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  URL.prototype.toString=function(){return this.href;};
         \\  URL.prototype.toJSON=function(){return this.href;};
-        \\  // WHATWG URL Standard static methods
+        \\  // WHATWG URL Standard static methods. WebIDL USVString
+        \\  // conversion applies: undefined/null inputs stringify to
+        \\  // "undefined"/"null" (only a *missing* argument throws), so
+        \\  // URL.canParse(undefined, "aaa:/b") is true.
         \\  URL.canParse=function(url,base){
-        \\    if(url===undefined||url===null)return false;
-        \\    try{return URL.parse(url,base)!==null;}catch(e){return false;}
+        \\    if(arguments.length===0)throw new TypeError("1 argument required, but only 0 present");
+        \\    try{return __suzume_url_can_parse(String(url),base===undefined?undefined:String(base));}catch(e){return false;}
         \\  };
         \\  URL.parse=function(url,base){
-        \\    if(url===undefined||url===null)return null;
-        \\    try{return new URL(url!==undefined?String(url):url,base!==undefined?String(base):base);}catch(e){return null;}
+        \\    if(arguments.length===0)throw new TypeError("1 argument required, but only 0 present");
+        \\    try{return new URL(url,base);}catch(e){return null;}
         \\  };
-        \\  URL.prototype.toJSON=function(){return this.href;};
         \\  if(typeof globalThis.URL==='undefined')globalThis.URL=URL;
         \\  // Augment self.location with getter-derived fields. setDocumentUrl
         \\  // overwrites location.href post-init, so static fields get stale.
@@ -5785,6 +5923,27 @@ pub const KotoriRuntime = struct {
         \\    };
         \\    globalThis.JSON.__toJSON_patched=true;
         \\  }
+        \\})();
+    ;
+
+    /// Fetch §4.1: resolve relative request URLs against the document
+    /// URL before calling the native fetch. The native layer (vm.zig
+    /// nativeFetch) hands its URL string verbatim to the HTTP client,
+    /// so a relative fetch("resources/data.json") would otherwise fail
+    /// with a network error. Resolution happens at call time because
+    /// setDocumentUrl stamps document.URL after runtime init.
+    const fetch_resolve_polyfill_js =
+        \\(function(){
+        \\  if(typeof fetch!=='function'||typeof URL!=='function')return;
+        \\  var _nativeFetch=fetch;
+        \\  globalThis.fetch=function(input,init){
+        \\    var u=(input&&typeof input==='object'&&input.url!==undefined)?String(input.url):String(input);
+        \\    try{
+        \\      var base=(typeof document!=='undefined'&&document.URL)?String(document.URL):'';
+        \\      u=base?new URL(u,base).href:new URL(u).href;
+        \\    }catch(e){}
+        \\    return _nativeFetch(u,init);
+        \\  };
         \\})();
     ;
 
