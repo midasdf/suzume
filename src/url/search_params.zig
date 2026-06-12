@@ -211,21 +211,22 @@ fn decodeUtf8(s: []const u8, pos: *usize) u21 {
         pos.* += 1;
         return byte;
     }
-    const len: usize = switch (@as(u3, @truncate(~byte >> 4))) {
-        0b110...0b111 => 2, // 0b110xxxxx - actually need to check differently
-        else => blk: {
-            // Use std.unicode for proper decoding
-            break :blk 1;
-        },
-    };
-    _ = len;
-    // Use std.unicode.Utf8Iterator for reliable decoding
-    var iter = std.unicode.Utf8Iterator{ .bytes = s[pos.*..], .i = 0 };
-    const cp = iter.nextCodepoint() orelse {
+    // Decode permissively: Utf8Iterator assumes pre-validated bytes and
+    // panics on ill-formed sequences (JS callers can hand us WTF-8 lone
+    // surrogates). Invalid bytes decode as U+FFFD.
+    const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
         pos.* += 1;
-        return 0xFFFD; // replacement character
+        return 0xFFFD;
     };
-    pos.* += iter.i;
+    if (pos.* + seq_len > s.len) {
+        pos.* += 1;
+        return 0xFFFD;
+    }
+    const cp = std.unicode.utf8Decode(s[pos.* .. pos.* + seq_len]) catch {
+        pos.* += 1;
+        return 0xFFFD;
+    };
+    pos.* += seq_len;
     return cp;
 }
 

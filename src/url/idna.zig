@@ -12,13 +12,33 @@ const punycode = @import("punycode.zig");
 /// Convert a domain to its ASCII representation (ACE form).
 /// Returns null on failure (invalid domain).
 pub fn domainToAscii(allocator: Allocator, domain: []const u8, be_strict: bool) !?[]u8 {
-    // 1. Decode UTF-8 to code points
+    // 1. Decode UTF-8 to code points. Decode permissively: JS engines can
+    // hand us ill-formed sequences (e.g. WTF-8 lone surrogates from JSON
+    // "\ud800" escapes) and Utf8Iterator.nextCodepoint assumes pre-validated
+    // bytes (panics otherwise). Invalid bytes become U+FFFD, which IDNA
+    // mapping then rejects — a parse failure instead of a crash.
     var codepoints: std.ArrayListUnmanaged(u21) = .empty;
     defer codepoints.deinit(allocator);
 
-    var iter = std.unicode.Utf8Iterator{ .bytes = domain, .i = 0 };
-    while (iter.nextCodepoint()) |cp| {
+    var i: usize = 0;
+    while (i < domain.len) {
+        const seq_len = std.unicode.utf8ByteSequenceLength(domain[i]) catch {
+            try codepoints.append(allocator, 0xFFFD);
+            i += 1;
+            continue;
+        };
+        if (i + seq_len > domain.len) {
+            try codepoints.append(allocator, 0xFFFD);
+            i += 1;
+            continue;
+        }
+        const cp = std.unicode.utf8Decode(domain[i .. i + seq_len]) catch {
+            try codepoints.append(allocator, 0xFFFD);
+            i += 1;
+            continue;
+        };
         try codepoints.append(allocator, cp);
+        i += seq_len;
     }
 
     // 2. Apply IDNA mapping
