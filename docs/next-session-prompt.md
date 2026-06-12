@@ -2,108 +2,82 @@
 
 TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
 
-## 前回セッション成果（2026-05-26 ultrawork）
+## 前回セッション成果（2026-06-13、Waves 174-183）
 
-### 12 commits, 9 waves (149-158)
+URL エリア集中改善: **130/274 → 5180/7244 (71.5%)** subtests
+(分母はラッパー修正でデータ駆動テストが解放されて 274→7244 に拡大)
 
-| Wave | Commit | 内容 |
-|------|--------|------|
-| 149 | d49fb07 | Event() ctor rejects empty-type per spec |
-| 150 | 54e24ed | WheelEvent ctor: deltaX/Y/Z/deltaMode |
-| 151 | 72d7e51+df87186 | TextEncoder/TextDecoder UTF-8 polyfill + surrogate fix |
-| 152 | 9e48f0a | URLSearchParams full API (17/27 WPT) |
-| 153 | 977edd0 | FocusEvent + InputEvent native constructors |
-| 154 | df9a9ec | VM: nativeArraySlice + `in` for TypedArrays |
-| 155 | 021d3bf | Blob/File/FileReader polyfill |
-| 156 | bc03d12+e47c843 | UTF-16LE/BE decode + \\xHH parser fix |
-| 157 | fb92edf | TextDecoder stream decode + pending bytes |
-| 158 | a042934 | instanceof fix: File.prototype chain |
+| Wave | 内容 |
+|------|------|
+| 174 | kotori ネイティブ URL バインディング (`__suzume_url_parse`/`can_parse`、src/url の本物パーサー使用) |
+| 175 | 素の `location` グローバル + fetch 相対URL解決 |
+| 176 | **コンパイラ修正**: ブロック内 function 宣言の sp 崩壊 + 未捕捉例外の VM 汚染 (`execute()` がクリア + `error.UncaughtException`) |
+| 177 | IDNA/form-urlencoded の不正 UTF-8 → U+FFFD (panic 解消) |
+| 178 | パーサー: 末尾 dot セグメント、file: ドライブレター、localhost、serialize `/.` プレフィックス |
+| 179 | kotori JSON.parse `\uXXXX` エスケープ (サロゲートペア + WTF-8) |
+| 180 | **URL §6.3 setters** state-override 実装 (`applySetter` in parser.zig、url-setters 279/279 全パス) |
+| 181 | for-of/for-in 分割代入 (`for (const [k,v] of …)`) |
+| 182 | **StringPool.get O(1)** (線形スキャン→index、a-element 300s+→18s) |
+| 183 | HTMLHyperlinkElementUtils (`<a>`/`<area>` 分解アクセサ) + ネイティブ baseURI/URL reflection |
 
-### WPT改善（.any.* tests）
-- `encoding/api-basics`: 0 → **6/6 PASS**
-- `encoding/api-surrogates-utf8`: 0 → **7/7 PASS**
-- `urlsearchparams-constructor`: 0 → **17/27 PASS**
-- `events/Event-constructors`: 13 → **14/14 PASS**
-
-### 主要変更ファイル
-- `src/js/kotori_runtime.zig` — +700 lines (6 polyfills)
-- `src/js/kotori_dom.zig` — +90 lines (4 constructors + fix)
-- `src/js/kotori/vm.zig` — +67 lines (3 operations)
-- `src/js/kotori/parser.zig` — +10 lines (bug fix)
+### 個別ファイルスコア (url エリア)
+- url-setters: **279/279**、url-setters-stripping: **260/260**
+- url-constructor: 841/890、url-origin: 391/403
+- a-element: 841/889、a-element-origin: 390/402
+- IdnaTestV2: 1461/2671 ← 最大の残り (+IdnaTestV2-removed 9/21)
+- failure.html: 573/1211 ← 2番目
+- urlencoded-parser: 30/105、urlsearchparams-constructor: 21/27
+- idlharness: 0/1
 
 ## ビルド（重要）
+- zig 0.16.0 では素の `zig build` でOK（libc-min ワークアラウンドは不要になった）
+- サブモジュール: `.claude/worktrees` の壊れ gitlink は除去済み
+- `./scripts/apply-libnsfb-patch.sh "$PWD/patches/libnsfb-xim.patch" "$PWD/deps/libnsfb"`
+- test-kotori のベースライン: **680 pass, 14 fail, 21 crash**（zig 0.16 起因、変更前から同数）
+
+## WPT 実行
 ```bash
-# GCC 16/glibc 2.43 の .sframe 問題回避
-# /tmp/libc-min/ は再起動後に再作成が必要
-zig build --libc /tmp/libc-min/libc.txt
+./tests/wpt/run_wpt_parallel.sh setup   # /tmp/wpt クローン (再起動後)
+./tests/wpt/run_wpt_parallel.sh --jobs 8 url
+# 単発:
+DISPLAY=:98 timeout 120 ./zig-out/bin/suzume --wpt-mode "http://127.0.0.1:9876/url/xxx.any.html"
 ```
-libc-min の中身: stripped crt1.o (no .sframe) + dynamic .so symlinks + libc_nonshared.a
+- run_wpt.sh のラッパー生成が `// META: script=` を解決するようになった
+- Xvfb :98 + python3 -m http.server 9876 (in /tmp/wpt) が前提
+- ⚠️ run_wpt.sh で一度ラッパー生成してから parallel を使う（rm url/*.any.html で再生成可）
 
-## 次セッション優先タスク（4項目全部）
+## 次セッション優先タスク
 
-### 1. VM改善
-- `instanceof` に `Object.create()` チェーン対応を追加（ネイティブ側）
-  - 参考: vm.zig:486-515 の `nativeInstanceOf`、walk は `lhs_obj.prototype` を辿る
-  - 問題: `Object.create(Blob.prototype)` で作られた `File.prototype` のプロトタイプチェーンを instanceof が検出しない
-- `+ ''` 暗黙的 toString 強制変換の修正
-  - 参考: vm.zig:2932 `stringConcat` → `formatValue` fast path（Proxy再帰回避のため意図的）
+### 1. IdnaTestV2 (残り ~1200 subtests)
+- `src/url/idna.zig` / `tables.zig` の UTS#46 конформance
+- パターン: xn-- punycode 検証 (invalid → throw)、bidi/contextJ チェック
 
-### 2. Polyfill継続
-- `AbortController` + `AbortSignal`（web_api.zig:2677-2688 にJS実装あり → kotori_runtime.zig に注入）
-- `DOMParser`（XML/XHTMLパース）
-- `MutationObserver`
-- `CustomEvent` コンストラクタ（kotori_dom.zig に追加、WheelEventパターン踏襲）
+### 2. urlencoded-parser (30/105) + urlsearchparams-*
+- kotori の URLSearchParams は JS ポリフィル。`src/url/search_params.zig`
+  (ネイティブ実装あり) をバインドするのが本筋
+- application/x-www-form-urlencoded の UTF-8 デコード規則
 
-### 3. CSS Cascade @layer
-- `src/css/parser.zig:662-704` に @layer 構文解析は既存（透過扱い）
-- `src/css/cascade.zig` (3971行) にレイヤー優先度システム追加
-- 全テストが reftest（visual比較）のため検証が難しい
-- 必要なもの: layer ID追跡、cascade順序付け、revert-layer キーワード
-- **大きい機能。複数コミットに分割推奨。**
+### 3. IPv4 パーサー強化
+- `http://0300.168.0xF0` → 192.168.0.240 (octal/hex/短縮形、url-constructor 残りの一部)
+- percent-decoded host の IPv4 再解釈 (`%30%78...`)
+- 末尾ドット (`0xc0.0250.01.`)
 
-### 4. DOMコア
-- `Node.cloneNode` の名前空間クローン
-  - 参考: `src/js/dom_node.zig:1420` `elementCloneNode`
-  - SVG要素を暗黙のHTML名前空間でクローンしてしまう問題
-- `ChildNode` ミックスインのカバレッジ拡大
-  - `before/after/replaceWith/remove` は QuickJS側・kotori側両方に実装済み
-  - エッジケーステスト（CharacterData全種、DocumentType等）
+### 4. failure.html / idlharness
+- failure.html: URL ctor + a.href 両方で invalid 入力の扱い
+- idlharness.any.html (0/1): WebIDL メタテスト、ハーネス依存が深い
 
-### WPTテストの制約
-- `.any.js` テスト（JS-only）は file:// で直接動作
-- `.any.html` / HTML-pageテストはHTTPサーバー経由だと不安定（hang/timeout）
-- ハイブリッド方式: ローカルHTMLがHTTPから testharness.js + .any.js を読み込む（動作確認済み、遅い）
-- CSS系テストは reftest（視覚比較）が中心 → JSで検証不可
-./tests/wpt/run_wpt_parallel.sh --jobs 4 dom/nodes
-./tests/wpt/run_wpt_parallel.sh --jobs 4 html/dom
+### 5. kotori 残課題（このセッションで発見、未着手）
+- ループの per-iteration binding (クロージャが最終値を見る — D3 テストケース)
+- lone surrogate の percent-encode は WTF-8 バイトを encode（spec は U+FFFD 置換）
+  → pool 文字列を percent-encode する際に CESU/WTF-8 サロゲートを FFFD に置換すべき
+- url-setters の `Object.entries` 依存は解決済み（分割代入対応で）
 
-# WPTセットアップ（/tmp再起動後）
-./tests/wpt/run_wpt_parallel.sh setup
-# or
-./tests/wpt/run_wpt.sh setup
-
-# test262
-cd /tmp/quickjs-ng-full && ./run-test262 -c test262.conf
-```
-
-## Reftest Results (2026-03-25 late)
-
-Suzume passes visual reftests at very high rates:
-- css-flexbox: 89/100 = 89% (sample)
-- css-display: 29/30 = 97% (sample)
-- css-grid: 8/10 = 80% (sample)
-
-Estimated +1700 additional tests when reftest integrated into runner.
-
-Total available reftests across CSS areas:
-- css-grid: 1194
-- css-flexbox: 740
-- css-backgrounds: 670
-- css-sizing: 532
-- css-overflow: 475
-- css-position: 219
-- css-tables: 151
-- css-display: 78
-Total: ~4059 reftests
-
-Next: integrate reftest into run_wpt_parallel.sh for combined scoring.
+## アーキテクチャメモ
+- URL パーサーは共有モジュール `url_parser` (build.zig で kotori_dom/kotori_rt/exe に配線)
+- kotori の URL クラス = prototype アクセサ + `this._p` (ネイティブ field object)
+- setters は `__suzume_url_set(href, prop, value)` → `parser.applySetter()`
+- `<a>`/`<area>` は hyperlink_utils_polyfill_js (kotori_runtime.zig)
+- interface prototype は freeze される — ポリフィルで拡張するなら
+  kotori_dom.zig の `unfrozen_html_protos` に追加
+- document.baseURI はネイティブ (`docBaseUriString` in kotori_dom.zig)
+- VM: 未捕捉例外は `execute()` がクリアして `last_uncaught` に保存
