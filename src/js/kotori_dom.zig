@@ -20,6 +20,7 @@ const refl = @import("html_reflection.zig");
 
 // ── Kotori engine types (via module alias, set in build.zig) ────────
 const kotori = @import("kotori");
+const url_parser = @import("url_parser");
 
 const VM = kotori.VM;
 const JsValue = kotori.JsValue;
@@ -1098,6 +1099,11 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const unfrozen_html_protos = [_][]const u8{
         "HTMLSelectElement",
         "HTMLFormElement",
+        // HTML §4.6.2 HTMLHyperlinkElementUtils: hyperlink_utils_polyfill_js
+        // (kotori_runtime.zig) installs the URL decomposition accessors
+        // (href/protocol/host/…) on these prototypes after init.
+        "HTMLAnchorElement",
+        "HTMLAreaElement",
         // HTML §8.1.5.4 Window-reflecting body element event handler set:
         // body_event_handler_polyfill_js (kotori_runtime.zig) installs IDL
         // accessor descriptors for onblur/onerror/onfocus/onload/onscroll/
@@ -1630,6 +1636,73 @@ fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
     return iface_mod.resolveInterface("http://www.w3.org/1999/xhtml", local_name);
 }
 
+/// HTML §3.1.2: compute the document base URL natively — the first
+/// <base href> in tree order resolved against the document's URL via the
+/// WHATWG URL parser; the document's URL when no <base> exists. Walking
+/// lexbor directly keeps this off the JS live-collection/Proxy path, which
+/// made per-property URL reflection quadratic on data-driven WPT pages.
+/// Returns a pool-interned string.
+fn docBaseUriString(vm: *VM) ?[]const u8 {
+    const doc_sid = vm.pool.intern("document") catch return null;
+    const doc_val = vm.globals.get(doc_sid) orelse return null;
+    if (!doc_val.isObject()) return null;
+    const doc_obj = doc_val.asJsObject();
+    const doc_url: ?[]const u8 = blk: {
+        const url_sid = vm.pool.intern("URL") catch break :blk null;
+        const v = doc_obj.getProperty(url_sid) orelse break :blk null;
+        if (!v.isString()) break :blk null;
+        break :blk vm.pool.get(v.asStringId());
+    };
+    if (doc_obj.obj_type != .dom_node) return doc_url;
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(doc_obj.data.dom_node));
+
+    // First <base> with a non-empty href attribute, tree order.
+    var base_href: ?[]const u8 = null;
+    var node: ?*lxb.lxb_dom_node_t = doc_node.first_child;
+    outer: while (node) |n| {
+        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(n);
+            var ln_len: usize = 0;
+            const ln_ptr: ?[*]const u8 = dom_b.lxb_dom_element_local_name(elem, &ln_len);
+            if (ln_ptr != null and eql(ln_ptr.?[0..ln_len], "base")) {
+                var attr_len: usize = 0;
+                const attr_ptr: ?[*]const u8 = dom_b.lxb_dom_element_get_attribute(elem, "href", 4, &attr_len);
+                if (attr_ptr != null and attr_len > 0) {
+                    base_href = attr_ptr.?[0..attr_len];
+                    break :outer;
+                }
+            }
+        }
+        if (n.first_child) |child| {
+            node = child;
+            continue;
+        }
+        var cur: ?*lxb.lxb_dom_node_t = n;
+        while (cur) |c| {
+            if (c == doc_node) break :outer;
+            if (c.next) |sib| {
+                node = sib;
+                break;
+            }
+            cur = c.parent;
+        }
+        if (cur == null) break :outer;
+    }
+
+    const href = base_href orelse return doc_url;
+    var base_parsed: ?url_parser.Url = if (doc_url) |du|
+        (url_parser.parse(vm.allocator, du, null) catch null)
+    else
+        null;
+    defer if (base_parsed) |*b| b.deinit();
+    const base_ptr: ?*const url_parser.Url = if (base_parsed) |*b| b else null;
+    var parsed = (url_parser.parse(vm.allocator, href, base_ptr) catch null) orelse return doc_url;
+    defer parsed.deinit();
+    const s = parsed.serialize(vm.allocator, false) catch return doc_url;
+    defer vm.allocator.free(s);
+    return vm.pool.get(vm.pool.intern(s) catch return doc_url);
+}
+
 /// HTML §2.6.5 URL reflection getter for kotori path.
 /// Reads a URL-type content attribute (e.g. "href"), resolves it against the
 /// document base URL per the WHATWG URL Standard, and returns the absolute
@@ -1663,13 +1736,7 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
         break :blk vm.pool.get(url_val.asStringId());
     };
     const base_url: ?[]const u8 = blk: {
-        const doc_obj = doc_obj_opt orelse break :blk doc_url;
-        const baseuri_sid = vm.pool.intern("baseURI") catch break :blk doc_url;
-        const this_val = JsValue.initObject(doc_obj);
-        const v = vm.getPropertyWithAccessors(doc_obj, baseuri_sid, this_val) catch break :blk doc_url;
-        const got = v orelse break :blk doc_url;
-        if (!got.isString()) break :blk doc_url;
-        const s = vm.pool.get(got.asStringId()) orelse break :blk doc_url;
+        const s = docBaseUriString(vm) orelse break :blk doc_url;
         if (s.len == 0) break :blk doc_url;
         break :blk s;
     };
@@ -1689,11 +1756,20 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
     }
     // Attribute absent → return empty string (HTML §2.6.5).
     const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
-    // Canonicalize: resolve relative → absolute using the document base URL
-    // (which honors any <base href> element, not just the document address).
-    const resolved = refl.canonicalizeUrl(vm.allocator, raw, base_url) catch {
+    // Resolve against the document base URL (which honors any <base href>
+    // element) with the WHATWG basic URL parser; on parse failure the IDL
+    // attribute returns the raw attribute value (HTML §4.6.2 "reparse").
+    var base_parsed: ?url_parser.Url = if (base_url) |b|
+        (url_parser.parse(vm.allocator, b, null) catch null)
+    else
+        null;
+    defer if (base_parsed) |*b| b.deinit();
+    const base_ptr: ?*const url_parser.Url = if (base_parsed) |*b| b else null;
+    var parsed = (url_parser.parse(vm.allocator, raw, base_ptr) catch null) orelse
         return JsValue.initString(vm.pool.intern(raw) catch return null);
-    };
+    defer parsed.deinit();
+    const resolved = parsed.serialize(vm.allocator, false) catch
+        return JsValue.initString(vm.pool.intern(raw) catch return null);
     defer vm.allocator.free(resolved);
     return JsValue.initString(vm.pool.intern(resolved) catch return null);
 }
@@ -2772,6 +2848,16 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // Must run BEFORE the reflection table (which has translate as .domstring).
     if (eql(name, "translate") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
         return JsValue.initBool(computeTranslate(node));
+    }
+
+    // DOM §4.4 baseURI — native fast path (the JS polyfill getter walks a
+    // live HTMLCollection Proxy per access, which is hot on URL-reflection
+    // heavy pages).
+    if (eql(name, "baseURI")) {
+        if (docBaseUriString(vm)) |s| {
+            return JsValue.initString(vm.pool.intern(s) catch return null);
+        }
+        return null; // fall through to the polyfill accessor
     }
 
     if (urlReflectionGet(vm, node, name)) |v| return v;

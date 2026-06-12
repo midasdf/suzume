@@ -181,6 +181,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // ── Shared WHATWG URL parser module (src/url/) ─────────────────
+    // Shared between the root module (url_bindings.zig, net/loader.zig),
+    // the kotori DOM bridge (URL attribute reflection) and the kotori
+    // runtime module (native URL bindings for the kotori URL polyfill).
+    // Exposed via `@import("url_parser")` to avoid the "file belongs to
+    // only one module" error.
+    const url_parser_shared_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // ── kotori DOM bridge module ────────────────────────────────────
     const kotori_dom_exe_mod = b.createModule(.{
         .root_source_file = b.path("src/js/kotori_dom.zig"),
@@ -189,18 +201,8 @@ pub fn build(b: *std.Build) void {
     });
     kotori_dom_exe_mod.addImport("kotori", kotori_mod);
     kotori_dom_exe_mod.addImport("dom_names", dom_names_shared_mod);
+    kotori_dom_exe_mod.addImport("url_parser", url_parser_shared_mod);
     kotori_dom_exe_mod.addIncludePath(lexbor_dep.path("lib"));
-
-    // ── Shared WHATWG URL parser module (src/url/) ─────────────────
-    // Shared between the root module (url_bindings.zig, net/loader.zig)
-    // and the kotori runtime module (native URL bindings for the kotori
-    // URL polyfill). Exposed to both via `@import("url_parser")` to avoid
-    // the "file belongs to only one module" error.
-    const url_parser_shared_mod = b.createModule(.{
-        .root_source_file = b.path("src/url/parser.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     // ── kotori runtime module ────────────────────────────────────
     const kotori_rt_mod = b.createModule(.{

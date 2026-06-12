@@ -207,6 +207,10 @@ pub const KotoriRuntime = struct {
         // resolve against document.URL (must run after url_polyfill_js).
         _ = self.eval(fetch_resolve_polyfill_js);
 
+        // HTML §4.6.2 — <a>/<area> URL decomposition accessors backed by
+        // the native URL parser (must run after url_polyfill_js).
+        _ = self.eval(hyperlink_utils_polyfill_js);
+
         // DOM §2.7 — Event.prototype.returnValue accessor that derives
         // from defaultPrevented. The setter calls preventDefault when
         // assigned `false`; the getter returns !defaultPrevented.
@@ -5950,6 +5954,64 @@ pub const KotoriRuntime = struct {
         \\    };
         \\    globalThis.JSON.__toJSON_patched=true;
         \\  }
+        \\})();
+    ;
+
+    /// HTML §4.6.2 HTMLHyperlinkElementUtils — URL decomposition
+    /// accessors (href/protocol/host/…) on <a> and <area>, backed by the
+    /// native URL parser. Getters reparse the href content attribute
+    /// against document.baseURI on each access; setters run the URL §6.3
+    /// component setters and write the serialized URL back to the
+    /// attribute. Must run after url_polyfill_js (uses document.baseURI).
+    const hyperlink_utils_polyfill_js =
+        \\(function(){
+        \\  if(typeof __suzume_url_parse!=='function')return;
+        \\  function _parse(el){
+        \\    var raw=el.getAttribute&&el.getAttribute('href');
+        \\    if(raw==null)return null;
+        \\    var base='';
+        \\    try{base=(typeof document!=='undefined'&&document.baseURI)?String(document.baseURI):'';}catch(e){base='';}
+        \\    try{return __suzume_url_parse(String(raw),base||undefined);}catch(e){return null;}
+        \\  }
+        \\  function _writeBack(el,prop,v){
+        \\    var p=_parse(el);
+        \\    if(!p)return;
+        \\    var np=null;
+        \\    try{np=__suzume_url_set(p.href,prop,String(v));}catch(e){np=null;}
+        \\    if(np)el.setAttribute('href',np.href);
+        \\  }
+        \\  function _install(proto){
+        \\    if(!proto)return;
+        \\    try{Object.defineProperty(proto,'href',{
+        \\      get:function(){
+        \\        var raw=this.getAttribute&&this.getAttribute('href');
+        \\        if(raw==null)return '';
+        \\        var p=_parse(this);
+        \\        return p?p.href:String(raw);
+        \\      },
+        \\      set:function(v){this.setAttribute('href',String(v));},
+        \\      configurable:true,enumerable:true});}catch(e){}
+        \\    try{Object.defineProperty(proto,'origin',{
+        \\      get:function(){var p=_parse(this);return p?p.origin:'';},
+        \\      set:function(v){},
+        \\      configurable:true,enumerable:true});}catch(e){}
+        \\    try{Object.defineProperty(proto,'protocol',{
+        \\      get:function(){var p=_parse(this);return p?p.protocol:':';},
+        \\      set:function(v){_writeBack(this,'protocol',v);},
+        \\      configurable:true,enumerable:true});}catch(e){}
+        \\    var comps=['username','password','host','hostname','port','pathname','search','hash'];
+        \\    for(var i=0;i<comps.length;i++){
+        \\      (function(name){
+        \\        try{Object.defineProperty(proto,name,{
+        \\          get:function(){var p=_parse(this);return p?(p[name]||''):'';},
+        \\          set:function(v){_writeBack(this,name,v);},
+        \\          configurable:true,enumerable:true});}catch(e){}
+        \\      })(comps[i]);
+        \\    }
+        \\    try{proto.toString=function(){return this.href;};}catch(e){}
+        \\  }
+        \\  if(typeof HTMLAnchorElement!=='undefined')_install(HTMLAnchorElement.prototype);
+        \\  if(typeof HTMLAreaElement!=='undefined')_install(HTMLAreaElement.prototype);
         \\})();
     ;
 
