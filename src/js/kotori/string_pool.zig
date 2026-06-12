@@ -40,11 +40,17 @@ pub const StringPool = struct {
     }
 
     /// Return the string for a given id, or null if not found.
+    ///
+    /// O(1): ids are assigned sequentially on insertion and entries are
+    /// never removed, so a string's id equals its insertion index in the
+    /// ArrayHashMap (which preserves insertion order). The previous
+    /// implementation iterated the whole map per lookup — O(pool size) on
+    /// one of the hottest VM paths (formatValue/toStringValue), which made
+    /// pages that intern large JSON payloads (WPT urltestdata, ~100k
+    /// strings) quadratic.
     pub fn get(self: *const StringPool, id: StringId) ?[]const u8 {
-        var it = self.strings.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == id) return entry.key_ptr.*;
-        }
-        return null;
+        const keys = self.strings.keys();
+        if (id >= keys.len) return null;
+        return keys[id];
     }
 };
