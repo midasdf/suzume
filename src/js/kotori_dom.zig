@@ -1239,6 +1239,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     loc_obj.setProperty(vm.allocator, href_sid, JsValue.initString(try vm.pool.intern("about:blank"))) catch {};
     const loc_id = try vm.pool.intern("location");
     win_obj.setProperty(vm.allocator, loc_id, JsValue.initObject(loc_obj)) catch {};
+    // HTML §7.2.2: `location` is also a bare global (Window's location
+    // attribute) — scripts use `location.search` without the `window.`
+    // qualifier (e.g. /common/subset-tests-by-key.js).
+    try vm.globals.put(vm.allocator, loc_id, JsValue.initObject(loc_obj));
 
     // ── DOM constructor globals (for instanceof and WPT) ──
     // Node constructor + prototype
