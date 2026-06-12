@@ -1983,6 +1983,92 @@ pub const Compiler = struct {
         return null;
     }
 
+    /// A destructuring pattern on the left of for-of/for-in
+    /// (`for (const [k, v] of …)`).
+    const DestructurePattern = struct {
+        kind: enum { array, object },
+        list: NodeList,
+    };
+
+    /// Declare each plain-identifier binding of a for-of/for-in pattern as a
+    /// local (undefined placeholder), once, before the loop starts.
+    fn declarePatternBindings(self: *Compiler, p: DestructurePattern) CompileError!void {
+        const items = self.parser.ast.getNodeList(p.list);
+        for (items) |item| {
+            if (item == null_node) continue;
+            switch (self.parser.ast.getNode(item)) {
+                .identifier => |name_id| {
+                    try self.emitConstant(JsValue.undefined_val);
+                    _ = try self.addLocal(name_id);
+                },
+                .property => |prop| {
+                    switch (self.parser.ast.getNode(prop.value)) {
+                        .identifier => |target_id| {
+                            try self.emitConstant(JsValue.undefined_val);
+                            _ = try self.addLocal(target_id);
+                        },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Per-iteration refill of a for-of/for-in pattern's bindings from the
+    /// hidden loop value local. Supports plain identifiers (and holes) in
+    /// array patterns and identifier-valued properties in object patterns —
+    /// the common `for (const [k, v] of Object.entries(o))` shape.
+    fn emitPatternStores(self: *Compiler, p: DestructurePattern, src_name: StringId) CompileError!void {
+        try self.compileIdentifierLoad(src_name);
+        const items = self.parser.ast.getNodeList(p.list);
+        switch (p.kind) {
+            .array => {
+                for (items, 0..) |item, i| {
+                    if (item == null_node) continue;
+                    switch (self.parser.ast.getNode(item)) {
+                        .identifier => |name_id| {
+                            try self.emitOp(.dup);
+                            try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
+                            try self.emitOp(.get_elem);
+                            try self.compileStoreVar(name_id);
+                        },
+                        else => {},
+                    }
+                }
+            },
+            .object => {
+                for (items) |item| {
+                    if (item == null_node) continue;
+                    switch (self.parser.ast.getNode(item)) {
+                        .property => |prop| {
+                            const key_name = switch (self.parser.ast.getNode(prop.key)) {
+                                .identifier => |id| id,
+                                else => continue,
+                            };
+                            const target_id = switch (self.parser.ast.getNode(prop.value)) {
+                                .identifier => |id| id,
+                                else => continue,
+                            };
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
+                            try self.emitOpU16(.get_prop, ci);
+                            try self.compileStoreVar(target_id);
+                        },
+                        .identifier => |name_id| {
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
+                            try self.emitOpU16(.get_prop, ci);
+                            try self.compileStoreVar(name_id);
+                        },
+                        else => {},
+                    }
+                }
+            },
+        }
+        try self.emitOp(.pop);
+    }
+
     /// Compile for-of / for-in loops.
     /// for (var x of iterable) { body }
     /// for (var k in obj) { body }
@@ -1993,9 +2079,14 @@ pub const Compiler = struct {
     fn compileForOfIn(self: *Compiler, left: NodeIndex, right: NodeIndex, body: NodeIndex, is_for_in: bool, is_await: bool) CompileError!void {
         self.beginScope();
 
-        // Determine the loop variable name from the left side
+        // Determine the loop variable name from the left side. A
+        // destructuring pattern (`for (const [k, v] of entries)`) binds a
+        // hidden loop variable instead; its bindings are declared once
+        // before the loop and re-stored from the hidden value on every
+        // iteration.
         const left_node = self.parser.ast.getNode(left);
         var var_name: ?StringId = null;
+        var pattern: ?DestructurePattern = null;
         switch (left_node) {
             .var_decl => |decl| {
                 const declarators = self.parser.ast.getNodeList(decl.declarators);
@@ -2006,6 +2097,8 @@ pub const Compiler = struct {
                             const vn = self.parser.ast.getNode(vd.name);
                             switch (vn) {
                                 .identifier => |id| var_name = id,
+                                .array_pattern, .array_literal => |list| pattern = .{ .kind = .array, .list = list },
+                                .object_pattern, .object_literal => |list| pattern = .{ .kind = .object, .list = list },
                                 else => {},
                             }
                         },
@@ -2014,9 +2107,14 @@ pub const Compiler = struct {
                 }
             },
             .identifier => |name_id| var_name = name_id,
+            .array_pattern, .array_literal => |list| pattern = .{ .kind = .array, .list = list },
+            .object_pattern, .object_literal => |list| pattern = .{ .kind = .object, .list = list },
             else => {},
         }
 
+        if (pattern != null) {
+            var_name = self.parser.pool.intern("__forof_val") catch return error.OutOfMemory;
+        }
         if (var_name == null) {
             try self.endScope();
             return;
@@ -2025,6 +2123,10 @@ pub const Compiler = struct {
         // Declare loop variable as local + push undefined placeholder
         try self.emitConstant(JsValue.undefined_val);
         _ = try self.addLocal(var_name.?);
+
+        // Declare the pattern's bindings once so body code and closures
+        // resolve stable slots; emitPatternStores refills them per iteration.
+        if (pattern) |p| try self.declarePatternBindings(p);
 
         // Compile the right-hand expression (iterable/object)
         try self.compileNode(right);
@@ -2066,6 +2168,7 @@ pub const Compiler = struct {
             try self.emitOpU16(.get_prop, value_ci);
             // Store to loop variable (matches existing for-in pattern: no pop after store)
             try self.compileStoreVar(var_name.?);
+            if (pattern) |p| try self.emitPatternStores(p, var_name.?);
 
             self.pushLoopCtx(self.current.scope_depth, false);
             try self.compileNode(body);
@@ -2111,6 +2214,7 @@ pub const Compiler = struct {
         try self.compileIdentifierLoad(idx_name);
         try self.emitOp(.get_elem);
         try self.compileStoreVar(var_name.?);
+        if (pattern) |p| try self.emitPatternStores(p, var_name.?);
 
         // Compile body
         try self.compileNode(body);
