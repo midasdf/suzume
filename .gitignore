@@ -18,3 +18,4 @@ screenshots/
 tests/wpt/wpt-suzume/build/
 tests/wpt/wpt-suzume/wpt_suzume/__pycache__/
 tests/wpt/wpt-suzume/wpt_suzume.egg-info/
+.claude/worktrees/
