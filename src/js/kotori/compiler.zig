@@ -1151,14 +1151,36 @@ pub const Compiler = struct {
     fn compileFunctionDecl(self: *Compiler, func: ast_mod.Function) CompileError!void {
         const name_id = func.name orelse return;
         try self.compileFunctionBody(func);
-        // Bind to variable: compileFunctionBody leaves the function object on the stack.
-        // In script scope (scope_depth==0, is_script==true) → store_global.
-        // In function/block scope → addLocal to reserve the slot, then store_local.
-        // Previously addLocal was called without store_local, leaving the fn object
-        // on the stack and the local slot uninitialized (= undefined at runtime).
-        if (self.current.scope_depth > 0 or !self.current.is_script) {
-            const slot = try self.addLocal(name_id);
+        // Bind to variable: compileFunctionBody leaves the function object on
+        // the stack. Binding discipline mirrors storeBinding():
+        // - Script top level (is_script, depth==0) → store_global.
+        // - Function scope → hoistVarDeclarations() pre-registered the name
+        //   (function decls hoist like `var`, ES2023 §8.6.1), so store into
+        //   that pre-allocated slot (sp starts at local_count on entry).
+        // - Script block scope → the pushed function object IS the local
+        //   slot (push pattern; endScope pops it). Emitting store_local here
+        //   would pop the value and desync sp for every local allocated
+        //   after this one — for-of's hidden __iter slot was the visible
+        //   casualty (url-constructor WPT: `base` resolved to [Function]).
+        if (!self.current.is_script) {
+            const slot = if (self.resolveLocal(&self.current, name_id)) |existing|
+                existing
+            else
+                try self.addLocal(name_id);
             try self.emitOpU16(.store_local, slot);
+        } else if (self.current.scope_depth > 0) {
+            const same_block: ?u16 = if (self.resolveLocal(&self.current, name_id)) |existing|
+                (if (self.current.locals.buffer[existing].depth == self.current.scope_depth) existing else null)
+            else
+                null;
+            if (same_block) |existing| {
+                // Redeclaration in the same block: overwrite the live slot.
+                try self.emitOpU16(.store_local, existing);
+            } else {
+                // Shadowing or fresh binding: push pattern (the value on the
+                // stack becomes the slot; endScope pops it).
+                _ = try self.addLocal(name_id);
+            }
         } else {
             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
             try self.emitOpU16(.store_global, ci);

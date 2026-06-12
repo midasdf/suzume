@@ -94,6 +94,10 @@ pub const VM = struct {
     try_depth: u32 = 0,
     /// Set by native functions (e.g. DOM) to inject a JS-catchable throw.
     pending_throw: ?JsValue = null,
+    /// Last uncaught exception that escaped a top-level execute() run.
+    /// Cleared from pending_throw so subsequent evals stay usable; kept
+    /// here for callers (tests, future window.onerror) to inspect.
+    last_uncaught: ?JsValue = null,
     /// Set to true by the .construct opcode before invoking a native function,
     /// so DOM interface constructors can enforce WebIDL §3.2.1 (requires `new`).
     native_call_is_construct: bool = false,
@@ -240,7 +244,47 @@ pub const VM = struct {
     }
 
     pub fn execute(self: *VM) !JsValue {
-        return self.run(0);
+        // Never let a stale uncaught throw from a previous top-level run
+        // poison this evaluation — multi-eval (one <script> after another)
+        // shares a single VM instance.
+        self.pending_throw = null;
+        const result = try self.run(0);
+        if (self.pending_throw) |thrown| {
+            // Uncaught exception escaped the top-level script: clear it so
+            // later <script> blocks / timers / event handlers stay usable
+            // (browsers report to window.onerror and move on), and surface
+            // the failure to the eval caller. The thrown value stays
+            // inspectable via last_uncaught.
+            self.pending_throw = null;
+            self.last_uncaught = thrown;
+            self.logUncaught(thrown);
+            return error.UncaughtException;
+        }
+        return result;
+    }
+
+    /// Print an uncaught top-level exception like a browser console would.
+    fn logUncaught(self: *VM, thrown: JsValue) void {
+        if (thrown.isObject()) {
+            const obj = thrown.asJsObject();
+            const name_id = self.pool.intern("name") catch null;
+            const msg_id = self.pool.intern("message") catch null;
+            const name_val: ?JsValue = if (name_id) |id| obj.getProperty(id) else null;
+            const msg_val: ?JsValue = if (msg_id) |id| obj.getProperty(id) else null;
+            const name_str = if (name_val != null and name_val.?.isString())
+                (self.pool.get(name_val.?.asStringId()) orelse "Error")
+            else
+                "Error";
+            const msg_str = if (msg_val != null and msg_val.?.isString())
+                (self.pool.get(msg_val.?.asStringId()) orelse "")
+            else
+                "";
+            std.debug.print("[kotori] Uncaught {s}: {s}\n", .{ name_str, msg_str });
+            return;
+        }
+        var buf: [64]u8 = undefined;
+        const s = formatValue(self.pool, thrown, &buf);
+        std.debug.print("[kotori] Uncaught: {s}\n", .{s});
     }
 
     /// Load new bytecode for execution, preserving globals and prototypes.

@@ -6066,10 +6066,13 @@ test "Layer 0D: instruction budget exhaustion throws RangeError" {
     try vm_inst.initBuiltins();
     // Set a low budget so the infinite loop is interrupted quickly.
     vm_inst.setBudget(1_000);
-    // execute() must return without hanging; pending_throw holds the RangeError.
-    _ = try vm_inst.execute();
-    // A RangeError must have been thrown (pending_throw is set).
-    const thrown = vm_inst.pending_throw orelse {
+    // execute() must return without hanging. The uncaught RangeError
+    // surfaces as error.UncaughtException; pending_throw is cleared so
+    // subsequent evals on the same VM stay usable, and the thrown value
+    // remains inspectable via last_uncaught.
+    try std.testing.expectError(error.UncaughtException, vm_inst.execute());
+    try std.testing.expectEqual(@as(?JsValue, null), vm_inst.pending_throw);
+    const thrown = vm_inst.last_uncaught orelse {
         return error.ExpectedRangeError;
     };
     // Verify it is an object whose "name" property contains "RangeError".
