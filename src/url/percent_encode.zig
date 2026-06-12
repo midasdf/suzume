@@ -33,7 +33,7 @@ pub fn inEncodeSet(byte: u8, set: EncodeSet) bool {
             else => false,
         },
         .path => switch (byte) {
-            ' ', '"', '#', '<', '>', '?', '`', '{', '}' => true,
+            ' ', '"', '#', '<', '>', '?', '^', '`', '{', '}' => true,
             else => false,
         },
         .userinfo => switch (byte) {

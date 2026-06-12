@@ -22,6 +22,10 @@ pub fn registerUrlBindings(ctx: *qjs.JSContext) void {
     // Native canParse function: __suzume_url_can_parse(input, base?) → bool
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_url_can_parse", qjs.JS_NewCFunction(ctx, &jsUrlCanParse, "__suzume_url_can_parse", 2));
 
+    // Native component setter: __suzume_url_set(href, prop, value) → object | null
+    // (URL §6.3 basic-URL-parser-with-state-override semantics)
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_url_set", qjs.JS_NewCFunction(ctx, &jsUrlSet, "__suzume_url_set", 3));
+
     // Register the JS URL and URLSearchParams classes
     evalScript(ctx, url_class_js);
     evalScript(ctx, url_search_params_js);
@@ -105,6 +109,36 @@ fn jsUrlCanParse(
         return quickjs.JS_NewBool(true);
     }
     return quickjs.JS_NewBool(false);
+}
+
+/// __suzume_url_set(href, prop, value) → updated field object, or null when
+/// href itself does not parse. Invalid setter values leave the URL unchanged
+/// (spec setters ignore failures silently), so the unchanged fields return.
+fn jsUrlSet(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    if (argc < 3) return quickjs.JS_NULL();
+
+    const href_s = getStringArg(c, args, 0) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, href_s.ptr);
+    const prop_s = getStringArg(c, args, 1) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, prop_s.ptr);
+    const value_s = getStringArg(c, args, 2) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, value_s.ptr);
+
+    const setter = std.meta.stringToEnum(url_parser.Setter, prop_s.ptr[0..prop_s.len]) orelse
+        return quickjs.JS_NULL();
+    var url = (url_parser.parse(allocator, href_s.ptr[0..href_s.len], null) catch return quickjs.JS_NULL()) orelse
+        return quickjs.JS_NULL();
+    defer url.deinit();
+    url_parser.applySetter(allocator, &url, setter, value_s.ptr[0..value_s.len]) catch
+        return quickjs.JS_NULL();
+    return urlToJsObject(c, &url) catch quickjs.JS_NULL();
 }
 
 /// Convert a parsed Url to a JS object with all standard URL fields.
@@ -230,29 +264,33 @@ const url_class_js =
     \\  this._p = parsed;
     \\  this._sp = null;
     \\}
+    \\function _set(self, prop, v) {
+    \\  var np = __suzume_url_set(self._p.href, prop, String(v));
+    \\  if (np) self._p = np;
+    \\}
     \\URL.prototype = {
     \\  get href() { return this._p.href; },
     \\  set href(v) { var p = __suzume_url_parse(String(v)); if (!p) throw new TypeError("Invalid URL"); this._p = p; this._sp = null; },
     \\  get origin() { return this._p.origin; },
     \\  get protocol() { return this._p.protocol; },
-    \\  set protocol(v) { var p = __suzume_url_parse(v.replace(/:?$/, ':') + '//x'); if (p) { var n = __suzume_url_parse(this._p.href); if (n) { this._p.protocol = p.protocol; this._p.href = this._p.protocol + this._p.href.substring(this._p.href.indexOf(':')+1); } } },
+    \\  set protocol(v) { _set(this, 'protocol', v); },
     \\  get username() { return this._p.username; },
-    \\  set username(v) { var h = this._p.href; var p = __suzume_url_parse(h); if (p) { this._p = __suzume_url_parse(p.protocol + '//' + encodeURIComponent(v) + (p.password ? ':' + p.password : '') + '@' + p.host + p.pathname + p.search + p.hash) || this._p; } },
+    \\  set username(v) { _set(this, 'username', v); },
     \\  get password() { return this._p.password; },
-    \\  set password(v) { var p = this._p; this._p = __suzume_url_parse(p.protocol + '//' + (p.username || '') + ':' + encodeURIComponent(v) + '@' + p.host + p.pathname + p.search + p.hash) || p; },
+    \\  set password(v) { _set(this, 'password', v); },
     \\  get host() { return this._p.host; },
-    \\  set host(v) { var p = this._p; this._p = __suzume_url_parse(p.protocol + '//' + v + p.pathname + p.search + p.hash) || p; },
+    \\  set host(v) { _set(this, 'host', v); },
     \\  get hostname() { return this._p.hostname; },
-    \\  set hostname(v) { var p = this._p; var port = p.port ? ':' + p.port : ''; this._p = __suzume_url_parse(p.protocol + '//' + v + port + p.pathname + p.search + p.hash) || p; },
+    \\  set hostname(v) { _set(this, 'hostname', v); },
     \\  get port() { return this._p.port; },
-    \\  set port(v) { var p = this._p; this._p = __suzume_url_parse(p.protocol + '//' + p.hostname + (v ? ':' + v : '') + p.pathname + p.search + p.hash) || p; },
+    \\  set port(v) { _set(this, 'port', v); },
     \\  get pathname() { return this._p.pathname; },
-    \\  set pathname(v) { var p = this._p; this._p = __suzume_url_parse(p.protocol + '//' + p.host + v + p.search + p.hash) || p; },
+    \\  set pathname(v) { _set(this, 'pathname', v); },
     \\  get search() { return this._p.search; },
-    \\  set search(v) { var p = this._p; var s = v && v.charAt(0) !== '?' ? '?' + v : v; this._p = __suzume_url_parse(p.protocol + '//' + p.host + p.pathname + (s || '') + p.hash) || p; this._sp = null; },
+    \\  set search(v) { _set(this, 'search', v); this._sp = null; },
     \\  get searchParams() { if (!this._sp) this._sp = new URLSearchParams(this._p.query || ''); return this._sp; },
     \\  get hash() { return this._p.hash; },
-    \\  set hash(v) { var p = this._p; var h = v && v.charAt(0) !== '#' ? '#' + v : v; this._p = __suzume_url_parse(p.protocol + '//' + p.host + p.pathname + p.search + (h || '')) || p; },
+    \\  set hash(v) { _set(this, 'hash', v); },
     \\  toString: function() { return this._p.href; },
     \\  toJSON: function() { return this._p.href; }
     \\};

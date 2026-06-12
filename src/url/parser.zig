@@ -571,45 +571,13 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                 if (c == null or c.? == '/' or (isSpecialScheme(url.scheme) and c.? == '\\') or
                     c.? == '?' or c.? == '#')
                 {
-                    const seg = buf.items;
                     // URL §4.3 path state: a trailing dot segment ("/foo/."
                     // or "/foo/..") at EOF/?/# still terminates the path
                     // with a slash — spec appends an empty segment unless
                     // the delimiter is "/" (or "\" for special schemes).
                     const at_seg_delim = c != null and
                         (c.? == '/' or (isSpecialScheme(url.scheme) and c.? == '\\'));
-                    if (isDoubleDot(seg)) {
-                        shortenPath(&url);
-                        if (!at_seg_delim) {
-                            switch (url.path) {
-                                .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
-                                .opaque_path => {},
-                            }
-                        }
-                    } else if (isSingleDot(seg)) {
-                        if (!at_seg_delim) {
-                            switch (url.path) {
-                                .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
-                                .opaque_path => {},
-                            }
-                        }
-                    } else {
-                        // URL §4.3 path state: "file:c|/m" — normalize a
-                        // Windows drive letter first segment to use ":".
-                        if (std.mem.eql(u8, url.scheme, "file") and isWindowsDriveLetter(seg)) {
-                            const path_empty = switch (url.path) {
-                                .list => |l| l.items.len == 0,
-                                .opaque_path => false,
-                            };
-                            if (path_empty) buf.items[1] = ':';
-                        }
-                        // Percent-encode the segment and append
-                        const encoded = try pe.percentEncode(allocator, buf.items, .path);
-                        switch (url.path) {
-                            .list => |*l| try l.append(allocator, encoded),
-                            .opaque_path => {},
-                        }
-                    }
+                    try flushPathSegment(allocator, &url, buf.items, at_seg_delim);
                     buf.clearRetainingCapacity();
 
                     if (c != null and c.? == '?') {
@@ -632,8 +600,20 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                     url.fragment = try allocator.alloc(u8, 0);
                     state = .fragment;
                 } else if (c != null) {
-                    // Append to opaque path
-                    const encoded = try pe.percentEncode(allocator, &[_]u8{c.?}, .c0_control);
+                    // URL §4.3 opaque path state: a U+0020 immediately
+                    // before "?" or "#" is encoded as %20 ("data:space ?q"
+                    // round-trips as "data:space%20?q"); other spaces stay.
+                    var space_before_delim = false;
+                    if (c.? == ' ') {
+                        var look = ptr + 1;
+                        while (look < input.len and (input[look] == 0x09 or input[look] == 0x0A or input[look] == 0x0D)) : (look += 1) {}
+                        if (look < input.len and (input[look] == '?' or input[look] == '#'))
+                            space_before_delim = true;
+                    }
+                    const encoded = if (space_before_delim)
+                        try allocator.dupe(u8, "%20")
+                    else
+                        try pe.percentEncode(allocator, &[_]u8{c.?}, .c0_control);
                     defer allocator.free(encoded);
                     switch (url.path) {
                         .opaque_path => |*p| {
@@ -683,6 +663,285 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
     }
 
     return url;
+}
+
+// ── Component setters (URL Standard §6.3) ────────────────────────────
+
+pub const Setter = enum { protocol, username, password, host, hostname, port, pathname, search, hash };
+
+/// URL §4.2: a URL cannot have a username/password/port if its host is
+/// null or the empty string, or its scheme is "file".
+fn cannotHaveCredentialsOrPort(url: *const Url) bool {
+    if (std.mem.eql(u8, url.scheme, "file")) return true;
+    const h = url.host orelse return true;
+    return switch (h) {
+        .domain => |d| d.len == 0,
+        .opaque_host => |o| o.len == 0,
+        else => false,
+    };
+}
+
+/// Copy `value` minus ASCII tab/newline (the basic URL parser always strips
+/// them). Caller frees.
+fn stripTabsNewlines(allocator: Allocator, value: []const u8) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (value) |b| {
+        if (b == 0x09 or b == 0x0A or b == 0x0D) continue;
+        try out.append(allocator, b);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Apply a URL component setter per the URL Standard's
+/// basic-URL-parser-with-state-override semantics (§6.3). Mutates `url`
+/// in place when the value applies; invalid values are ignored (the spec's
+/// "return failure" leaves the URL unchanged).
+pub fn applySetter(allocator: Allocator, url: *Url, setter: Setter, raw_value: []const u8) !void {
+    const value = try stripTabsNewlines(allocator, raw_value);
+    defer allocator.free(value);
+
+    switch (setter) {
+        .protocol => {
+            // Scheme start/scheme state over value + ":".
+            if (value.len == 0 or !std.ascii.isAlphabetic(value[0])) return;
+            var end: usize = value.len;
+            for (value[1..], 1..) |b, i| {
+                if (std.ascii.isAlphanumeric(b) or b == '+' or b == '-' or b == '.') continue;
+                if (b == ':') {
+                    end = i; // terminator: ignore the rest, like the parser
+                    break;
+                }
+                return; // invalid scheme code point
+            }
+            const candidate = try std.ascii.allocLowerString(allocator, value[0..end]);
+            defer allocator.free(candidate);
+            // Special and non-special schemes cannot convert to each other.
+            if (isSpecialScheme(candidate) != isSpecialScheme(url.scheme)) return;
+            if (std.mem.eql(u8, candidate, "file") and
+                (url.username.len > 0 or url.password.len > 0 or url.port != null)) return;
+            if (std.mem.eql(u8, url.scheme, "file")) {
+                const empty_host = if (url.host) |h| switch (h) {
+                    .domain => |d| d.len == 0,
+                    else => false,
+                } else true;
+                if (empty_host) return;
+            }
+            allocator.free(url.scheme);
+            url.scheme = try allocator.dupe(u8, candidate);
+            if (url.port) |p| {
+                if (getDefaultPort(url.scheme)) |dp| {
+                    if (p == dp) url.port = null;
+                }
+            }
+        },
+        .username => {
+            if (cannotHaveCredentialsOrPort(url)) return;
+            // URL §6.3: "set the username" percent-encodes the raw value
+            // directly — no URL-parser run, so tabs/newlines are encoded
+            // (%09%0A%0D), not stripped.
+            const encoded = try pe.percentEncode(allocator, raw_value, .userinfo);
+            allocator.free(url.username);
+            url.username = encoded;
+        },
+        .password => {
+            if (cannotHaveCredentialsOrPort(url)) return;
+            const encoded = try pe.percentEncode(allocator, raw_value, .userinfo);
+            allocator.free(url.password);
+            url.password = encoded;
+        },
+        .host, .hostname => {
+            if (url.path == .opaque_path) return;
+            // Host state: collect until ':' (outside brackets), '/', '?',
+            // '\\' (special) or '#'; the remainder beyond '/'-class
+            // terminators is ignored.
+            // URL §4.3: file URLs use the file host state, where ":" is an
+            // ordinary host code point (and then a forbidden one → failure)
+            // rather than a port delimiter.
+            const file_scheme = std.mem.eql(u8, url.scheme, "file");
+            var inside_brackets = false;
+            var host_end: usize = value.len;
+            var port_start: ?usize = null;
+            for (value, 0..) |b, i| {
+                if (b == '[') inside_brackets = true;
+                if (b == ']') inside_brackets = false;
+                if (b == ':' and !inside_brackets and !file_scheme) {
+                    // hostname state override: a port terminates the whole
+                    // assignment (URL §4.3 host state).
+                    if (setter == .hostname) return;
+                    host_end = i;
+                    port_start = i + 1;
+                    break;
+                }
+                if (b == '/' or b == '?' or b == '#' or
+                    (isSpecialScheme(url.scheme) and b == '\\'))
+                {
+                    host_end = i;
+                    break;
+                }
+            }
+            const host_str = value[0..host_end];
+            // URL §4.3 host state: an empty buffer before ":" is failure.
+            if (port_start != null and host_str.len == 0) return;
+            const is_file = std.mem.eql(u8, url.scheme, "file");
+            if (host_str.len == 0) {
+                // file URLs may have an empty host; other special ones not.
+                if (is_file) {
+                    if (url.host) |old| host_mod.freeHost(allocator, old);
+                    url.host = Host{ .domain = try allocator.alloc(u8, 0) };
+                    return;
+                }
+                if (isSpecialScheme(url.scheme)) return;
+                if (url.username.len > 0 or url.password.len > 0 or url.port != null) return;
+            }
+            var h = (try host_mod.parseHost(allocator, host_str, !isSpecialScheme(url.scheme))) orelse return;
+            // URL §4.3 file host state: "localhost" maps to the empty host.
+            if (is_file) {
+                const is_localhost = switch (h) {
+                    .domain => |d| std.mem.eql(u8, d, "localhost"),
+                    else => false,
+                };
+                if (is_localhost) {
+                    host_mod.freeHost(allocator, h);
+                    h = Host{ .domain = try allocator.alloc(u8, 0) };
+                }
+            }
+            if (url.host) |old| host_mod.freeHost(allocator, old);
+            url.host = h;
+            if (port_start) |ps| {
+                // Port state on the remainder: leading digits commit.
+                var digits_end = ps;
+                while (digits_end < value.len and std.ascii.isDigit(value[digits_end])) : (digits_end += 1) {}
+                if (digits_end > ps) {
+                    const port_num = std.fmt.parseInt(u16, value[ps..digits_end], 10) catch return;
+                    url.port = if (getDefaultPort(url.scheme)) |dp|
+                        (if (port_num == dp) null else port_num)
+                    else
+                        port_num;
+                }
+            }
+        },
+        .port => {
+            if (cannotHaveCredentialsOrPort(url)) return;
+            // URL §6.3: only a *raw* empty value clears the port. A value
+            // that is empty merely after tab/newline stripping runs the
+            // port-state parser, which ignores an empty buffer.
+            if (raw_value.len == 0) {
+                url.port = null;
+                return;
+            }
+            if (value.len == 0) return;
+            var digits_end: usize = 0;
+            while (digits_end < value.len and std.ascii.isDigit(value[digits_end])) : (digits_end += 1) {}
+            if (digits_end == 0) return;
+            const port_num = std.fmt.parseInt(u16, value[0..digits_end], 10) catch return;
+            url.port = if (getDefaultPort(url.scheme)) |dp|
+                (if (port_num == dp) null else port_num)
+            else
+                port_num;
+        },
+        .pathname => {
+            if (url.path == .opaque_path) return;
+            clearPath(url);
+            // URL §4.3 path start state with override at EOF: special
+            // schemes always get a path segment; non-special ones only
+            // when the host is null ("foo://somehost" can erase its path).
+            if (value.len == 0) {
+                const keep_empty_path = !isSpecialScheme(url.scheme) and url.host != null;
+                if (!keep_empty_path) {
+                    switch (url.path) {
+                        .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
+                        .opaque_path => {},
+                    }
+                }
+                return;
+            }
+            // path start + path states. With a state override "?" and "#"
+            // do not terminate the path (URL §4.3 path state).
+            var i: usize = 0;
+            if (value.len > 0 and (value[0] == '/' or
+                (isSpecialScheme(url.scheme) and value[0] == '\\'))) i = 1;
+            var seg_start = i;
+            while (true) {
+                const at_end = i >= value.len;
+                const is_delim = !at_end and (value[i] == '/' or
+                    (isSpecialScheme(url.scheme) and value[i] == '\\'));
+                if (at_end or is_delim) {
+                    try flushPathSegment(allocator, url, value[seg_start..i], is_delim);
+                    if (at_end) break;
+                    seg_start = i + 1;
+                }
+                i += 1;
+            }
+        },
+        .search => {
+            if (value.len == 0) {
+                if (url.query) |q| allocator.free(q);
+                url.query = null;
+                return;
+            }
+            const v = if (value[0] == '?') value[1..] else value;
+            const set: pe.EncodeSet = if (isSpecialScheme(url.scheme)) .special_query else .query;
+            const encoded = try pe.percentEncode(allocator, v, set);
+            if (url.query) |q| allocator.free(q);
+            url.query = encoded;
+        },
+        .hash => {
+            if (value.len == 0) {
+                if (url.fragment) |f| allocator.free(f);
+                url.fragment = null;
+                return;
+            }
+            const v = if (value[0] == '#') value[1..] else value;
+            const encoded = try pe.percentEncode(allocator, v, .fragment);
+            if (url.fragment) |f| allocator.free(f);
+            url.fragment = encoded;
+        },
+    }
+}
+
+/// URL §4.3 path state segment commit: dot segments shorten/terminate the
+/// path, anything else is percent-encoded and appended. `at_seg_delim` is
+/// true when the terminator was "/" (or "\" for special schemes).
+fn flushPathSegment(allocator: Allocator, url: *Url, seg: []const u8, at_seg_delim: bool) !void {
+    if (isDoubleDot(seg)) {
+        shortenPath(url);
+        if (!at_seg_delim) {
+            switch (url.path) {
+                .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
+                .opaque_path => {},
+            }
+        }
+    } else if (isSingleDot(seg)) {
+        if (!at_seg_delim) {
+            switch (url.path) {
+                .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
+                .opaque_path => {},
+            }
+        }
+    } else {
+        // URL §4.3 path state: "file:c|/m" — normalize a Windows drive
+        // letter first segment to use ":".
+        const path_empty = switch (url.path) {
+            .list => |l| l.items.len == 0,
+            .opaque_path => false,
+        };
+        if (std.mem.eql(u8, url.scheme, "file") and path_empty and isWindowsDriveLetter(seg)) {
+            const normalized = try allocator.alloc(u8, 2);
+            normalized[0] = seg[0];
+            normalized[1] = ':';
+            switch (url.path) {
+                .list => |*l| try l.append(allocator, normalized),
+                .opaque_path => allocator.free(normalized),
+            }
+            return;
+        }
+        const encoded = try pe.percentEncode(allocator, seg, .path);
+        switch (url.path) {
+            .list => |*l| try l.append(allocator, encoded),
+            .opaque_path => allocator.free(encoded),
+        }
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

@@ -54,6 +54,13 @@ pub fn parseHost(allocator: Allocator, input: []const u8, is_not_special: bool) 
     // 4. Domain processing via IDNA
     const ascii_domain = try idna.domainToAscii(allocator, decoded, false) orelse return null;
 
+    // UTS #46 §4.2 / URL §3.5: an empty string out of domain-to-ASCII is a
+    // validation error ("https://\u00ad/" — soft hyphen maps to nothing).
+    if (ascii_domain.len == 0) {
+        allocator.free(ascii_domain);
+        return null;
+    }
+
     // 5. Check for forbidden host code points
     for (ascii_domain) |c| {
         if (isForbiddenHostCodePoint(c)) {
@@ -79,10 +86,12 @@ pub fn parseHost(allocator: Allocator, input: []const u8, is_not_special: bool) 
 
 /// Parse an opaque host (non-special schemes).
 fn parseOpaqueHost(allocator: Allocator, input: []const u8) !?[]u8 {
-    // Forbidden opaque host code points
+    // URL Â§3.5 forbidden host code points: NUL, tab, LF, CR, space and the
+    // listed delimiters. Other C0 controls are allowed and percent-encoded
+    // below ("wpt++://te%1Fst" is a valid opaque host).
     for (input) |c| {
         switch (c) {
-            0x00...0x1F, ' ', '#', '/', ':', '<', '>', '?', '@', '[', '\\', ']', '^', '|' => return null,
+            0x00, 0x09, 0x0A, 0x0D, ' ', '#', '/', ':', '<', '>', '?', '@', '[', '\\', ']', '^', '|' => return null,
             else => {},
         }
     }

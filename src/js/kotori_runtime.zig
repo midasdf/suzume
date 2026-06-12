@@ -192,6 +192,9 @@ pub const KotoriRuntime = struct {
             const can_parse_fn = try self.vm.createObj(.{ .obj_type = .native_function });
             can_parse_fn.data = .{ .native_fn = &nativeUrlCanParse };
             try self.vm.globals.put(allocator, try pool.intern("__suzume_url_can_parse"), JsValue.initObject(can_parse_fn));
+            const set_fn = try self.vm.createObj(.{ .obj_type = .native_function });
+            set_fn.data = .{ .native_fn = &nativeUrlSet };
+            try self.vm.globals.put(allocator, try pool.intern("__suzume_url_set"), JsValue.initObject(set_fn));
         }
 
         // WHATWG URL Standard — globalThis.URL constructor + Location
@@ -5733,6 +5736,27 @@ pub const KotoriRuntime = struct {
         return urlRecordToJs(vm, &url);
     }
 
+    /// __suzume_url_set(href, prop, value) → field object | null.
+    /// URL §6.3 component setters: parses href, applies the setter with
+    /// basic-URL-parser-with-state-override semantics (src/url applySetter)
+    /// and returns the re-serialized field object. Invalid values return
+    /// the unchanged URL's fields (spec setters ignore failures silently).
+    fn nativeUrlSet(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = VM.vmFromCtx(ctx);
+        if (args.len < 3 or !args[0].isString() or !args[1].isString() or !args[2].isString())
+            return JsValue.null_val;
+        const href = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+        const prop = vm.pool.get(args[1].asStringId()) orelse return JsValue.null_val;
+        const value = vm.pool.get(args[2].asStringId()) orelse return JsValue.null_val;
+
+        const setter = std.meta.stringToEnum(url_parser.Setter, prop) orelse return JsValue.null_val;
+        var url = (url_parser.parse(vm.allocator, href, null) catch null) orelse
+            return JsValue.null_val;
+        defer url.deinit();
+        url_parser.applySetter(vm.allocator, &url, setter, value) catch return JsValue.null_val;
+        return urlRecordToJs(vm, &url);
+    }
+
     /// __suzume_url_can_parse(input, base?) → boolean.
     fn nativeUrlCanParse(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = VM.vmFromCtx(ctx);
@@ -5787,59 +5811,63 @@ pub const KotoriRuntime = struct {
         \\    try{p=__suzume_url_parse(String(url),base===undefined?undefined:String(base));}
         \\    catch(e){p=null;}
         \\    if(!p)throw new TypeError("Failed to construct 'URL': Invalid URL");
-        \\    this.href=p.href;
-        \\    this.protocol=p.protocol;
-        \\    this.username=p.username||'';
-        \\    this.password=p.password||'';
-        \\    this.hostname=p.hostname;
-        \\    this.port=p.port;
-        \\    this.pathname=p.pathname;
-        \\    this.hash=p.hash;
-        \\    this.origin=p.origin;
-        \\    this.host=p.host;
-        \\    var _sp=null,_q=p.search||'';
-        \\    var _self=this;
-        \\    try{Object.defineProperty(this,'search',{
-        \\      get:function(){if(_sp){var _s=_sp.toString();return _s?'?'+_s:'';}return _q||'';},
-        \\      set:function(v){
-        \\        v=String(v);
-        \\        if(v&&v!==''&&v.charAt(0)!=='?')v='?'+v;
-        \\        _q=v;
-        \\        if(_sp){
-        \\          _sp._e=[];
-        \\          var _s=v&&v.charAt(0)==='?'?v.substring(1):v;
-        \\          if(_s&&_s.length){
-        \\            var _pairs=_s.split('&');
-        \\            for(var _i=0;_i<_pairs.length;_i++){
-        \\              if(_pairs[_i]==='')continue;
-        \\              var _eq=_pairs[_i].indexOf('=');
-        \\              var _n,_val;
-        \\              if(_eq>=0){_n=_pairs[_i].substring(0,_eq);_val=_pairs[_i].substring(_eq+1);}
-        \\              else{_n=_pairs[_i];_val='';}
-        \\              _sp._e.push([percentDecode(_n.replace(/\\+/g,' ')),percentDecode(_val.replace(/\\+/g,' '))]);
-        \\            }
-        \\          }
-        \\        }
-        \\        var h=_self.href,qi=h.indexOf('?'),hi=h.indexOf('#');
-        \\        var base=qi!==-1?h.substring(0,qi):(hi!==-1?h.substring(0,hi):h);
-        \\        _self.href=base+v+(hi!==-1?h.substring(hi):'');
-        \\      },
-        \\      configurable:true,enumerable:true
-        \\    });}catch(e){}
-        \\    this.searchParams=null;
-        \\    try{Object.defineProperty(this,'searchParams',{
-        \\      get:function(){
-        \\        if(_sp)return _sp;
-        \\        _sp=new URLSearchParams(_q||'');
-        \\        _sp._updateURL=function(){var s=_sp.toString();var v=s?'?'+s:'';_q=v;var h=_self.href,qi=h.indexOf('?'),hi=h.indexOf('#');var base=qi!==-1?h.substring(0,qi):(hi!==-1?h.substring(0,hi):h);_self.href=base+v+(hi!==-1?h.substring(hi):'');};
-        \\        return _sp;
-        \\      },
-        \\      set:function(v){throw new TypeError('Cannot set URL property "searchParams"');},
-        \\      configurable:true,enumerable:true
-        \\    });}catch(e){}
+        \\    this._p=p;
+        \\    this._sp=null;
         \\  }
-        \\  URL.prototype.toString=function(){return this.href;};
-        \\  URL.prototype.toJSON=function(){return this.href;};
+        \\  // URL §6.3 component setters run the native basic URL parser with
+        \\  // state override (__suzume_url_set); invalid values are ignored.
+        \\  function _set(self,prop,v){
+        \\    var np=null;
+        \\    try{np=__suzume_url_set(self._p.href,prop,String(v));}catch(e){np=null;}
+        \\    if(np)self._p=np;
+        \\  }
+        \\  function _refillSP(sp,q){
+        \\    sp._e=[];
+        \\    if(q&&q.length){
+        \\      var pairs=q.split('&');
+        \\      for(var i=0;i<pairs.length;i++){
+        \\        if(pairs[i]==='')continue;
+        \\        var eq=pairs[i].indexOf('=');
+        \\        var n,val;
+        \\        if(eq>=0){n=pairs[i].substring(0,eq);val=pairs[i].substring(eq+1);}
+        \\        else{n=pairs[i];val='';}
+        \\        sp._e.push([percentDecode(n.replace(/\\+/g,' ')),percentDecode(val.replace(/\\+/g,' '))]);
+        \\      }
+        \\    }
+        \\  }
+        \\  function _def(name,getter,setter){
+        \\    try{Object.defineProperty(URL.prototype,name,{get:getter,set:setter,configurable:true,enumerable:true});}catch(e){}
+        \\  }
+        \\  _def('href',function(){return this._p.href;},function(v){
+        \\    var p=null;
+        \\    try{p=__suzume_url_parse(String(v));}catch(e){p=null;}
+        \\    if(!p)throw new TypeError("Failed to set 'href': Invalid URL");
+        \\    this._p=p;
+        \\    if(this._sp)_refillSP(this._sp,p.query||'');
+        \\  });
+        \\  _def('origin',function(){return this._p.origin;},function(v){});
+        \\  _def('protocol',function(){return this._p.protocol;},function(v){_set(this,'protocol',v);});
+        \\  _def('username',function(){return this._p.username||'';},function(v){_set(this,'username',v);});
+        \\  _def('password',function(){return this._p.password||'';},function(v){_set(this,'password',v);});
+        \\  _def('host',function(){return this._p.host;},function(v){_set(this,'host',v);});
+        \\  _def('hostname',function(){return this._p.hostname;},function(v){_set(this,'hostname',v);});
+        \\  _def('port',function(){return this._p.port;},function(v){_set(this,'port',v);});
+        \\  _def('pathname',function(){return this._p.pathname;},function(v){_set(this,'pathname',v);});
+        \\  _def('search',function(){return this._p.search;},function(v){
+        \\    _set(this,'search',v);
+        \\    if(this._sp)_refillSP(this._sp,this._p.query||'');
+        \\  });
+        \\  _def('hash',function(){return this._p.hash;},function(v){_set(this,'hash',v);});
+        \\  _def('searchParams',function(){
+        \\    if(this._sp)return this._sp;
+        \\    var self=this;
+        \\    var sp=new URLSearchParams(this._p.query||'');
+        \\    sp._updateURL=function(){_set(self,'search',sp.toString());};
+        \\    this._sp=sp;
+        \\    return sp;
+        \\  },function(v){throw new TypeError('Cannot set URL property "searchParams"');});
+        \\  URL.prototype.toString=function(){return this._p.href;};
+        \\  URL.prototype.toJSON=function(){return this._p.href;};
         \\  // WHATWG URL Standard static methods. WebIDL USVString
         \\  // conversion applies: undefined/null inputs stringify to
         \\  // "undefined"/"null" (only a *missing* argument throws), so
