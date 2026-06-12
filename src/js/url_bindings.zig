@@ -174,7 +174,6 @@ fn urlToJsObject(ctx: *qjs.JSContext, url: *const url_parser.Url) !qjs.JSValue {
                 try path_buf.append(allocator, '/');
                 try path_buf.appendSlice(allocator, seg);
             }
-            if (l.items.len == 0) try path_buf.append(allocator, '/');
             _ = qjs.JS_SetPropertyStr(ctx, obj, "pathname", qjs.JS_NewStringLen(ctx, path_buf.items.ptr, path_buf.items.len));
         },
         .opaque_path => |p| {

@@ -78,12 +78,15 @@ pub const Url = struct {
         // path
         switch (self.path) {
             .list => |l| {
+                // URL §4.4: a host-less URL whose path starts with an empty
+                // segment serializes with a "/." prefix so it round-trips
+                // ("foo:/.//p" — otherwise "//p" would re-parse as a host).
+                if (self.host == null and l.items.len > 1 and l.items[0].len == 0) {
+                    try out.appendSlice(allocator, "/.");
+                }
                 for (l.items) |seg| {
                     try out.append(allocator, '/');
                     try out.appendSlice(allocator, seg);
-                }
-                if (l.items.len == 0 and self.host != null) {
-                    try out.append(allocator, '/');
                 }
             },
             .opaque_path => |p| try out.appendSlice(allocator, p),
@@ -466,7 +469,15 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                         state = .fragment;
                     } else if (c != null) {
                         url.query = null;
-                        shortenPath(&url);
+                        // URL §4.3 file state: a Windows drive letter here
+                        // makes the input absolute on the drive
+                        // ("file:c:\foo" against a file base) — drop the
+                        // base path entirely instead of shortening it.
+                        if (startsWithWindowsDriveLetter(input[ptr..])) {
+                            clearPath(&url);
+                        } else {
+                            shortenPath(&url);
+                        }
                         state = .path;
                         continue;
                     }
@@ -482,6 +493,23 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                 } else {
                     if (base != null and std.mem.eql(u8, base.?.scheme, "file")) {
                         url.host = if (base.?.host) |h| try cloneHost(allocator, h) else null;
+                        // URL §4.3 file slash state: "/m" against
+                        // "file:///C:/x" stays on the base's drive —
+                        // inherit its normalized drive letter unless the
+                        // input supplies its own.
+                        if (!startsWithWindowsDriveLetter(input[ptr..])) {
+                            switch (base.?.path) {
+                                .list => |bl| {
+                                    if (bl.items.len > 0 and isNormalizedWindowsDriveLetter(bl.items[0])) {
+                                        switch (url.path) {
+                                            .list => |*ul| try ul.append(allocator, try allocator.dupe(u8, bl.items[0])),
+                                            .opaque_path => {},
+                                        }
+                                    }
+                                },
+                                .opaque_path => {},
+                            }
+                        }
                     }
                     state = .path;
                     continue;
@@ -502,7 +530,18 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                         const h = try host_mod.parseHost(allocator, buf.items, false) orelse { parse_failed = true; return null; };
                         // Free the empty host set in .file
                         if (url.host) |old_h| host_mod.freeHost(allocator, old_h);
-                        url.host = h;
+                        // URL §4.3 file host state: "localhost" maps to the
+                        // empty host ("file://localhost/x" → "file:///x").
+                        const is_localhost = switch (h) {
+                            .domain => |d| std.mem.eql(u8, d, "localhost"),
+                            else => false,
+                        };
+                        if (is_localhost) {
+                            host_mod.freeHost(allocator, h);
+                            url.host = Host{ .domain = try allocator.alloc(u8, 0) };
+                        } else {
+                            url.host = h;
+                        }
                     }
                     buf.clearRetainingCapacity();
                     state = .path_start;
@@ -533,13 +572,39 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                     c.? == '?' or c.? == '#')
                 {
                     const seg = buf.items;
+                    // URL §4.3 path state: a trailing dot segment ("/foo/."
+                    // or "/foo/..") at EOF/?/# still terminates the path
+                    // with a slash — spec appends an empty segment unless
+                    // the delimiter is "/" (or "\" for special schemes).
+                    const at_seg_delim = c != null and
+                        (c.? == '/' or (isSpecialScheme(url.scheme) and c.? == '\\'));
                     if (isDoubleDot(seg)) {
                         shortenPath(&url);
+                        if (!at_seg_delim) {
+                            switch (url.path) {
+                                .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
+                                .opaque_path => {},
+                            }
+                        }
                     } else if (isSingleDot(seg)) {
-                        // Do nothing — single dot segment
+                        if (!at_seg_delim) {
+                            switch (url.path) {
+                                .list => |*l| try l.append(allocator, try allocator.alloc(u8, 0)),
+                                .opaque_path => {},
+                            }
+                        }
                     } else {
+                        // URL §4.3 path state: "file:c|/m" — normalize a
+                        // Windows drive letter first segment to use ":".
+                        if (std.mem.eql(u8, url.scheme, "file") and isWindowsDriveLetter(seg)) {
+                            const path_empty = switch (url.path) {
+                                .list => |l| l.items.len == 0,
+                                .opaque_path => false,
+                            };
+                            if (path_empty) buf.items[1] = ':';
+                        }
                         // Percent-encode the segment and append
-                        const encoded = try pe.percentEncode(allocator, seg, .path);
+                        const encoded = try pe.percentEncode(allocator, buf.items, .path);
                         switch (url.path) {
                             .list => |*l| try l.append(allocator, encoded),
                             .opaque_path => {},
@@ -664,6 +729,36 @@ fn shortenPath(url: *Url) void {
 
 fn isWindowsDriveLetter(input: []const u8) bool {
     return input.len == 2 and std.ascii.isAlphabetic(input[0]) and (input[1] == ':' or input[1] == '|');
+}
+
+/// URL §4.3: a string "starts with a Windows drive letter" if its first two
+/// code points are a Windows drive letter and it is either exactly two code
+/// points long or the third one is "/", "\", "?" or "#". Skips the tab and
+/// newline bytes that the state machine also skips.
+fn startsWithWindowsDriveLetter(input: []const u8) bool {
+    var cps: [3]u8 = undefined;
+    var n: usize = 0;
+    for (input) |b| {
+        if (b == 0x09 or b == 0x0A or b == 0x0D) continue;
+        cps[n] = b;
+        n += 1;
+        if (n == 3) break;
+    }
+    if (n < 2) return false;
+    if (!isWindowsDriveLetter(cps[0..2])) return false;
+    if (n == 2) return true;
+    return cps[2] == '/' or cps[2] == '\\' or cps[2] == '?' or cps[2] == '#';
+}
+
+/// Empty a URL's path list, freeing its segments.
+fn clearPath(url: *Url) void {
+    switch (url.path) {
+        .list => |*l| {
+            for (l.items) |seg| url.allocator.free(seg);
+            l.clearRetainingCapacity();
+        },
+        .opaque_path => {},
+    }
 }
 
 fn isNormalizedWindowsDriveLetter(input: []const u8) bool {

@@ -5676,7 +5676,6 @@ pub const KotoriRuntime = struct {
                     try buf.append(a, '/');
                     try buf.appendSlice(a, seg);
                 }
-                if (l.items.len == 0) try buf.append(a, '/');
                 try setStringProp(vm, obj, "pathname", buf.items);
             },
             .opaque_path => |p| try setStringProp(vm, obj, "pathname", p),

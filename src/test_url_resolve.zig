@@ -22,6 +22,9 @@ test "suzume internal URLs are absolute" {
     const resolved = try loader.resolveUrl(allocator, "https://example.com/dir/page.html", "suzume://history");
     defer allocator.free(resolved);
 
-    // WHATWG URL spec: authority-having URLs always have a path starting with /
-    try std.testing.expectEqualStrings("suzume://history/", resolved);
+    // URL §4.4: an empty path list serializes as the empty string — no
+    // trailing slash gets invented ("foo://" ≠ "foo:///"). This also keeps
+    // internal_pages.getPageName's exact-match lookup ("history") working
+    // when internal links are resolved through resolveUrl.
+    try std.testing.expectEqualStrings("suzume://history", resolved);
 }
