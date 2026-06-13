@@ -409,13 +409,28 @@ pub const KotoriRuntime = struct {
         \\  function brandHCLiveLen(rebuildFn){
         \\    var expandos=Object.create(null);
         \\    var target=[];
+        \\    // Rebuilds are cached per DOM mutation epoch (__suzume_domVer,
+        \\    // bumped by every native setDomDirty). Iterating an N-element
+        \\    // collection used to cost N+1 full tree walks through the Proxy
+        \\    // get trap; with the stamp it costs one walk per DOM mutation.
+        \\    var cache=null,cacheVer=-1;
+        \\    var hasVer=typeof __suzume_domVer==='function';
+        \\    function q(){
+        \\      if(hasVer){
+        \\        var v=__suzume_domVer();
+        \\        if(cache&&cacheVer===v)return cache;
+        \\        cache=rebuildFn();cacheVer=v;
+        \\        return cache;
+        \\      }
+        \\      return rebuildFn();
+        \\    }
         \\    try{Object.setPrototypeOf(target, HTMLCollection.prototype);}catch(e){}
         \\    try{if(typeof __suzume_markHTMLCollection==='function')__suzume_markHTMLCollection(target);}catch(e){}
         \\    return new Proxy(target, {
         \\      get:function(t,p,recv){
-        \\        if(p==='length')return rebuildFn().length;
+        \\        if(p==='length')return q().length;
         \\        if(typeof p==='string' && isIdxStr(p)){
-        \\          var items=rebuildFn();
+        \\          var items=q();
         \\          var idx=p>>>0;
         \\          return idx<items.length?items[idx]:undefined;
         \\        }
@@ -425,7 +440,7 @@ pub const KotoriRuntime = struct {
         \\           p!=='constructor' && p!=='toString' && p!=='toLocaleString' &&
         \\           p!=='valueOf' && p!=='hasOwnProperty' && p!=='isPrototypeOf' &&
         \\           p!=='propertyIsEnumerable'){
-        \\          var f=niLookup(rebuildFn(),p);
+        \\          var f=niLookup(q(),p);
         \\          if(f)return f;
         \\        }
         \\        return Reflect.get(t,p,recv);
@@ -433,7 +448,7 @@ pub const KotoriRuntime = struct {
         \\      set:function(t,p,v,recv){
         \\        if(typeof p==='string' && isIdxStr(p))return true;
         \\        if(typeof p==='string'){
-        \\          var f=niLookup(rebuildFn(),p);
+        \\          var f=niLookup(q(),p);
         \\          if(f)return true;
         \\        }
         \\        expandos[p]=v;
@@ -442,14 +457,14 @@ pub const KotoriRuntime = struct {
         \\      has:function(t,p){
         \\        if(p==='length' || p==='item' || p==='namedItem')return true;
         \\        if(typeof p==='string'){
-        \\          if(isIdxStr(p))return (p>>>0)<rebuildFn().length;
+        \\          if(isIdxStr(p))return (p>>>0)<q().length;
         \\          if(Object.prototype.hasOwnProperty.call(expandos,p))return true;
-        \\          if(niLookup(rebuildFn(),p))return true;
+        \\          if(niLookup(q(),p))return true;
         \\        }
         \\        return Reflect.has(t,p);
         \\      },
         \\      ownKeys:function(t){
-        \\        var items=rebuildFn();
+        \\        var items=q();
         \\        var keys=[];
         \\        var seen=Object.create(null);
         \\        for(var i=0;i<items.length;i++){
@@ -476,7 +491,7 @@ pub const KotoriRuntime = struct {
         \\      getOwnPropertyDescriptor:function(t,p){
         \\        if(typeof p==='string'){
         \\          if(isIdxStr(p)){
-        \\            var items=rebuildFn();
+        \\            var items=q();
         \\            var idx=p>>>0;
         \\            if(idx<items.length){
         \\              return {value:items[idx],writable:false,enumerable:true,configurable:true};
@@ -484,7 +499,7 @@ pub const KotoriRuntime = struct {
         \\            return undefined;
         \\          }
         \\          if(Object.prototype.hasOwnProperty.call(expandos,p))return Object.getOwnPropertyDescriptor(expandos,p);
-        \\          var f=niLookup(rebuildFn(),p);
+        \\          var f=niLookup(q(),p);
         \\          if(f)return {value:f,writable:false,enumerable:false,configurable:true};
         \\        }
         \\        return undefined;
@@ -641,8 +656,24 @@ pub const KotoriRuntime = struct {
         \\    return out;
         \\  }
         \\
+        \\  // Native getElementsByTagName, captured BEFORE the spec-correct
+        \\  // overrides below replace it. The '*' wildcard query has no
+        \\  // case/namespace pitfalls, so it is safe as the tree-walk
+        \\  // primitive for allDescendants (the JS childNodes walk costs an
+        \\  // array materialisation per node; the native walks lexbor
+        \\  // C structs directly).
+        \\  var nativeDocByTag = document.getElementsByTagName;
+        \\  var nativeElemByTag = (typeof Element!=='undefined'&&Element.prototype)?Element.prototype.getElementsByTagName:null;
+        \\
         \\  // Collect all descendant elements of root in tree order.
         \\  function allDescendants(root){
+        \\    try{
+        \\      if(root===document){
+        \\        if(typeof nativeDocByTag==='function')return nativeDocByTag.call(document,'*');
+        \\      }else if(nativeElemByTag&&root&&root.nodeType===1){
+        \\        return nativeElemByTag.call(root,'*');
+        \\      }
+        \\    }catch(e){}
         \\    var out=[];
         \\    function walk(n){
         \\      var kids=n.childNodes;

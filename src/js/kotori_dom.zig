@@ -507,8 +507,15 @@ fn getDocFromThis(this: JsValue) ?*anyopaque {
 /// keeps the boundary clean.
 fn setDomDirty() void {
     dom_dirty = true;
+    // Monotonic mutation epoch — read by the live-HTMLCollection polyfill
+    // (via `__suzume_domVer`) to cache Proxy rebuilds between mutations.
+    g_dom_version +%= 1;
     if (mark_dirty_fn) |f| f();
 }
+
+/// DOM mutation epoch counter. Never reset (page reloads re-evaluate the
+/// polyfill, which starts with a stale sentinel), wraps on overflow.
+var g_dom_version: u64 = 0;
 
 // ── Event listener storage ──────────────────────────────────────────
 pub const EventListener = struct {
@@ -650,6 +657,29 @@ var g_namednodemap_proto: ?*JsObject = null;
 /// `__nnmVer` slot on map objects to decide whether to refresh indexed
 /// + named snapshots.
 var g_elem_attr_ver: std.AutoHashMapUnmanaged(usize, u64) = .{};
+
+// ── URL reflection caches ───────────────────────────────────────────
+// (raw attribute value, base URL) → resolved absolute URL, all as pool
+// StringIds. The mapping is a pure function of its inputs (WHATWG basic
+// URL parse + serialize), so entries never go stale; the whole map is
+// dropped when the owning VM changes (StringIds are per-pool) or when
+// it grows past a bound.
+var g_url_resolve_cache: std.AutoHashMapUnmanaged(u64, StringId) = .{};
+var g_url_cache_vm: ?*VM = null;
+/// document base URI memo, valid for one (mutation epoch, document URL).
+var g_base_uri_memo: ?struct { ver: u64, doc_url_sid: StringId, result_sid: StringId } = null;
+/// Sentinel for "document.URL absent" in the memo key (real ids are
+/// sequential pool indices and never reach the top of the u32 range).
+const no_sid: StringId = 0xFFFF_FFFF;
+
+fn urlCacheForVm(vm: *VM) *std.AutoHashMapUnmanaged(u64, StringId) {
+    if (g_url_cache_vm != vm) {
+        g_url_resolve_cache.clearRetainingCapacity();
+        g_base_uri_memo = null;
+        g_url_cache_vm = vm;
+    }
+    return &g_url_resolve_cache;
+}
 
 /// Bump the per-element attribute version. Safe to call even before the
 /// map has been materialised; the first bump initialises to 1.
@@ -826,6 +856,12 @@ pub fn deinit() void {
     // NamedNodeMap per-element attribute version counter (DOM §4.9.2 live semantics).
     g_elem_attr_ver.deinit(g_alloc);
     g_elem_attr_ver = .{};
+    // URL reflection caches hold per-pool StringIds and g_alloc-backed
+    // storage — both die with the VM.
+    g_url_resolve_cache.deinit(g_alloc);
+    g_url_resolve_cache = .{};
+    g_url_cache_vm = null;
+    g_base_uri_memo = null;
     g_namednodemap_proto = null;
     g_sid_nnm_elem = null;
     g_sid_nnm_ver = null;
@@ -1207,6 +1243,11 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     mhc_fn.data = .{ .native_fn = &nativeMarkHTMLCollection };
     const mhc_id = try vm.pool.intern("__suzume_markHTMLCollection");
     try vm.globals.put(vm.allocator, mhc_id, JsValue.initObject(mhc_fn));
+    // DOM mutation epoch for the live-HTMLCollection rebuild cache.
+    const dv_fn = try vm.createObj(.{ .obj_type = .native_function });
+    dv_fn.data = .{ .native_fn = &nativeDomVersion };
+    const dv_id = try vm.pool.intern("__suzume_domVer");
+    try vm.globals.put(vm.allocator, dv_id, JsValue.initObject(dv_fn));
     // DOM §4.2.10 — live `length` accessor used by getChildrenArray for the
     // collections returned from `.children` / `.childNodes`. Stored in a
     // module-global so subsequent calls reuse the same function object.
@@ -1643,6 +1684,33 @@ fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
 /// made per-property URL reflection quadratic on data-driven WPT pages.
 /// Returns a pool-interned string.
 fn docBaseUriString(vm: *VM) ?[]const u8 {
+    // Memo gate: the tree walk + double URL parse in the compute path runs
+    // on every URL-attribute read otherwise. Keyed on (mutation epoch,
+    // document.URL) so <base> edits and navigation both invalidate.
+    const doc_url_sid: StringId = blk: {
+        const doc_sid = vm.pool.intern("document") catch break :blk no_sid;
+        const doc_val = vm.globals.get(doc_sid) orelse break :blk no_sid;
+        if (!doc_val.isObject()) break :blk no_sid;
+        const url_sid = vm.pool.intern("URL") catch break :blk no_sid;
+        const v = doc_val.asJsObject().getProperty(url_sid) orelse break :blk no_sid;
+        if (!v.isString()) break :blk no_sid;
+        break :blk v.asStringId();
+    };
+    if (g_url_cache_vm == vm) {
+        if (g_base_uri_memo) |m| {
+            if (m.ver == g_dom_version and m.doc_url_sid == doc_url_sid) {
+                return vm.pool.get(m.result_sid);
+            }
+        }
+    }
+    const s = docBaseUriStringCompute(vm) orelse return null;
+    _ = urlCacheForVm(vm);
+    const rsid = vm.pool.intern(s) catch return s;
+    g_base_uri_memo = .{ .ver = g_dom_version, .doc_url_sid = doc_url_sid, .result_sid = rsid };
+    return vm.pool.get(rsid);
+}
+
+fn docBaseUriStringCompute(vm: *VM) ?[]const u8 {
     const doc_sid = vm.pool.intern("document") catch return null;
     const doc_val = vm.globals.get(doc_sid) orelse return null;
     if (!doc_val.isObject()) return null;
@@ -1756,6 +1824,16 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
     }
     // Attribute absent → return empty string (HTML §2.6.5).
     const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
+    // (raw, base) → resolved is a pure WHATWG-parser computation; consult
+    // the cache before paying for two parses + a serialize per access.
+    const cache_key: ?u64 = blk: {
+        const raw_sid = vm.pool.intern(raw) catch break :blk null;
+        const base_sid: StringId = if (base_url) |b| (vm.pool.intern(b) catch break :blk null) else no_sid;
+        break :blk (@as(u64, raw_sid) << 32) | @as(u64, base_sid);
+    };
+    if (cache_key) |k| {
+        if (urlCacheForVm(vm).get(k)) |sid| return JsValue.initString(sid);
+    }
     // Resolve against the document base URL (which honors any <base href>
     // element) with the WHATWG basic URL parser; on parse failure the IDL
     // attribute returns the raw attribute value (HTML §4.6.2 "reparse").
@@ -1766,12 +1844,23 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
     defer if (base_parsed) |*b| b.deinit();
     const base_ptr: ?*const url_parser.Url = if (base_parsed) |*b| b else null;
     var parsed = (url_parser.parse(vm.allocator, raw, base_ptr) catch null) orelse
-        return JsValue.initString(vm.pool.intern(raw) catch return null);
+        return JsValue.initString(urlReflectionMemo(vm, cache_key, vm.pool.intern(raw) catch return null));
     defer parsed.deinit();
     const resolved = parsed.serialize(vm.allocator, false) catch
-        return JsValue.initString(vm.pool.intern(raw) catch return null);
+        return JsValue.initString(urlReflectionMemo(vm, cache_key, vm.pool.intern(raw) catch return null));
     defer vm.allocator.free(resolved);
-    return JsValue.initString(vm.pool.intern(resolved) catch return null);
+    return JsValue.initString(urlReflectionMemo(vm, cache_key, vm.pool.intern(resolved) catch return null));
+}
+
+/// Store a resolved URL reflection result in the cache and pass it through.
+fn urlReflectionMemo(vm: *VM, cache_key: ?u64, result_sid: StringId) StringId {
+    if (cache_key) |k| {
+        // Bound the map — pages that churn through unique URLs (data-driven
+        // WPT suites) would otherwise grow it without limit.
+        if (g_url_resolve_cache.count() > 8192) g_url_resolve_cache.clearRetainingCapacity();
+        urlCacheForVm(vm).put(g_alloc, k, result_sid) catch {};
+    }
+    return result_sid;
 }
 
 /// HTML §4.10.18.7 — autocomplete attribute IDL processing.
@@ -3744,6 +3833,15 @@ fn nativeMarkHTMLCollection(ctx: *anyopaque, _: JsValue, args: []const JsValue) 
     const obj = args[0].asJsObject();
     if (obj.obj_type == .array) obj.is_html_collection = true;
     return args[0];
+}
+
+/// JS-callable read of the DOM mutation epoch (`__suzume_domVer`). The
+/// live-HTMLCollection polyfill compares this against its last rebuild
+/// stamp so repeated `coll.length` / `coll[i]` reads between mutations
+/// hit a cache instead of re-walking the tree through the Proxy trap.
+fn nativeDomVersion(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    _ = ctx;
+    return JsValue.initNumber(@floatFromInt(g_dom_version));
 }
 
 fn collectByTagName(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8, arr: *kotori.JsObject) !void {
