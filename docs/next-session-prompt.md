@@ -2,6 +2,31 @@
 
 TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
 
+## 前回セッション成果（2026-06-13 第2部、パフォーマンス集中 Waves 185-189）
+
+体感速度の主要ボトルネック5つのうち4つを解消。WPT url 5180/7244 (71.5%)・
+test-kotori 680/14/21・404 leaks 全て変更前と同数（回帰ゼロ）。
+a-element.html: **18s → 6.7s (2.7x)**。
+
+| Wave | 内容 |
+|------|------|
+| 185 | **VM upvalue O(1)化** (vm.zig): open専用リスト分離（closeUpvalues* が閉セルを永久スキャンしてた）+ closure_entries を線形リスト→AutoHashMap（**毎関数呼び出し**で全クロージャ線形スキャンしてた） |
+| 186 | **kotori live HTMLCollection キャッシュ** : `__suzume_domVer` (setDomDirty で bump する mutation epoch) を kotori に公開、brandHCLiveLen の Proxy trap が epoch 単位で rebuild をキャッシュ（quickjs 側 createLiveHTMLColl と同パターン）。allDescendants は override 前に捕獲した native getElementsByTagName('*') に委譲（JS childNodes ウォーク排除） |
+| 187 | **URL reflection キャッシュ** (kotori_dom.zig): docBaseUriString を (epoch, document.URL) でメモ化、urlReflectionGet に (raw, base) → resolved の StringId キャッシュ（純粋関数なので無期限、VM 変更/8192件で破棄）。liveness は /tmp/wpt/local-live-cache-test.html で検証済み（3/3 pass） |
+| 188 | **画像フェッチ非同期化** (src/net/image_fetcher.zig 新規): 4 ワーカースレッド（各自専用 HttpClient、curl easy handle 非共有）+ sync.Mutex キュー。decode/cache/layout/load・error イベントは全てメインスレッドの drain で実行。世代スタンプ (PageState.fetch_gen) でナビゲーション後の stale 結果を破棄。メインループの最大 30s ブロック（10 img × 3s timeout）が解消 |
+| 189 | README に ReleaseSafe 常用ビルドを明記、build.zig の test-kotori-dom に url_parser 配線追加 |
+
+### 既知の残課題（このセッションで発見/未着手）
+- **test-kotori-dom はまだリンク不能**: `suzume_element_matches` (dom_selector.zig の
+  export、quickjs 依存) が test ターゲットに無い。url_parser 配線は直した。
+  恒久修正は mark_dirty_fn と同じ callback パターンで extern を関数ポインタ化
+  （fallback は kotori_dom 内の matchSimpleSelector）
+- **外部スクリプト/CSS はまだ同期フェッチ** (script_executor.zig:311 の 5s timeout、
+  loader.zig walkForCssLinks/processImports の 3s×N 直列)。画像と同じ
+  fetcher パターンを流用可能だが、スクリプトは実行順序の制約があるので要設計
+- 画像 fetcher のワーカーはメイン HttpClient と cookie を共有しない
+  （認証付き画像はロードされない可能性。必要になったら cookie file を共有）
+
 ## 前回セッション成果（2026-06-13、Waves 174-184）
 
 URL エリア集中改善: **130/274 → 5180/7244 (71.5%)** subtests
@@ -49,25 +74,14 @@ DISPLAY=:98 timeout 120 ./zig-out/bin/suzume --wpt-mode "http://127.0.0.1:9876/u
 
 ## 次セッション優先タスク
 
-### 0. パフォーマンス改善(ユーザー体感「めちゃめちゃ遅い」、最優先)
-判明済みの手がかり(2026-06-13 セッションのプロファイルから):
-- **Debug ビルド問題**: `zig build` デフォルトは Debug。日常利用は
-  `zig build -Doptimize=ReleaseSafe` を使う(ReleaseFast は @intCast UB が
-  怖いので Safe 推奨 — BPM で ReleaseSmall UB を踏んだ前例あり)。
-  インストールスクリプト/ドキュメントに常用ビルドフラグを明記すべき
-- **同期 HTTP フェッチがメインループをブロック**: 画像・外部スクリプトを
-  メインスレッドで 1 件ずつ同期取得(timeout 15s)。Google などリソースが
-  多いページで UI が固まる。pending_images の非同期化/並列化が本丸
-- **upvalue 機構がホット**: gdb サンプリングで closeUpvaluesAbove /
-  getOrCreateUpvalue / getClosureUpvalues が頻出。open_upvalues が線形リスト
-  なら sorted 構造化や frame-local 化を検討
-- **proxyGet 連打**: live HTMLCollection (getElementsByTagName 等) の
-  Proxy trap が JS 呼び出しを伴う。ネイティブ化 or キャッシュ
-  (baseURI で同手法により 300s→18s の実績、Wave 183)
-- **URL reflection のパース毎回実行**: a.href 等のゲッターが毎アクセスで
-  base+href をフルパース。(raw, baseURI) キーのキャッシュで削減可
-- StringPool.get は O(1) 化済み (Wave 182) — 同種の「線形スキャン系」が
-  他にもないか vm.zig / object.zig を疑え(プロパティ探索、descriptors 等)
+### 0. パフォーマンス改善 — Waves 185-189 でほぼ完了 ✅
+残り:
+- 外部スクリプト/CSS の同期フェッチ(上記「既知の残課題」参照)
+- StringPool.get は O(1) 化済み (Wave 182)、upvalue/closure は Wave 185 で解消
+  — 同種の「線形スキャン系」が他にもないか vm.zig / object.zig を疑え
+  (プロパティ探索、descriptors 等)
+- quickjs エンジン側 (dom_api.zig) の URL reflection (`ru()` ヘルパー) は
+  まだ毎アクセス `new URL()`。kotori がデフォルトなので優先度低
 
 ### 0.5 Google レンダリング崩れ(ユーザー報告)
 - 症状: google.com でヘッダーリンク2個のみ描画。ロゴ・検索ボックス不可視

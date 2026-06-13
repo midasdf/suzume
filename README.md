@@ -68,12 +68,19 @@ SUZUME_JS=quickjs bash tests/wpt/run_wpt.sh dom/nodes
 ## Building
 
 ```bash
-zig build              # native build
+zig build -Doptimize=ReleaseSafe   # daily-use build (recommended)
+zig build              # debug build (slow — for development only)
 zig build run          # run browser
 zig build test-css     # run CSS engine tests
 zig build test-kotori      # run kotori JS engine tests
 zig build test-kotori-dom  # run kotori DOM binding tests
 ```
+
+> **Note:** the default `zig build` produces a Debug binary, which is
+> dramatically slower (JS VM, layout, image decode). For actual browsing
+> always build with `-Doptimize=ReleaseSafe`. ReleaseSafe is preferred over
+> ReleaseFast because it keeps integer-cast/overflow checks (`@intCast` UB
+> has bitten release builds before).
 
 ### Cross-compile for RPi Zero 2W (aarch64)
 

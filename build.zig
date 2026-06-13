@@ -741,6 +741,7 @@ pub fn build(b: *std.Build) void {
     });
     kotori_dom_mod.addImport("kotori", kotori_mod);
     kotori_dom_mod.addImport("dom_names", dom_names_shared_mod);
+    kotori_dom_mod.addImport("url_parser", url_parser_shared_mod);
     kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
 
     const css_validator_mod = b.createModule(.{
