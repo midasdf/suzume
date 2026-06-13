@@ -45,7 +45,10 @@ pub const VM = struct {
     // Heap tracking for cleanup
     objects: std.ArrayListUnmanaged(*JsObject) = .empty,
     upvalue_cells: std.ArrayListUnmanaged(*UpvalueCell) = .empty,
-    closure_entries: std.ArrayListUnmanaged(ClosureEntry) = .empty,
+    // Only the still-open cells — closed cells stay in upvalue_cells (ownership)
+    // but must not be scanned on every capture/close.
+    open_upvalues: std.ArrayListUnmanaged(*UpvalueCell) = .empty,
+    closure_entries: std.AutoHashMapUnmanaged(*JsObject, []?*UpvalueCell) = .empty,
     // Built-in prototypes
     array_proto: ?*JsObject = null,
     string_proto: ?*JsObject = null,
@@ -207,8 +210,9 @@ pub const VM = struct {
         }
         self.continuations.deinit(self.allocator);
         self.symbol_descriptions.deinit(self.allocator);
-        for (self.closure_entries.items) |entry| {
-            self.allocator.free(entry.upvalues);
+        var ce_it = self.closure_entries.valueIterator();
+        while (ce_it.next()) |uvs| {
+            self.allocator.free(uvs.*);
         }
         self.closure_entries.deinit(self.allocator);
         for (self.objects.items) |obj| {
@@ -220,6 +224,7 @@ pub const VM = struct {
             self.allocator.destroy(cell);
         }
         self.upvalue_cells.deinit(self.allocator);
+        self.open_upvalues.deinit(self.allocator);
         self.module_exports.deinit(self.allocator);
         self.console_timers.deinit(self.allocator);
         self.console_counts.deinit(self.allocator);
@@ -2716,26 +2721,20 @@ pub const VM = struct {
 
     // ── Upvalue management ───────────────────────────────────────────
 
-    const ClosureEntry = struct {
-        closure: *JsObject,
-        upvalues: []?*UpvalueCell,
-    };
-
     fn storeClosureUpvalues(self: *VM, closure: *JsObject, uvs: []?*UpvalueCell) !void {
-        try self.closure_entries.append(self.allocator, .{ .closure = closure, .upvalues = uvs });
+        const gop = try self.closure_entries.getOrPut(self.allocator, closure);
+        if (gop.found_existing) self.allocator.free(gop.value_ptr.*);
+        gop.value_ptr.* = uvs;
     }
 
     fn getClosureUpvalues(self: *VM, closure: *JsObject) []?*UpvalueCell {
-        for (self.closure_entries.items) |entry| {
-            if (entry.closure == closure) return entry.upvalues;
-        }
-        return &.{};
+        return self.closure_entries.get(closure) orelse &.{};
     }
 
     fn getOrCreateUpvalue(self: *VM, stack_idx: u32) !*UpvalueCell {
         // Check existing open upvalues
-        for (self.upvalue_cells.items) |cell| {
-            if (cell.is_open and cell.stack_index == stack_idx) return cell;
+        for (self.open_upvalues.items) |cell| {
+            if (cell.stack_index == stack_idx) return cell;
         }
         // Create new
         const cell = try self.allocator.create(UpvalueCell);
@@ -2745,23 +2744,32 @@ pub const VM = struct {
             .stack_index = stack_idx,
         };
         try self.upvalue_cells.append(self.allocator, cell);
+        try self.open_upvalues.append(self.allocator, cell);
         return cell;
     }
 
     fn closeUpvaluesAbove(self: *VM, min_slot: u32) void {
-        for (self.upvalue_cells.items) |cell| {
-            if (cell.is_open and cell.stack_index >= min_slot) {
+        var i: usize = self.open_upvalues.items.len;
+        while (i > 0) {
+            i -= 1;
+            const cell = self.open_upvalues.items[i];
+            if (cell.stack_index >= min_slot) {
                 cell.value = self.stack[cell.stack_index];
                 cell.is_open = false;
+                _ = self.open_upvalues.swapRemove(i);
             }
         }
     }
 
     fn closeUpvalueAt(self: *VM, slot: u32) void {
-        for (self.upvalue_cells.items) |cell| {
-            if (cell.is_open and cell.stack_index == slot) {
+        var i: usize = self.open_upvalues.items.len;
+        while (i > 0) {
+            i -= 1;
+            const cell = self.open_upvalues.items[i];
+            if (cell.stack_index == slot) {
                 cell.value = self.stack[slot];
                 cell.is_open = false;
+                _ = self.open_upvalues.swapRemove(i);
             }
         }
     }
