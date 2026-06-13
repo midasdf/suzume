@@ -88,10 +88,14 @@ pub fn stderrWrite(bytes: []const u8) void {
 /// Read up to `dest.len` bytes from `stream` into `dest`. Returns the
 /// number of bytes read (0 == EOF / peer close).
 /// Equivalent to the 0.15 `stream.read(dest)`.
+///
+/// Deliberately a single raw read(2) on the socket fd: the Reader
+/// interface's `readSliceShort` blocks until `dest` is FULL or EOF,
+/// which deadlocks request/response protocols on keep-alive sockets
+/// (the peer is waiting for our response while we wait to fill the
+/// buffer — this is what killed the WebDriver server under 0.16).
 pub fn netRead(stream: std.Io.net.Stream, dest: []u8) !usize {
-    var buf: [4096]u8 = undefined;
-    var r = stream.reader(ioOrPanic(), &buf);
-    return r.interface.readSliceShort(dest);
+    return std.posix.read(stream.socket.handle, dest);
 }
 
 /// Write all `bytes` to `stream`, flushing.
