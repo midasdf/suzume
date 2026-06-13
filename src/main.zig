@@ -29,6 +29,7 @@ const userscript = @import("features/userscript.zig");
 const Box = @import("layout/box.zig").Box;
 const ImageCache = @import("paint/image.zig").ImageCache;
 const decodeImage = @import("paint/image.zig").decodeImage;
+const ImageFetcher = @import("net/image_fetcher.zig").ImageFetcher;
 
 const default_window_w = chrome.default_window_w;
 const default_window_h = chrome.default_window_h;
@@ -397,6 +398,11 @@ const PageState = struct {
     pending_images: std.ArrayListUnmanaged(ImageUrlEntry) = .empty,
     pending_images_idx: usize = 0,
     pending_images_loaded: usize = 0,
+    /// Generation stamp matching in-flight background image fetches to this
+    /// page; results with a stale stamp are dropped after navigation.
+    fetch_gen: u64 = 0,
+    /// URLs already handed to the fetch pool (dedup across restyle re-collects).
+    submitted_images: ?std.StringHashMap(void) = null,
     /// Base URL for resolving relative image URLs.
     base_url: ?[]const u8 = null,
     /// Error message to display when page load fails.
@@ -483,6 +489,15 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
 }
 
 /// Recursively collect image URLs from the box tree.
+/// Monotonic stamp tying background image fetches to the PageState that
+/// requested them. Bumped per navigation; never zero for a live page.
+var g_fetch_gen_counter: u64 = 0;
+
+fn nextFetchGen() u64 {
+    g_fetch_gen_counter += 1;
+    return g_fetch_gen_counter;
+}
+
 const ImageUrlEntry = struct {
     url: []const u8,
     intrinsic_width: f32,
@@ -924,6 +939,7 @@ fn navigateTo(
         .pending_images = pending_imgs,
         .pending_images_idx = 0,
         .pending_images_loaded = 0,
+        .fetch_gen = nextFetchGen(),
         .base_url = base_url_copy,
         .anim_state = anim_mod.AnimationState.init(allocator),
     };
@@ -1113,6 +1129,12 @@ pub fn main(init: std.process.Init) !void {
     web_api.setSharedHttpClient(&http_client);
 
     var loader = Loader.init(allocator, &http_client);
+
+    // Background image fetch pool — keeps the blocking curl calls off this
+    // (UI) thread; decode/layout/events still happen here at drain time.
+    var image_fetcher: ImageFetcher = .{};
+    image_fetcher.start();
+    defer image_fetcher.stop();
 
     // Font
     // Resolve generic font families via fontconfig (matches Firefox/Chrome behavior)
@@ -1693,18 +1715,14 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        // Incremental image loading: load multiple images per event loop tick
+        // Incremental image loading: hand fetches to the background pool
+        // (non-blocking), then integrate any completed results — decode,
+        // cache insert, relayout and load/error events all stay on this
+        // thread, so no DOM/JS state is ever touched off-thread.
         {
             const active_img_pg = activePageState(&tab_mgr, &page_states);
             if (active_img_pg) |pg| {
-                // Load up to 10 images per tick, but cap total time at 3 seconds
-                // to keep the event loop responsive
-                var batch: usize = 0;
-                const tick_start = env.nowMs();
-                const max_tick_ms: i64 = 3000; // max 3 seconds per tick for image loading
-                while (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 300 and batch < 10) : (batch += 1) {
-                    // Check per-tick time budget
-                    if (batch > 0 and env.nowMs() - tick_start > max_tick_ms) break;
+                while (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 300) {
                     const entry = pg.pending_images.items[pg.pending_images_idx];
                     pg.pending_images_idx += 1;
 
@@ -1740,81 +1758,115 @@ pub fn main(init: std.process.Init) !void {
                                 }
                             }
                         }
-                    } else if (!isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
+                    } else if (image_fetcher.isActive() and !isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
                         if (pg.base_url) |base| {
                             if (resolveUrl(allocator, base, img_url)) |resolved| {
                                 defer allocator.free(resolved);
-                                {
-                                    if (loader.loadBytesWithTimeout(resolved, 3)) |resp_val| {
-                                        var resp = resp_val;
-                                        defer resp.deinit();
-                                        if (resp.status_code == 200 and resp.body.len > 0 and resp.body.len <= 2 * 1024 * 1024) {
-                                            if (decodeImage(resp.body)) |img| {
-                                                const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
-                                                if (px_count <= 4 * 1024 * 1024) {
-                                                    if (pg.image_cache) |*ic| {
-                                                        ic.put(img_url, img) catch {
-                                                            var mimg = img;
-                                                            mimg.deinit();
-                                                        };
-                                                        pg.pending_images_loaded += 1;
-                                                        // Update intrinsic dimensions from actual image
-                                                        if (pg.root_box) |rb| {
-                                                            var updated = false;
-                                                            updateImageDimensions(rb, ic, &updated);
-                                                            if (updated) {
-                                                                // Re-layout to apply new aspect ratios
-                                                                const cw: f32 = @floatFromInt(surface.width);
-                                                                block_layout.layoutBlockVp(rb, cw, 0, &fonts, @floatFromInt(surface.height));
-                                                                pg.total_height = painter_mod.contentHeight(rb);
-                                                                pg.total_width = painter_mod.contentWidth(rb);
-                                                            }
-                                                        }
-                                                        needs_repaint = true;
-                                                        // Fire 'load' event on the img element
-                                                        if (entry.dom_node) |node| {
-                                                            if (pg.js_rt) |*jrt| {
-                                                                _ = events.dispatchEvent(jrt.ctx, node, "load");
-                                                                jrt.executePending();
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    var mimg = img;
-                                                    mimg.deinit();
-                                                }
-                                            } else |_| {
-                                                // Image decode failed — fire 'error' event
-                                                if (entry.dom_node) |node| {
-                                                    if (pg.js_rt) |*jrt| {
-                                                        _ = events.dispatchEvent(jrt.ctx, node, "error");
-                                                        jrt.executePending();
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else |_| {
-                                        // HTTP fetch failed — retry once if not already a retry
-                                        if (!entry.is_retry) {
-                                            pg.pending_images.append(allocator, .{
-                                                .url = img_url,
-                                                .intrinsic_width = entry.intrinsic_width,
-                                                .intrinsic_height = entry.intrinsic_height,
-                                                .is_retry = true,
-                                                .dom_node = entry.dom_node,
-                                            }) catch {};
-                                        } else {
-                                            // Final retry failed — fire 'error' event
-                                            if (entry.dom_node) |node| {
-                                                if (pg.js_rt) |*jrt| {
-                                                    _ = events.dispatchEvent(jrt.ctx, node, "error");
-                                                    jrt.executePending();
-                                                }
-                                            }
-                                        }
-                                    }
+                                // Dedup against fetches already in flight (the
+                                // same src can be re-collected after a restyle
+                                // before its first fetch completes).
+                                if (pg.submitted_images == null) {
+                                    pg.submitted_images = std.StringHashMap(void).init(allocator);
                                 }
+                                if (pg.submitted_images.?.contains(img_url)) continue;
+                                if (allocator.dupe(u8, img_url)) |key_copy| {
+                                    pg.submitted_images.?.put(key_copy, {}) catch allocator.free(key_copy);
+                                } else |_| {}
+                                image_fetcher.submit(
+                                    img_url,
+                                    resolved,
+                                    entry.intrinsic_width,
+                                    entry.intrinsic_height,
+                                    false,
+                                    if (entry.dom_node) |n| @as(*anyopaque, @ptrCast(n)) else null,
+                                    pg.fetch_gen,
+                                ) catch {};
                             } else |_| {}
+                        }
+                    }
+                }
+            }
+
+            // Drain completed fetches for ALL live pages (matched by
+            // generation); results that outlived their page are dropped.
+            while (image_fetcher.popResult()) |res_val| {
+                var res = res_val;
+                defer res.deinit();
+                var target: ?*PageState = null;
+                for (page_states.items) |*ps| {
+                    if (ps.fetch_gen != 0 and ps.fetch_gen == res.job.generation) {
+                        target = ps;
+                        break;
+                    }
+                }
+                const tpg = target orelse continue;
+                const img_url = res.job.url;
+                if (tpg.image_cache) |*ic| {
+                    if (ic.get(img_url) != null) continue;
+                }
+                const node_opt: ?*lxb.lxb_dom_node_t = if (res.job.dom_node) |n| @ptrCast(@alignCast(n)) else null;
+                const body = res.body orelse {
+                    // HTTP fetch failed — retry once if not already a retry
+                    if (!res.job.is_retry) {
+                        image_fetcher.submit(
+                            img_url,
+                            res.job.resolved,
+                            res.job.intrinsic_width,
+                            res.job.intrinsic_height,
+                            true,
+                            res.job.dom_node,
+                            res.job.generation,
+                        ) catch {};
+                    } else if (node_opt) |node| {
+                        // Final retry failed — fire 'error' event
+                        if (tpg.js_rt) |*jrt| {
+                            _ = events.dispatchEvent(jrt.ctx, node, "error");
+                            jrt.executePending();
+                        }
+                    }
+                    continue;
+                };
+                if (decodeImage(body)) |img| {
+                    const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+                    if (px_count <= 4 * 1024 * 1024) {
+                        if (tpg.image_cache) |*ic| {
+                            ic.put(img_url, img) catch {
+                                var mimg = img;
+                                mimg.deinit();
+                                continue;
+                            };
+                            tpg.pending_images_loaded += 1;
+                            // Update intrinsic dimensions from actual image
+                            if (tpg.root_box) |rb| {
+                                var updated = false;
+                                updateImageDimensions(rb, ic, &updated);
+                                if (updated) {
+                                    // Re-layout to apply new aspect ratios
+                                    const cw: f32 = @floatFromInt(surface.width);
+                                    block_layout.layoutBlockVp(rb, cw, 0, &fonts, @floatFromInt(surface.height));
+                                    tpg.total_height = painter_mod.contentHeight(rb);
+                                    tpg.total_width = painter_mod.contentWidth(rb);
+                                }
+                            }
+                            needs_repaint = true;
+                            // Fire 'load' event on the img element
+                            if (node_opt) |node| {
+                                if (tpg.js_rt) |*jrt| {
+                                    _ = events.dispatchEvent(jrt.ctx, node, "load");
+                                    jrt.executePending();
+                                }
+                            }
+                        }
+                    } else {
+                        var mimg = img;
+                        mimg.deinit();
+                    }
+                } else |_| {
+                    // Image decode failed — fire 'error' event
+                    if (node_opt) |node| {
+                        if (tpg.js_rt) |*jrt| {
+                            _ = events.dispatchEvent(jrt.ctx, node, "error");
+                            jrt.executePending();
                         }
                     }
                 }
@@ -1823,7 +1875,7 @@ pub fn main(init: std.process.Init) !void {
 
         // Use shorter poll timeout when repaint pending or WebDriver active;
         // timers use 4ms (avoid busy-spin while staying responsive)
-        const poll_timeout: i32 = if (needs_repaint or wd_server != null) 0 else if (web_api.hasTimers()) 4 else 50;
+        const poll_timeout: i32 = if (needs_repaint or wd_server != null) 0 else if (web_api.hasTimers() or image_fetcher.busy()) 4 else 50;
         if (surface.pollEvent(poll_timeout)) |event| {
             switch (event.type) {
                 nsfb_c.NSFB_EVENT_CONTROL => {
