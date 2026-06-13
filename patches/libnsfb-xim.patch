@@ -23,10 +23,10 @@ index 674df65..c042195 100644
  #endif
  
 diff --git a/src/surface/x.c b/src/surface/x.c
-index dfbae56..fb033b9 100644
+index dfbae56..4dd4ce9 100644
 --- a/src/surface/x.c
 +++ b/src/surface/x.c
-@@ -79,6 +79,31 @@ typedef struct xstate_s {
+@@ -79,6 +79,61 @@ typedef struct xstate_s {
      xcb_shm_seg_t segment; /* The handle to the image shared memory */
  } xstate_t;
  
@@ -48,17 +48,96 @@ index dfbae56..fb033b9 100644
 +    return (unsigned long)xstate->window;
 +}
 +
++/* X cursor-font glyphs for the suzume cursor shapes
++ * (0=arrow, 1=pointer/hand, 2=text/I-beam). */
++static xcb_cursor_t
++x_create_font_cursor(xcb_connection_t *conn, uint16_t glyph)
++{
++    static const char font_name[] = "cursor";
++    xcb_font_t font = xcb_generate_id(conn);
++    xcb_cursor_t cur = xcb_generate_id(conn);
++    xcb_open_font(conn, font, sizeof(font_name) - 1, font_name);
++    /* fg black, bg white; mask glyph is glyph+1 by cursor-font convention */
++    xcb_create_glyph_cursor(conn, cur, font, font, glyph, glyph + 1,
++                            0, 0, 0, 0xffff, 0xffff, 0xffff);
++    xcb_close_font(conn, font);
++    return cur;
++}
++
 +void nsfb_x_set_cursor_shape(nsfb_t *nsfb, int shape)
 +{
-+    (void)nsfb;
-+    (void)shape;
-+    /* TODO: Implement real cursor shapes (arrow/pointer/text) if needed. */
++    /* XC_left_ptr, XC_hand2, XC_xterm */
++    static const uint16_t glyphs[3] = { 68, 60, 152 };
++    static xcb_cursor_t cache[3] = { XCB_NONE, XCB_NONE, XCB_NONE };
++    xstate_t *xstate;
++    uint32_t value;
++
++    if (nsfb == NULL || shape < 0 || shape > 2)
++        return;
++    xstate = nsfb->surface_priv;
++    if (xstate == NULL)
++        return;
++    if (cache[shape] == XCB_NONE)
++        cache[shape] = x_create_font_cursor(xstate->connection, glyphs[shape]);
++    value = cache[shape];
++    xcb_change_window_attributes(xstate->connection, xstate->window,
++                                 XCB_CW_CURSOR, &value);
++    xcb_flush(xstate->connection);
 +}
 +
  /* X keyboard codepage to nsfb mapping */
  static enum nsfb_key_code_e XCSKeyboardMap[256] = {
      NSFB_KEY_UNKNOWN, /* */
-@@ -1041,12 +1066,16 @@ static bool x_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
+@@ -733,36 +788,6 @@ create_image(xcb_connection_t *c, int width, int height, int bpp)
+                             image_data);
+ }
+ 
+-/**
+- * Create a blank cursor.
+- * The empty pixmaps is leaked.
+- *
+- * @param conn xcb connection
+- * @param scr xcb XCB screen
+- */
+-static xcb_cursor_t
+-create_blank_cursor(xcb_connection_t *conn, const xcb_screen_t *scr)
+-{
+-    xcb_cursor_t cur = xcb_generate_id(conn);
+-    xcb_pixmap_t pix = xcb_generate_id(conn);
+-    xcb_void_cookie_t ck;
+-    xcb_generic_error_t *err;
+-
+-    ck = xcb_create_pixmap_checked (conn, 1, pix, scr->root, 1, 1);
+-    err = xcb_request_check (conn, ck);
+-    if (err) {
+-        fprintf (stderr, "Cannot create pixmap: %d", err->error_code);
+-        free (err);
+-    }
+-    ck = xcb_create_cursor_checked (conn, cur, pix, pix, 0, 0, 0, 0, 0, 0, 0, 0);
+-    err = xcb_request_check (conn, ck);
+-    if (err) {
+-        fprintf (stderr, "Cannot create cursor: %d", err->error_code);
+-        free (err);
+-    }
+-    return cur;
+-}
+-
+ 
+ static int x_initialise(nsfb_t *nsfb)
+ {
+@@ -819,7 +844,10 @@ static int x_initialise(nsfb_t *nsfb)
+     nsfb->linelen = xstate->image->stride;
+ 
+     /* get blank cursor */
+-    blank_cursor = create_blank_cursor(xstate->connection, xstate->screen);
++    /* default to the standard arrow rather than a blank cursor: suzume
++     * never plots a software cursor, so a blank one means no cursor at
++     * all over the window (XC_left_ptr = 68). */
++    blank_cursor = x_create_font_cursor(xstate->connection, 68);
+ 
+     /* get keysymbol maps */
+     xstate->keysymbols = xcb_key_symbols_alloc(xstate->connection);
+@@ -1041,12 +1069,16 @@ static bool x_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
  
      case XCB_KEY_PRESS:
          ekp = (xcb_key_press_event_t *)e;
