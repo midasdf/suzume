@@ -2,7 +2,7 @@
 
 TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
 
-## 前回セッション成果（2026-06-13、Waves 174-183）
+## 前回セッション成果（2026-06-13、Waves 174-184）
 
 URL エリア集中改善: **130/274 → 5180/7244 (71.5%)** subtests
 (分母はラッパー修正でデータ駆動テストが解放されて 274→7244 に拡大)
@@ -19,6 +19,7 @@ URL エリア集中改善: **130/274 → 5180/7244 (71.5%)** subtests
 | 181 | for-of/for-in 分割代入 (`for (const [k,v] of …)`) |
 | 182 | **StringPool.get O(1)** (線形スキャン→index、a-element 300s+→18s) |
 | 183 | HTMLHyperlinkElementUtils (`<a>`/`<area>` 分解アクセサ) + ネイティブ baseURI/URL reflection |
+| 184 | マウスカーソル可視化 (libnsfb がブランクカーソル設定→Xカーソルフォント実装、hover 形状切替も有効化) |
 
 ### 個別ファイルスコア (url エリア)
 - url-setters: **279/279**、url-setters-stripping: **260/260**
@@ -47,6 +48,38 @@ DISPLAY=:98 timeout 120 ./zig-out/bin/suzume --wpt-mode "http://127.0.0.1:9876/u
 - ⚠️ run_wpt.sh で一度ラッパー生成してから parallel を使う（rm url/*.any.html で再生成可）
 
 ## 次セッション優先タスク
+
+### 0. パフォーマンス改善(ユーザー体感「めちゃめちゃ遅い」、最優先)
+判明済みの手がかり(2026-06-13 セッションのプロファイルから):
+- **Debug ビルド問題**: `zig build` デフォルトは Debug。日常利用は
+  `zig build -Doptimize=ReleaseSafe` を使う(ReleaseFast は @intCast UB が
+  怖いので Safe 推奨 — BPM で ReleaseSmall UB を踏んだ前例あり)。
+  インストールスクリプト/ドキュメントに常用ビルドフラグを明記すべき
+- **同期 HTTP フェッチがメインループをブロック**: 画像・外部スクリプトを
+  メインスレッドで 1 件ずつ同期取得(timeout 15s)。Google などリソースが
+  多いページで UI が固まる。pending_images の非同期化/並列化が本丸
+- **upvalue 機構がホット**: gdb サンプリングで closeUpvaluesAbove /
+  getOrCreateUpvalue / getClosureUpvalues が頻出。open_upvalues が線形リスト
+  なら sorted 構造化や frame-local 化を検討
+- **proxyGet 連打**: live HTMLCollection (getElementsByTagName 等) の
+  Proxy trap が JS 呼び出しを伴う。ネイティブ化 or キャッシュ
+  (baseURI で同手法により 300s→18s の実績、Wave 183)
+- **URL reflection のパース毎回実行**: a.href 等のゲッターが毎アクセスで
+  base+href をフルパース。(raw, baseURI) キーのキャッシュで削減可
+- StringPool.get は O(1) 化済み (Wave 182) — 同種の「線形スキャン系」が
+  他にもないか vm.zig / object.zig を疑え(プロパティ探索、descriptors 等)
+
+### 0.5 Google レンダリング崩れ(ユーザー報告)
+- 症状: google.com でヘッダーリンク2個のみ描画。ロゴ・検索ボックス不可視
+- content size が 4096×4096(クランプ値)に張り付く → 何かが巨大レイアウト
+  → 中身が画面外 or 不可視の疑い。JS エラー/panic はログなし
+- ヘッドレス再現: `DISPLAY=:98 ./zig-out/bin/suzume "https://www.google.com"`
+  + `import -window root /tmp/g.png` でスクショ確認
+- 調査ツールにしようとした **--webdriver が zig 0.16 で死んでる**
+  (listen は成功するが accept がコマンドを処理しない、curl がタイムアウト。
+  src/net/webdriver.zig の env.ioOrPanic() / スレッド起動まわりを疑う)。
+  これを直すとレイアウトデバッグが圧倒的に楽になるので先に直す価値あり
+
 
 ### 1. IdnaTestV2 (残り ~1200 subtests)
 - `src/url/idna.zig` / `tables.zig` の UTS#46 конформance
