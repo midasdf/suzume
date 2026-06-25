@@ -6232,7 +6232,21 @@ pub const KotoriRuntime = struct {
         \\    globalThis.screen={width:1280,height:800,availWidth:1280,availHeight:800,colorDepth:24,pixelDepth:24,orientation:{type:'landscape-primary',angle:0}};
         \\  }
         \\  if(typeof matchMedia==='undefined'){
-        \\    globalThis.matchMedia=function(q){return{matches:false,media:q,onchange:null,addListener:function(){},removeListener:function(){},addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return true;}};};
+        \\    globalThis.matchMedia=function(q){
+        \\      var m=false;
+        \\      var qs=String(q).toLowerCase();
+        \\      // Evaluate common media features with desktop defaults
+        \\      if(qs.indexOf('prefers-color-scheme')>=0){m=qs.indexOf('light')>=0;}
+        \\      else if(qs.indexOf('prefers-reduced-motion')>=0){m=qs.indexOf('reduce')<0;}
+        \\      else if(qs.indexOf('min-width')>=0||qs.indexOf('max-width')>=0||qs.indexOf('width')>=0){
+        \\        // Width queries: evaluate against viewport width (1280)
+        \\        var wm=qs.match(/min-width\s*:\s*(\d+)/);if(wm&&1280>=parseInt(wm[1]))m=true;
+        \\        wm=qs.match(/max-width\s*:\s*(\d+)/);if(wm&&1280<=parseInt(wm[1]))m=true;
+        \\        if(qs.indexOf('min-width')<0&&qs.indexOf('max-width')<0)m=true;
+        \\      }else if(qs.indexOf('screen')>=0&&qs.indexOf('print')<0){m=true;}
+        \\      else if(qs.indexOf('all')>=0){m=true;}
+        \\      return{matches:m,media:q,onchange:null,addListener:function(){},removeListener:function(){},addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return true;}};
+        \\    };
         \\  }
         \\  if(typeof requestAnimationFrame==='undefined'){
         \\    globalThis.requestAnimationFrame=function(cb){return setTimeout(function(){cb(Date.now());},16);};
@@ -6291,13 +6305,53 @@ pub const KotoriRuntime = struct {
     /// these constructors, `.observe()` throws TypeError on undefined.
     const observer_polyfill_js =
         \\(function(){
+        \\  // IntersectionObserver that fires isIntersecting=true on observe().
+        \\  // Lazy-loaded <img> elements need this callback to fire so the
+        \\  // site swaps data-src → src and the image actually loads.
+        \\  function IntersectionObserverShim(cb){
+        \\    this._cb=cb;this._targets=[];
+        \\    // Fire the callback asynchronously so observe() returns first
+        \\    this._asyncFire=function(){
+        \\      if(!this._cb)return;
+        \\      var entries=this._targets.map(function(t){
+        \\        return {target:t,isIntersecting:true,intersectionRatio:1,boundingClientRect:{},intersectionRect:{},rootBounds:null,time:Date.now()};
+        \\      });
+        \\      try{this._cb(entries,this);}catch(e){}
+        \\    };
+        \\  }
+        \\  IntersectionObserverShim.prototype.observe=function(t){
+        \\    this._targets.push(t);
+        \\    var self=this;
+        \\    setTimeout(function(){self._asyncFire();},0);
+        \\  };
+        \\  IntersectionObserverShim.prototype.unobserve=function(t){
+        \\    var i=this._targets.indexOf(t);
+        \\    if(i>=0)this._targets.splice(i,1);
+        \\  };
+        \\  IntersectionObserverShim.prototype.disconnect=function(){this._targets=[];};
+        \\  IntersectionObserverShim.prototype.takeRecords=function(){return [];};
+        \\  // ResizeObserver fires once on observe with contentRect
+        \\  function ResizeObserverShim(cb){this._cb=cb;this._targets=[];}
+        \\  ResizeObserverShim.prototype.observe=function(t){
+        \\    this._targets.push(t);
+        \\    var self=this;
+        \\    setTimeout(function(){
+        \\      if(!self._cb)return;
+        \\      var r=t.getBoundingClientRect?t.getBoundingClientRect():{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0};
+        \\      try{self._cb([{target:t,contentRect:r,borderBoxSize:{inlineSize:r.width,blockSize:r.height},contentBoxSize:{inlineSize:r.width,blockSize:r.height}}],self);}catch(e){}
+        \\    },0);
+        \\  };
+        \\  ResizeObserverShim.prototype.unobserve=function(t){};
+        \\  ResizeObserverShim.prototype.disconnect=function(){this._targets=[];};
+        \\  ResizeObserverShim.prototype.takeRecords=function(){return [];};
+        \\  // PerformanceObserver — never fires (no performance entries in kotori)
         \\  function NoopObserver(cb){this._cb=cb;this._targets=[];}
-        \\  NoopObserver.prototype.observe=function(t){this._targets.push(t);};
+        \\  NoopObserver.prototype.observe=function(t){};
         \\  NoopObserver.prototype.unobserve=function(t){};
-        \\  NoopObserver.prototype.disconnect=function(){this._targets=[];};
+        \\  NoopObserver.prototype.disconnect=function(){};
         \\  NoopObserver.prototype.takeRecords=function(){return [];};
-        \\  if(typeof IntersectionObserver==='undefined')globalThis.IntersectionObserver=NoopObserver;
-        \\  if(typeof ResizeObserver==='undefined')globalThis.ResizeObserver=NoopObserver;
+        \\  if(typeof IntersectionObserver==='undefined')globalThis.IntersectionObserver=IntersectionObserverShim;
+        \\  if(typeof ResizeObserver==='undefined')globalThis.ResizeObserver=ResizeObserverShim;
         \\  if(typeof PerformanceObserver==='undefined'){globalThis.PerformanceObserver=NoopObserver;globalThis.PerformanceObserver.supportedEntryTypes=[];}
         \\  if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=NoopObserver;}
         \\  if(typeof history!=='undefined'){

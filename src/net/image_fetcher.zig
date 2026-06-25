@@ -180,12 +180,15 @@ pub const ImageFetcher = struct {
             } else |_| {}
             self.mutex.lock();
             defer self.mutex.unlock();
-            _ = self.in_flight.fetchSub(1, .acq_rel);
             self.results.append(alloc, .{ .job = job, .body = body }) catch {
                 alloc.free(job.url);
                 alloc.free(job.resolved);
                 if (body) |b| alloc.free(b);
             };
+            // Decrement in_flight AFTER result is pushed so busy() never
+            // returns false while a job is still in flight (the result
+            // must be visible in results.items before in_flight drops to 0).
+            _ = self.in_flight.fetchSub(1, .acq_rel);
         }
     }
 };
