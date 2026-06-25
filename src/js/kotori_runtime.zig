@@ -240,6 +240,16 @@ pub const KotoriRuntime = struct {
         // single page session this is correct behavior).
         _ = self.eval(storage_polyfill_js);
 
+        // IntersectionObserver / ResizeObserver / PerformanceObserver
+        // polyfills. Many sites (FreeBSD, GitHub, …) create observers at
+        // init for lazy-loading / analytics. Without these constructors,
+        // `new IntersectionObserver(cb)` returns undefined and the
+        // subsequent `.observe(target)` throws "Cannot read properties of
+        // undefined (reading 'observe')". These are no-op stubs — they
+        // accept callbacks but never fire them (correct for a browser
+        // that doesn't do viewport intersection tracking).
+        _ = self.eval(observer_polyfill_js);
+
         // HTML §4.6.2 — <a>/<area> URL decomposition accessors backed by
         // the native URL parser (must run after url_polyfill_js).
         _ = self.eval(hyperlink_utils_polyfill_js);
@@ -6273,6 +6283,32 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  if(typeof localStorage==='undefined')globalThis.localStorage=makeStorage();
         \\  if(typeof sessionStorage==='undefined')globalThis.sessionStorage=makeStorage();
+        \\})();
+    ;
+
+    /// IntersectionObserver / ResizeObserver / PerformanceObserver no-op
+    /// stubs. Sites create observers for lazy-loading / analytics; without
+    /// these constructors, `.observe()` throws TypeError on undefined.
+    const observer_polyfill_js =
+        \\(function(){
+        \\  function NoopObserver(cb){this._cb=cb;this._targets=[];}
+        \\  NoopObserver.prototype.observe=function(t){this._targets.push(t);};
+        \\  NoopObserver.prototype.unobserve=function(t){};
+        \\  NoopObserver.prototype.disconnect=function(){this._targets=[];};
+        \\  NoopObserver.prototype.takeRecords=function(){return [];};
+        \\  if(typeof IntersectionObserver==='undefined')globalThis.IntersectionObserver=NoopObserver;
+        \\  if(typeof ResizeObserver==='undefined')globalThis.ResizeObserver=NoopObserver;
+        \\  if(typeof PerformanceObserver==='undefined'){globalThis.PerformanceObserver=NoopObserver;globalThis.PerformanceObserver.supportedEntryTypes=[];}
+        \\  if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=NoopObserver;}
+        \\  if(typeof history!=='undefined'){
+        \\    if(typeof history.pushState!=='function')history.pushState=function(){};
+        \\    if(typeof history.replaceState!=='function')history.replaceState=function(){};
+        \\    if(typeof history.back!=='function')history.back=function(){};
+        \\    if(typeof history.forward!=='function')history.forward=function(){};
+        \\    if(typeof history.go!=='function')history.go=function(){};
+        \\  }else{
+        \\    globalThis.history={pushState:function(){},replaceState:function(){},back:function(){},forward:function(){},go:function(){},length:1,scrollRestoration:'auto'};
+        \\  }
         \\})();
     ;
     /// srcElement alias for target (DOM §2.6.2).
