@@ -6233,18 +6233,60 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  if(typeof matchMedia==='undefined'){
         \\    globalThis.matchMedia=function(q){
+        \\      var qs=String(q).toLowerCase().replace(/\s+/g,' ');
+        \\      // Parse comma-separated media query list — matches if ANY query matches
+        \\      var queries=qs.split(',');
         \\      var m=false;
-        \\      var qs=String(q).toLowerCase();
-        \\      // Evaluate common media features with desktop defaults
-        \\      if(qs.indexOf('prefers-color-scheme')>=0){m=qs.indexOf('light')>=0;}
-        \\      else if(qs.indexOf('prefers-reduced-motion')>=0){m=qs.indexOf('reduce')<0;}
-        \\      else if(qs.indexOf('min-width')>=0||qs.indexOf('max-width')>=0||qs.indexOf('width')>=0){
-        \\        // Width queries: evaluate against viewport width (1280)
-        \\        var wm=qs.match(/min-width\s*:\s*(\d+)/);if(wm&&1280>=parseInt(wm[1]))m=true;
-        \\        wm=qs.match(/max-width\s*:\s*(\d+)/);if(wm&&1280<=parseInt(wm[1]))m=true;
-        \\        if(qs.indexOf('min-width')<0&&qs.indexOf('max-width')<0)m=true;
-        \\      }else if(qs.indexOf('screen')>=0&&qs.indexOf('print')<0){m=true;}
-        \\      else if(qs.indexOf('all')>=0){m=true;}
+        \\      for(var i=0;i<queries.length;i++){
+        \\        if(evalMQ(queries[i].trim())){m=true;break;}
+        \\      }
+        \\      function evalMQ(mq){
+        \\        if(!mq||mq==='all'||mq==='screen')return true;
+        \\        if(mq==='print'||mq==='only print')return false;
+        \\        var neg=false;
+        \\        if(mq.indexOf('not ')===0){neg=true;mq=mq.slice(4).trim();}
+        \\        if(mq.indexOf('only ')===0){mq=mq.slice(5).trim();}
+        \\        // Strip leading media type
+        \\        if(mq.indexOf('screen and ')===0)mq=mq.slice(11);
+        \\        else if(mq.indexOf('all and ')===0)mq=mq.slice(8);
+        \\        else if(mq==='screen'||mq==='all')return !neg;
+        \\        // Split on ' and ' to get individual feature conditions
+        \\        var conds=mq.split(' and ');
+        \\        var allMatch=true;
+        \\        for(var j=0;j<conds.length;j++){
+        \\          var c=conds[j].trim();
+        \\          if(!evalFeature(c)){allMatch=false;break;}
+        \\        }
+        \\        return neg?!allMatch:allMatch;
+        \\      }
+        \\      function evalFeature(f){
+        \\        f=f.replace(/^\(|\)$/g,'').trim();
+        \\        if(!f)return true;
+        \\        // prefers-color-scheme: light (default)
+        \\        if(f.indexOf('prefers-color-scheme')>=0)return f.indexOf('light')>=0;
+        \\        // prefers-reduced-motion: no-preference (default)
+        \\        if(f.indexOf('prefers-reduced-motion')>=0)return f.indexOf('reduce')<0;
+        \\        // prefers-contrast: no-preference (default)
+        \\        if(f.indexOf('prefers-contrast')>=0)return f.indexOf('more')<0&&f.indexOf('less')<0;
+        \\        // pointer: fine (desktop default)
+        \\        if(f.indexOf('pointer')>=0&&f.indexOf('any-pointer')<0)return f.indexOf('fine')>=0;
+        \\        if(f.indexOf('any-pointer')>=0)return f.indexOf('fine')>=0;
+        \\        // hover: hover (desktop default)
+        \\        if(f.indexOf('hover')>=0&&f.indexOf('any-hover')<0)return f.indexOf('hover')>=0;
+        \\        if(f.indexOf('any-hover')>=0)return f.indexOf('hover')>=0;
+        \\        // orientation: landscape (default for wide screens)
+        \\        if(f.indexOf('orientation')>=0)return f.indexOf('landscape')>=0;
+        \\        // min-width / max-width / width
+        \\        var wm=f.match(/min-width\s*:\s*(\d+)/);if(wm&&1280>=parseInt(wm[1]))return true;
+        \\        wm=f.match(/max-width\s*:\s*(\d+)/);if(wm&&1280<=parseInt(wm[1]))return true;
+        \\        wm=f.match(/min-height\s*:\s*(\d+)/);if(wm&&800>=parseInt(wm[1]))return true;
+        \\        wm=f.match(/max-height\s*:\s*(\d+)/);if(wm&&800<=parseInt(wm[1]))return true;
+        \\        if(f.match(/^\d+px$/))return true; // bare width
+        \\        // color / resolution — always true (we have color and resolution)
+        \\        if(f.indexOf('color')>=0||f.indexOf('resolution')>=0)return true;
+        \\        // Unknown feature — default true (avoid breaking sites)
+        \\        return true;
+        \\      }
         \\      return{matches:m,media:q,onchange:null,addListener:function(){},removeListener:function(){},addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return true;}};
         \\    };
         \\  }
