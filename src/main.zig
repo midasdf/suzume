@@ -2293,7 +2293,7 @@ pub fn main(init: std.process.Init) !void {
             // If no work happened this iteration but image fetches are still
             // in flight, wait briefly for them to land before giving up.
             if (!did_work and image_fetcher.busy()) {
-                env.sleepNs(20 * std.time.ns_per_ms);
+                env.sleepNs(50 * std.time.ns_per_ms);
                 continue;
             }
             if (!did_work) break;

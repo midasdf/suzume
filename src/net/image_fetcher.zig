@@ -57,6 +57,11 @@ pub const ImageFetcher = struct {
     threads: [num_workers]?std.Thread = @splat(null),
     clients: [num_workers]?http.HttpClient = @splat(null),
     shutdown_flag: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Number of jobs dequeued by workers but not yet returned as results.
+    /// Without this, `busy()` returns false during the HTTP fetch window
+    /// (job is out of the queue but result hasn't been pushed yet), causing
+    /// the screenshot loop to break before images land.
+    in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Spawn the worker pool. Curl handles are created here (main thread)
     /// so the global-init refcount is never touched concurrently. Workers
@@ -123,7 +128,7 @@ pub const ImageFetcher = struct {
     pub fn busy(self: *ImageFetcher) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.jobs.items.len > 0 or self.results.items.len > 0;
+        return self.jobs.items.len > 0 or self.results.items.len > 0 or self.in_flight.load(.acquire) > 0;
     }
 
     pub fn stop(self: *ImageFetcher) void {
@@ -154,6 +159,7 @@ pub const ImageFetcher = struct {
                 self.mutex.lock();
                 defer self.mutex.unlock();
                 if (self.jobs.items.len == 0) break :blk null;
+                _ = self.in_flight.fetchAdd(1, .acq_rel);
                 break :blk self.jobs.orderedRemove(0);
             };
             const job = job_opt orelse {
@@ -174,6 +180,7 @@ pub const ImageFetcher = struct {
             } else |_| {}
             self.mutex.lock();
             defer self.mutex.unlock();
+            _ = self.in_flight.fetchSub(1, .acq_rel);
             self.results.append(alloc, .{ .job = job, .body = body }) catch {
                 alloc.free(job.url);
                 alloc.free(job.resolved);
