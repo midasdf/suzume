@@ -475,6 +475,13 @@ pub const Compiler = struct {
             .identifier => |name_id| try self.compileIdentifierLoad(name_id),
 
             .assignment => |a| try self.compileAssignment(a.lhs, a.rhs, a.op),
+            .sequence => |list| {
+                const items = self.parser.ast.getNodeList(list);
+                for (items, 0..) |item, i| {
+                    try self.compileNode(item);
+                    if (i + 1 < items.len) try self.emitOp(.pop);
+                }
+            },
 
             // ── Control flow ─────────────────────────────────────────
             .if_stmt => |s| {
@@ -1016,6 +1023,9 @@ pub const Compiler = struct {
     }
 
     fn compileIdentifierLoad(self: *Compiler, name_id: StringId) CompileError!void {
+        if (self.parser.pool.get(name_id)) |name| {
+            if (std.mem.eql(u8, name, "arguments")) self.current.bc.has_arguments = true;
+        }
         // Try local first
         if (self.resolveLocal(&self.current, name_id)) |slot| {
             try self.emitOpU16(.load_local, slot);

@@ -55,6 +55,17 @@ fn attrValue(attr: *anyopaque) []const u8 {
     return &[_]u8{};
 }
 
+fn indexOfAsciiIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (needle.len > haystack.len) return null;
+
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return i;
+    }
+    return null;
+}
+
 // ── Namespace prefix validation (CSS Selectors §3) ─────────────────
 // In HTML, no @namespace declarations exist, so any `prefix|element`
 // selector (other than *|element) must throw SyntaxError per spec.
@@ -240,6 +251,44 @@ fn decodeCssEscapes(input: []const u8, buf: []u8) []const u8 {
         }
     }
     return buf[0..out];
+}
+
+const TempSlice = struct {
+    value: []const u8,
+    storage: ?[]u8 = null,
+
+    fn deinit(self: TempSlice, allocator: std.mem.Allocator) void {
+        if (self.storage) |storage| allocator.free(storage);
+    }
+};
+
+fn decodeCssEscapesDynamic(allocator: std.mem.Allocator, input: []const u8, stack_buf: []u8) !TempSlice {
+    if (std.mem.indexOfScalar(u8, input, '\\') == null) return .{ .value = input };
+    if (input.len <= stack_buf.len) return .{ .value = decodeCssEscapes(input, stack_buf) };
+
+    const storage = try allocator.alloc(u8, input.len + 3);
+    return .{
+        .value = decodeCssEscapes(input, storage),
+        .storage = storage,
+    };
+}
+
+fn lowerAsciiDynamic(allocator: std.mem.Allocator, input: []const u8, stack_buf: []u8) !TempSlice {
+    for (input) |ch| {
+        if (ch >= 'A' and ch <= 'Z') break;
+    } else return .{ .value = input };
+
+    const out = if (input.len <= stack_buf.len)
+        stack_buf[0..input.len]
+    else
+        try allocator.alloc(u8, input.len);
+    errdefer if (out.ptr != stack_buf.ptr) allocator.free(out);
+
+    for (input, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return .{
+        .value = out,
+        .storage = if (out.ptr == stack_buf.ptr) null else out,
+    };
 }
 
 // ── Forgiving selector match (skips invalid args like :has() inside :is()/:where()) ──
@@ -894,7 +943,9 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
         if (val == null) return false;
         var esc_buf: [512]u8 = undefined;
-        const decoded = decodeCssEscapes(sel[1..], &esc_buf);
+        const decoded_holder = decodeCssEscapesDynamic(std.heap.c_allocator, sel[1..], &esc_buf) catch return false;
+        defer decoded_holder.deinit(std.heap.c_allocator);
+        const decoded = decoded_holder.value;
         if (val_len == decoded.len) {
             return std.mem.eql(u8, val.?[0..val_len], decoded);
         }
@@ -926,7 +977,9 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             }
             if (end == 0) return false;
             var esc_buf: [512]u8 = undefined;
-            const decoded = decodeCssEscapes(rest[0..end], &esc_buf);
+            const decoded_holder = decodeCssEscapesDynamic(std.heap.c_allocator, rest[0..end], &esc_buf) catch return false;
+            defer decoded_holder.deinit(std.heap.c_allocator);
+            const decoded = decoded_holder.value;
             if (!api.classContains(class_val, decoded)) return false;
             rest = rest[end..];
             if (rest.len == 0) break;
@@ -1017,7 +1070,9 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
                 const next_dot = findUnescapedDot(rest) orelse rest.len;
                 if (next_dot == 0) return false;
                 var esc_buf_c: [512]u8 = undefined;
-                const decoded_c = decodeCssEscapes(rest[0..next_dot], &esc_buf_c);
+                const decoded_c_holder = decodeCssEscapesDynamic(std.heap.c_allocator, rest[0..next_dot], &esc_buf_c) catch return false;
+                defer decoded_c_holder.deinit(std.heap.c_allocator);
+                const decoded_c = decoded_c_holder.value;
                 if (!api.classContains(class_val, decoded_c)) return false;
                 if (next_dot >= rest.len) break;
                 rest = rest[next_dot + 1 ..];
@@ -1032,7 +1087,13 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             if (name_ptr == null or !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], sel[0..hash])) return false;
             var val_len: usize = 0;
             const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
-            if (val != null and val_len == sel.len - hash - 1) return std.mem.eql(u8, val.?[0..val_len], sel[hash + 1 ..]);
+            if (val != null) {
+                var esc_buf_h: [512]u8 = undefined;
+                const decoded_h_holder = decodeCssEscapesDynamic(std.heap.c_allocator, sel[hash + 1 ..], &esc_buf_h) catch return false;
+                defer decoded_h_holder.deinit(std.heap.c_allocator);
+                const decoded_h = decoded_h_holder.value;
+                return val_len == decoded_h.len and std.mem.eql(u8, val.?[0..val_len], decoded_h);
+            }
             return false;
         }
     }
@@ -1530,12 +1591,10 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
         }
         // Case-insensitive check for HTML attributes
         var lower_buf: [128]u8 = undefined;
-        if (check_name.len <= lower_buf.len) {
-            for (check_name, 0..) |ch, ci| lower_buf[ci] = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
-            const lower = lower_buf[0..check_name.len];
-            return lxb_dom_element_has_attribute(elem, lower.ptr, lower.len);
-        }
-        return lxb_dom_element_has_attribute(elem, check_name.ptr, check_name.len);
+        const lower_holder = lowerAsciiDynamic(std.heap.c_allocator, check_name, &lower_buf) catch return false;
+        defer lower_holder.deinit(std.heap.c_allocator);
+        const lower = lower_holder.value;
+        return lxb_dom_element_has_attribute(elem, lower.ptr, lower.len);
     }
     var attr_name = std.mem.trim(u8, trimmed[0..op_pos.?], " \t");
     // Detect `*|attr` namespace wildcard (CSS Selectors L4 §6.2): when present,
@@ -1547,6 +1606,11 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
         ns_wildcard = true;
         attr_name = attr_name[2..];
     }
+    var attr_lower_buf: [128]u8 = undefined;
+    var attr_name_holder: TempSlice = .{ .value = attr_name };
+    if (!ns_wildcard) attr_name_holder = lowerAsciiDynamic(std.heap.c_allocator, attr_name, &attr_lower_buf) catch return false;
+    defer attr_name_holder.deinit(std.heap.c_allocator);
+    const lookup_attr_name = attr_name_holder.value;
     const val_start = if (op_type == '=') op_pos.? + 1 else op_pos.? + 2;
     var expected = std.mem.trim(u8, trimmed[val_start..], " \t");
     // Check for case-sensitivity flag BEFORE stripping quotes: [attr="val" i]
@@ -1565,7 +1629,9 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     }
     // Decode CSS escapes in expected value
     var esc_buf: [512]u8 = undefined;
-    const decoded_exp = decodeCssEscapes(expected, &esc_buf);
+    const decoded_exp_holder = decodeCssEscapesDynamic(std.heap.c_allocator, expected, &esc_buf) catch return false;
+    defer decoded_exp_holder.deinit(std.heap.c_allocator);
+    const decoded_exp = decoded_exp_holder.value;
     // For `[*|attr=val]` we must locate the attribute by local name across
     // namespaces. For regular `[attr=val]` we use Lexbor's qualified-name
     // lookup (respects HTML case semantics via earlier lowercasing).
@@ -1575,39 +1641,29 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
         actual = attrValue(a);
     } else {
         var val_len: usize = 0;
-        const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
+        const val = lxb_dom_element_get_attribute(elem, lookup_attr_name.ptr, lookup_attr_name.len, &val_len);
         if (val == null) return false;
         actual = val.?[0..val_len];
     }
 
     if (case_insensitive) {
-        // Case-insensitive comparison using lowercased copies
-        var lower_actual_buf: [1024]u8 = undefined;
-        var lower_exp_buf: [512]u8 = undefined;
-        const la_len = @min(actual.len, lower_actual_buf.len);
-        const le_len = @min(decoded_exp.len, lower_exp_buf.len);
-        for (0..la_len) |ci| lower_actual_buf[ci] = std.ascii.toLower(actual[ci]);
-        for (0..le_len) |ci| lower_exp_buf[ci] = std.ascii.toLower(decoded_exp[ci]);
-        const la = lower_actual_buf[0..la_len];
-        const le = lower_exp_buf[0..le_len];
         return switch (op_type) {
-            '=' => std.mem.eql(u8, la, le),
-            '^' => la.len >= le.len and std.mem.eql(u8, la[0..le.len], le),
-            '$' => la.len >= le.len and std.mem.eql(u8, la[la.len - le.len ..], le),
-            '*' => std.mem.indexOf(u8, la, le) != null,
+            '=' => std.ascii.eqlIgnoreCase(actual, decoded_exp),
+            '^' => actual.len >= decoded_exp.len and std.ascii.eqlIgnoreCase(actual[0..decoded_exp.len], decoded_exp),
+            '$' => actual.len >= decoded_exp.len and std.ascii.eqlIgnoreCase(actual[actual.len - decoded_exp.len ..], decoded_exp),
+            '*' => indexOfAsciiIgnoreCase(actual, decoded_exp) != null,
             '~' => blk: {
-                // Word match case-insensitive
-                var rest = la;
+                var rest = actual;
                 while (rest.len > 0) {
                     const sp = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
-                    if (sp == le.len and std.mem.eql(u8, rest[0..sp], le)) break :blk true;
+                    if (sp == decoded_exp.len and std.ascii.eqlIgnoreCase(rest[0..sp], decoded_exp)) break :blk true;
                     if (sp >= rest.len) break;
                     rest = rest[sp + 1 ..];
                 }
                 break :blk false;
             },
-            '|' => std.mem.eql(u8, la, le) or
-                (la.len > le.len and std.mem.eql(u8, la[0..le.len], le) and la[le.len] == '-'),
+            '|' => std.ascii.eqlIgnoreCase(actual, decoded_exp) or
+                (actual.len > decoded_exp.len and std.ascii.eqlIgnoreCase(actual[0..decoded_exp.len], decoded_exp) and actual[decoded_exp.len] == '-'),
             else => false,
         };
     }
@@ -1982,7 +2038,9 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
         const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
         if (val == null) return false;
         var esc_buf2: [512]u8 = undefined;
-        const decoded2 = decodeCssEscapes(selector[1..], &esc_buf2);
+        const decoded2_holder = decodeCssEscapesDynamic(std.heap.c_allocator, selector[1..], &esc_buf2) catch return false;
+        defer decoded2_holder.deinit(std.heap.c_allocator);
+        const decoded2 = decoded2_holder.value;
         return val_len == decoded2.len and std.mem.eql(u8, val.?[0..val_len], decoded2);
     }
 
@@ -1999,7 +2057,9 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
             const next_dot = findUnescapedDot(rest) orelse rest.len;
             if (next_dot == 0) return false; // empty class like ".foo..bar"
             var esc_buf_cls: [512]u8 = undefined;
-            const decoded_cls = decodeCssEscapes(rest[0..next_dot], &esc_buf_cls);
+            const decoded_cls_holder = decodeCssEscapesDynamic(std.heap.c_allocator, rest[0..next_dot], &esc_buf_cls) catch return false;
+            defer decoded_cls_holder.deinit(std.heap.c_allocator);
+            const decoded_cls = decoded_cls_holder.value;
             if (!api.classContains(class_val, decoded_cls)) return false;
             if (next_dot >= rest.len) break;
             rest = rest[next_dot + 1 ..];
@@ -2038,7 +2098,9 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
             const next_dot = findUnescapedDot(rest) orelse rest.len;
             if (next_dot == 0) return false;
             var esc_buf_cls2: [512]u8 = undefined;
-            const decoded_cls2 = decodeCssEscapes(rest[0..next_dot], &esc_buf_cls2);
+            const decoded_cls2_holder = decodeCssEscapesDynamic(std.heap.c_allocator, rest[0..next_dot], &esc_buf_cls2) catch return false;
+            defer decoded_cls2_holder.deinit(std.heap.c_allocator);
+            const decoded_cls2 = decoded_cls2_holder.value;
             if (!api.classContains(class_val, decoded_cls2)) return false;
             if (next_dot >= rest.len) break;
             rest = rest[next_dot + 1 ..];

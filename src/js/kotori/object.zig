@@ -249,6 +249,7 @@ pub const JsObject = struct {
                 }
             }
         }
+        if (!self.extensible) return;
         try self.properties.put(allocator, name, val);
     }
 

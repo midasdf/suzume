@@ -37,6 +37,12 @@ const lxb_html_document_parse_fragment = dom_bindings.lxb_html_document_parse_fr
 // Lexbor attribute access (from shared dom_bindings)
 const lxb_dom_element_get_attribute = dom_bindings.lxb_dom_element_get_attribute;
 
+fn dupNodeText(node: *lxb.lxb_dom_node_t) ?[]u8 {
+    var len: usize = 0;
+    const ptr = lxb_dom_node_text_content(node, &len) orelse return null;
+    return std.heap.page_allocator.dupe(u8, ptr[0..len]) catch null;
+}
+
 // ── Node prototype functions ─────────────────────────────────────────
 
 pub fn elementGetTagName(
@@ -222,13 +228,10 @@ pub fn elementGetTextContent(
         if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
         return qjs.JS_NewStringLen(c, ptr.?, len);
     }
+    defer qjs.JS_FreeValue(c, js_children);
 
-    // Has JS-only children — need to collect text from both native and JS children
-    // Walk native children and __jsChildren in insertion order
-    // __jsChildren are tracked with __jsChildPos (insertion index among all children)
-    // Fallback: prepend JS children text, then native text
-    var buf: [32768]u8 = undefined;
-    var buf_len: usize = 0;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.heap.c_allocator);
 
     // Collect JS children text first (they were inserted before native nodes in typical usage)
     // Read each JS child's textContent/data
@@ -253,23 +256,18 @@ pub fn elementGetTextContent(
         if (!quickjs.JS_IsUndefined(tc) and !quickjs.JS_IsNull(tc)) {
             if (api.jsStringToSlice(c, tc)) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
-                const copy_len = @min(s.len, buf.len - buf_len);
-                @memcpy(buf[buf_len..][0..copy_len], s.ptr[0..copy_len]);
-                buf_len += copy_len;
+                out.appendSlice(std.heap.c_allocator, s.ptr[0..s.len]) catch return quickjs.JS_UNDEFINED();
             }
         }
     }
-    qjs.JS_FreeValue(c, js_children);
 
     // Append native text content
     if (ptr != null and len > 0) {
-        const copy_len = @min(len, buf.len - buf_len);
-        @memcpy(buf[buf_len..][0..copy_len], ptr.?[0..copy_len]);
-        buf_len += copy_len;
+        out.appendSlice(std.heap.c_allocator, ptr.?[0..len]) catch return quickjs.JS_UNDEFINED();
     }
 
-    if (buf_len == 0) return qjs.JS_NewStringLen(c, "", 0);
-    return qjs.JS_NewStringLen(c, &buf, buf_len);
+    if (out.items.len == 0) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, out.items.ptr, out.items.len);
 }
 
 pub fn elementSetTextContent(
@@ -288,19 +286,8 @@ pub fn elementSetTextContent(
         node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT or
         node.type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
     {
-        // Capture old text for MutationObserver characterDataOldValue
-        // Must copy to local buffer because lxb_dom_node_text_content_set invalidates the pointer
-        var old_text_buf: [4096]u8 = undefined;
-        var old_text: ?[]const u8 = null;
-        {
-            var old_len: usize = 0;
-            const old_ptr = lxb_dom_node_text_content(node, &old_len);
-            if (old_ptr) |p| {
-                const copy_len = @min(old_len, old_text_buf.len);
-                @memcpy(old_text_buf[0..copy_len], p[0..copy_len]);
-                old_text = old_text_buf[0..copy_len];
-            }
-        }
+        const old_text = dupNodeText(node);
+        defer if (old_text) |v| std.heap.page_allocator.free(v);
         if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
             _ = lxb_dom_node_text_content_set(node, "", 0);
         } else {
@@ -1417,7 +1404,6 @@ pub fn elementRemove(
     return quickjs.JS_UNDEFINED();
 }
 
-
 // ── Namespace helpers for cloneNode ──────────────────────────────────
 
 /// Map Lexbor namespace ID → W3C namespace URI string.
@@ -1898,21 +1884,20 @@ fn normalizeNodeWithMutations(node: *lxb.lxb_dom_node_t) void {
                 const cur_ptr = lxb_dom_node_text_content(ch, &cur_len);
                 var merge_buf: [16384]u8 = undefined;
                 const total = cur_len + next_len;
-                if (total <= merge_buf.len and cur_ptr != null) {
-                    // DOM §4.4.2 "normalize" step 3.1-3.3: each concatenation
-                    // is BOTH a childList mutation (removal of the merged
-                    // sibling from `node`) AND a characterData mutation on
-                    // the surviving text node (its `data` changes from e.g.
-                    // "foo" to "foobar"). Snapshot pre-merge text before
-                    // text_content_set invalidates the lexbor pointer.
-                    var old_cur_buf: [4096]u8 = undefined;
-                    const oc_len = @min(cur_len, old_cur_buf.len);
-                    @memcpy(old_cur_buf[0..oc_len], cur_ptr.?[0..oc_len]);
-                    const old_cur = old_cur_buf[0..oc_len];
+                if (cur_ptr != null) {
+                    const use_heap = total > merge_buf.len;
+                    const merged = if (use_heap)
+                        (std.heap.c_allocator.alloc(u8, total) catch break)
+                    else
+                        merge_buf[0..total];
+                    defer if (use_heap) std.heap.c_allocator.free(merged);
 
-                    @memcpy(merge_buf[0..cur_len], cur_ptr.?[0..cur_len]);
-                    @memcpy(merge_buf[cur_len..][0..next_len], next_ptr.?[0..next_len]);
-                    _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
+                    const old_cur = dupNodeText(ch);
+                    defer if (old_cur) |v| std.heap.page_allocator.free(v);
+
+                    @memcpy(merged[0..cur_len], cur_ptr.?[0..cur_len]);
+                    @memcpy(merged[cur_len..][0..next_len], next_ptr.?[0..next_len]);
+                    _ = lxb_dom_node_text_content_set(ch, merged.ptr, total);
                     text_len = total;
 
                     // characterData record on the surviving text node.
@@ -1968,10 +1953,17 @@ pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
                 const cur_ptr = lxb_dom_node_text_content(ch, &cur_len);
                 var merge_buf: [16384]u8 = undefined;
                 const total = cur_len + next_len;
-                if (total <= merge_buf.len and cur_ptr != null) {
-                    @memcpy(merge_buf[0..cur_len], cur_ptr.?[0..cur_len]);
-                    @memcpy(merge_buf[cur_len..][0..next_len], next_ptr.?[0..next_len]);
-                    _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
+                if (cur_ptr != null) {
+                    const use_heap = total > merge_buf.len;
+                    const merged = if (use_heap)
+                        (std.heap.c_allocator.alloc(u8, total) catch break)
+                    else
+                        merge_buf[0..total];
+                    defer if (use_heap) std.heap.c_allocator.free(merged);
+
+                    @memcpy(merged[0..cur_len], cur_ptr.?[0..cur_len]);
+                    @memcpy(merged[cur_len..][0..next_len], next_ptr.?[0..next_len]);
+                    _ = lxb_dom_node_text_content_set(ch, merged.ptr, total);
                     text_len = total;
                     lxb_dom_node_remove(next);
                     // Don't destroy — JS may still reference this node

@@ -14,6 +14,7 @@ pub const dom_style = @import("dom_style.zig");
 pub const frame_state = @import("frame_state.zig");
 pub const iframe = @import("iframe.zig");
 pub const FrameState = frame_state.FrameState;
+const web_api_mod = @import("web_api.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -1024,6 +1025,50 @@ fn removeBoxShorthandFromStyle(style_str: []const u8, shorthand: []const u8, lon
     return buf[0..out_pos];
 }
 
+fn removeStylePropertiesFromStyle(style_str: []const u8, props: []const []const u8, buf: []u8) ?[]const u8 {
+    var out_pos: usize = 0;
+    var iter_pos: usize = 0;
+    while (iter_pos < style_str.len) {
+        while (iter_pos < style_str.len and (style_str[iter_pos] == ' ' or style_str[iter_pos] == '\t' or style_str[iter_pos] == '\n')) iter_pos += 1;
+        if (iter_pos >= style_str.len) break;
+        const prop_start = iter_pos;
+        while (iter_pos < style_str.len and style_str[iter_pos] != ':' and style_str[iter_pos] != ';') iter_pos += 1;
+        if (iter_pos >= style_str.len or style_str[iter_pos] != ':') break;
+        const prop_name = std.mem.trim(u8, style_str[prop_start..iter_pos], " \t\n");
+        iter_pos += 1;
+        const val_start = iter_pos;
+        while (iter_pos < style_str.len and style_str[iter_pos] != ';') iter_pos += 1;
+        const val = std.mem.trim(u8, style_str[val_start..iter_pos], " \t\n");
+        if (iter_pos < style_str.len) iter_pos += 1;
+
+        var skip = false;
+        for (props) |p| {
+            if (std.ascii.eqlIgnoreCase(prop_name, p)) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip) continue;
+
+        const needed = prop_name.len + 2 + val.len + 2;
+        if (out_pos + needed > buf.len) return null;
+        @memcpy(buf[out_pos..][0..prop_name.len], prop_name);
+        out_pos += prop_name.len;
+        buf[out_pos] = ':';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+        @memcpy(buf[out_pos..][0..val.len], val);
+        out_pos += val.len;
+        buf[out_pos] = ';';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+    }
+    if (out_pos > 0 and buf[out_pos - 1] == ' ') out_pos -= 1;
+    return buf[0..out_pos];
+}
+
 const ShorthandInfo = struct {
     shorthand: []const u8,
     index: usize,
@@ -1052,6 +1097,41 @@ fn getShorthandInfoForLonghand(longhand: []const u8) ?ShorthandInfo {
 /// Reconstruct a box shorthand value from its longhands in inline style, returning a JS string.
 fn reconstructBoxShorthandJS(c: *qjs.JSContext, style_str: []const u8, shorthand: []const u8) ?qjs.JSValue {
     return reconstructBoxShorthandJSWithElem(c, style_str, shorthand, quickjs.JS_UNDEFINED());
+}
+
+fn joinedCssValuesJS(c: *qjs.JSContext, vals: []const []const u8) ?qjs.JSValue {
+    var len: usize = vals.len - 1;
+    for (vals) |val| len += val.len;
+
+    const out = std.heap.c_allocator.alloc(u8, len) catch return null;
+    defer std.heap.c_allocator.free(out);
+
+    var pos: usize = 0;
+    for (vals, 0..) |val, i| {
+        if (i != 0) {
+            out[pos] = ' ';
+            pos += 1;
+        }
+        @memcpy(out[pos .. pos + val.len], val);
+        pos += val.len;
+    }
+    return qjs.JS_NewStringLen(c, out.ptr, out.len);
+}
+
+fn rawBoxShorthandJS(c: *qjs.JSContext, top: []const u8, right: []const u8, bottom: []const u8, left: []const u8) ?qjs.JSValue {
+    if (std.mem.eql(u8, top, right) and std.mem.eql(u8, right, bottom) and std.mem.eql(u8, bottom, left)) {
+        return qjs.JS_NewStringLen(c, top.ptr, top.len);
+    }
+    if (std.mem.eql(u8, top, bottom) and std.mem.eql(u8, right, left)) {
+        const vals = [_][]const u8{ top, right };
+        return joinedCssValuesJS(c, &vals);
+    }
+    if (std.mem.eql(u8, right, left)) {
+        const vals = [_][]const u8{ top, right, bottom };
+        return joinedCssValuesJS(c, &vals);
+    }
+    const vals = [_][]const u8{ top, right, bottom, left };
+    return joinedCssValuesJS(c, &vals);
 }
 
 /// Reconstruct a box shorthand from expanded longhands, optionally resolving values.
@@ -1085,20 +1165,7 @@ pub fn reconstructBoxShorthandJSWithElem(c: *qjs.JSContext, style_str: []const u
         }
     }
 
-    // Fallback: return raw values
-    var buf: [256]u8 = undefined;
-    if (std.mem.eql(u8, top_raw, right_raw) and std.mem.eql(u8, right_raw, bottom_raw) and std.mem.eql(u8, bottom_raw, left_raw)) {
-        return qjs.JS_NewStringLen(c, top_raw.ptr, top_raw.len);
-    } else if (std.mem.eql(u8, top_raw, bottom_raw) and std.mem.eql(u8, right_raw, left_raw)) {
-        const r = std.fmt.bufPrint(&buf, "{s} {s}", .{ top_raw, right_raw }) catch return null;
-        return qjs.JS_NewStringLen(c, r.ptr, r.len);
-    } else if (std.mem.eql(u8, right_raw, left_raw)) {
-        const r = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ top_raw, right_raw, bottom_raw }) catch return null;
-        return qjs.JS_NewStringLen(c, r.ptr, r.len);
-    } else {
-        const r = std.fmt.bufPrint(&buf, "{s} {s} {s} {s}", .{ top_raw, right_raw, bottom_raw, left_raw }) catch return null;
-        return qjs.JS_NewStringLen(c, r.ptr, r.len);
-    }
+    return rawBoxShorthandJS(c, top_raw, right_raw, bottom_raw, left_raw);
 }
 
 /// Extract a longhand value from a stored shorthand in the style string.
@@ -1695,7 +1762,7 @@ fn styleSetProperty(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 2) return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
 
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
@@ -1704,26 +1771,25 @@ fn styleSetProperty(
 
     const prop_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, prop_s.ptr);
-    const val_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
-    defer qjs.JS_FreeCString(c, val_s.ptr);
+    const val_s = if (argc >= 2) jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED() else null;
+    defer if (val_s) |vs| qjs.JS_FreeCString(c, vs.ptr);
 
     // Parse optional priority argument (arg[2]).
-    // CSSOM §6.7.3 step 4: if priority is non-empty and not ASCII case-insensitive
-    // "important", return without doing anything.
     var is_important = false;
+    var invalid_priority = false;
     if (argc >= 3) {
         const prio_s = jsStringToSlice(c, args[2]);
         if (prio_s) |ps| {
             defer qjs.JS_FreeCString(c, ps.ptr);
             const prio = ps.ptr[0..ps.len];
-            if (prio.len > 0 and !dom_style.eqlIgnoreCase(prio, "important"))
-                return quickjs.JS_UNDEFINED();
-            is_important = prio.len > 0; // non-empty and == "important"
+            invalid_priority = prio.len > 0 and !dom_style.eqlIgnoreCase(prio, "important");
+            is_important = prio.len > 0 and !invalid_priority;
         }
     }
 
     const prop = prop_s.ptr[0..prop_s.len];
-    const val = val_s.ptr[0..val_s.len];
+    const val = if (val_s) |vs| vs.ptr[0..vs.len] else "";
+    if (invalid_priority and val.len > 0) return quickjs.JS_UNDEFINED();
 
     // Validate CSS value: reject invalid values (WPT -invalid tests expect this)
     if (val.len > 0) {
@@ -1822,7 +1888,17 @@ fn styleSetProperty(
             };
         }
         var buf: [4096]u8 = undefined;
-        if (expandBoxShorthandInStyle(current_style, prop, longhands, expanded_vals, &buf)) |new_style| {
+        var style_heap: ?[]u8 = null;
+        defer if (style_heap) |heap| std.heap.c_allocator.free(heap);
+        const style_buf = blk: {
+            if (expandBoxShorthandInStyle(current_style, prop, longhands, expanded_vals, &buf)) |new_style| break :blk new_style;
+            var cap = current_style.len + 1;
+            for (longhands, 0..) |lh, i| cap += lh.len + expanded_vals[i].len + 4;
+            const heap = std.heap.c_allocator.alloc(u8, cap) catch break :blk null;
+            style_heap = heap;
+            break :blk expandBoxShorthandInStyle(current_style, prop, longhands, expanded_vals, heap);
+        };
+        if (style_buf) |new_style| {
             _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
             setDomDirtyIfConnected(elem);
         }
@@ -1863,28 +1939,71 @@ fn styleSetProperty(
         }
         // Write longhands to inline style (removing shorthand)
         var style_result = current_style;
-        if (dom_style.setStyleProperty(style_result, "flex", "", &buf)) |s| style_result = s;
+        var remove_heap: ?[]u8 = null;
+        defer if (remove_heap) |heap| std.heap.c_allocator.free(heap);
+        if (dom_style.setStyleProperty(style_result, "flex", "", &buf)) |s| {
+            style_result = s;
+        } else {
+            const heap = std.heap.c_allocator.alloc(u8, style_result.len) catch null;
+            if (heap) |h| {
+                remove_heap = h;
+                if (dom_style.setStyleProperty(style_result, "flex", "", h)) |s| style_result = s;
+            }
+        }
         var buf2: [4096]u8 = undefined;
+        var grow_heap: ?[]u8 = null;
+        defer if (grow_heap) |heap| std.heap.c_allocator.free(heap);
         if (dom_style.setStyleProperty(style_result, "flex-grow", grow_v, &buf2)) |s| {
             @memcpy(buf[0..s.len], s);
             style_result = buf[0..s.len];
+        } else {
+            const cap = style_result.len + "flex-grow".len + grow_v.len + 4;
+            const heap = std.heap.c_allocator.alloc(u8, cap) catch null;
+            if (heap) |h| {
+                grow_heap = h;
+                if (dom_style.setStyleProperty(style_result, "flex-grow", grow_v, h)) |s| style_result = s;
+            }
         }
         var buf3: [4096]u8 = undefined;
+        var shrink_heap: ?[]u8 = null;
+        defer if (shrink_heap) |heap| std.heap.c_allocator.free(heap);
         if (dom_style.setStyleProperty(style_result, "flex-shrink", shrink_v, &buf3)) |s| {
             @memcpy(buf[0..s.len], s);
             style_result = buf[0..s.len];
+        } else {
+            const cap = style_result.len + "flex-shrink".len + shrink_v.len + 4;
+            const heap = std.heap.c_allocator.alloc(u8, cap) catch null;
+            if (heap) |h| {
+                shrink_heap = h;
+                if (dom_style.setStyleProperty(style_result, "flex-shrink", shrink_v, h)) |s| style_result = s;
+            }
         }
         var buf4: [4096]u8 = undefined;
         if (dom_style.setStyleProperty(style_result, "flex-basis", basis_v, &buf4)) |s| {
             @memcpy(buf[0..s.len], s);
             style_result = buf[0..s.len];
+        } else {
+            const cap = style_result.len + "flex-basis".len + basis_v.len + 4;
+            if (std.heap.c_allocator.alloc(u8, cap)) |heap| {
+                defer std.heap.c_allocator.free(heap);
+                if (dom_style.setStyleProperty(style_result, "flex-basis", basis_v, heap)) |s| {
+                    _ = lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
+                    setDomDirtyIfConnected(elem);
+                    if (getDeclList(elem)) |list| {
+                        const flex_names = [_][]const u8{ "flex-grow", "flex-shrink", "flex-basis" };
+                        const flex_vals = [_][]const u8{ grow_v, shrink_v, basis_v };
+                        list.upsertShorthand(std.heap.c_allocator, "flex", &flex_names, &flex_vals, is_important) catch {};
+                    }
+                    return quickjs.JS_UNDEFINED();
+                }
+            } else |_| {}
         }
         _ = lxb_dom_element_set_attribute(elem, "style", 5, style_result.ptr, style_result.len);
         setDomDirtyIfConnected(elem);
         // Sync decl list for flex longhands.
         if (getDeclList(elem)) |list| {
             const flex_names = [_][]const u8{ "flex-grow", "flex-shrink", "flex-basis" };
-            const flex_vals  = [_][]const u8{ grow_v, shrink_v, basis_v };
+            const flex_vals = [_][]const u8{ grow_v, shrink_v, basis_v };
             list.upsertShorthand(std.heap.c_allocator, "flex", &flex_names, &flex_vals, is_important) catch {};
         }
         return quickjs.JS_UNDEFINED();
@@ -1905,30 +2024,67 @@ fn styleSetProperty(
             }
         }
         var style_result = current_style;
-        if (dom_style.setStyleProperty(style_result, "flex-flow", "", &buf)) |s| style_result = s;
+        var remove_heap: ?[]u8 = null;
+        defer if (remove_heap) |heap| std.heap.c_allocator.free(heap);
+        if (dom_style.setStyleProperty(style_result, "flex-flow", "", &buf)) |s| {
+            style_result = s;
+        } else {
+            const heap = std.heap.c_allocator.alloc(u8, style_result.len) catch null;
+            if (heap) |h| {
+                remove_heap = h;
+                if (dom_style.setStyleProperty(style_result, "flex-flow", "", h)) |s| style_result = s;
+            }
+        }
         var buf2: [4096]u8 = undefined;
+        var dir_heap: ?[]u8 = null;
+        defer if (dir_heap) |heap| std.heap.c_allocator.free(heap);
         if (dom_style.setStyleProperty(style_result, "flex-direction", dir_v, &buf2)) |s| {
             @memcpy(buf[0..s.len], s);
             style_result = buf[0..s.len];
+        } else {
+            const cap = style_result.len + "flex-direction".len + dir_v.len + 4;
+            const heap = std.heap.c_allocator.alloc(u8, cap) catch null;
+            if (heap) |h| {
+                dir_heap = h;
+                if (dom_style.setStyleProperty(style_result, "flex-direction", dir_v, h)) |s| style_result = s;
+            }
         }
         var buf3: [4096]u8 = undefined;
+        var wrap_heap: ?[]u8 = null;
+        defer if (wrap_heap) |heap| std.heap.c_allocator.free(heap);
         if (dom_style.setStyleProperty(style_result, "flex-wrap", wrap_v, &buf3)) |s| {
             @memcpy(buf[0..s.len], s);
             style_result = buf[0..s.len];
+        } else {
+            const cap = style_result.len + "flex-wrap".len + wrap_v.len + 4;
+            const heap = std.heap.c_allocator.alloc(u8, cap) catch null;
+            if (heap) |h| {
+                wrap_heap = h;
+                if (dom_style.setStyleProperty(style_result, "flex-wrap", wrap_v, h)) |s| style_result = s;
+            }
         }
         _ = lxb_dom_element_set_attribute(elem, "style", 5, style_result.ptr, style_result.len);
         setDomDirtyIfConnected(elem);
         // Sync decl list for flex-flow longhands.
         if (getDeclList(elem)) |list| {
             const ff_names = [_][]const u8{ "flex-direction", "flex-wrap" };
-            const ff_vals  = [_][]const u8{ dir_v, wrap_v };
+            const ff_vals = [_][]const u8{ dir_v, wrap_v };
             list.upsertShorthand(std.heap.c_allocator, "flex-flow", &ff_names, &ff_vals, is_important) catch {};
         }
         return quickjs.JS_UNDEFINED();
     }
 
     var buf: [4096]u8 = undefined;
-    if (dom_style.setStyleProperty(current_style, prop, effective_val, &buf)) |new_style| {
+    var style_heap: ?[]u8 = null;
+    defer if (style_heap) |heap| std.heap.c_allocator.free(heap);
+    const style_buf = blk: {
+        if (dom_style.setStyleProperty(current_style, prop, effective_val, &buf)) |new_style| break :blk new_style;
+        const cap = current_style.len + prop.len + effective_val.len + 4;
+        const heap = std.heap.c_allocator.alloc(u8, cap) catch break :blk null;
+        style_heap = heap;
+        break :blk dom_style.setStyleProperty(current_style, prop, effective_val, heap);
+    };
+    if (style_buf) |new_style| {
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
         setDomDirtyIfConnected(elem);
     }
@@ -1988,9 +2144,8 @@ fn styleGetPropertyValue(
             const g = std.mem.trim(u8, grow orelse "0", " \t");
             const s = std.mem.trim(u8, shrink orelse "1", " \t");
             const b = std.mem.trim(u8, basis orelse "auto", " \t");
-            var fbuf: [256]u8 = undefined;
-            const result = std.fmt.bufPrint(&fbuf, "{s} {s} {s}", .{ g, s, b }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            const vals = [_][]const u8{ g, s, b };
+            return joinedCssValuesJS(c, &vals) orelse qjs.JS_NewStringLen(c, "", 0);
         }
     }
     if (dom_style.eqlIgnoreCase(prop, "flex-flow")) {
@@ -2007,9 +2162,8 @@ fn styleGetPropertyValue(
             if (dom_style.eqlIgnoreCase(d, "row")) {
                 return qjs.JS_NewStringLen(c, w.ptr, w.len);
             }
-            var fbuf: [128]u8 = undefined;
-            const result = std.fmt.bufPrint(&fbuf, "{s} {s}", .{ d, w }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            const vals = [_][]const u8{ d, w };
+            return joinedCssValuesJS(c, &vals) orelse qjs.JS_NewStringLen(c, "", 0);
         }
     }
 
@@ -2087,19 +2241,7 @@ fn styleGetPropertyValue(
         const right_v = dom_style.getStyleProperty(style, longhands[1]) orelse return qjs.JS_NewStringLen(c, "", 0);
         const bottom_v = dom_style.getStyleProperty(style, longhands[2]) orelse return qjs.JS_NewStringLen(c, "", 0);
         const left_v = dom_style.getStyleProperty(style, longhands[3]) orelse return qjs.JS_NewStringLen(c, "", 0);
-        var buf: [256]u8 = undefined;
-        if (std.mem.eql(u8, top_v, right_v) and std.mem.eql(u8, right_v, bottom_v) and std.mem.eql(u8, bottom_v, left_v)) {
-            return qjs.JS_NewStringLen(c, top_v.ptr, top_v.len);
-        } else if (std.mem.eql(u8, top_v, bottom_v) and std.mem.eql(u8, right_v, left_v)) {
-            const r = std.fmt.bufPrint(&buf, "{s} {s}", .{ top_v, right_v }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, r.ptr, r.len);
-        } else if (std.mem.eql(u8, right_v, left_v)) {
-            const r = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ top_v, right_v, bottom_v }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, r.ptr, r.len);
-        } else {
-            const r = std.fmt.bufPrint(&buf, "{s} {s} {s} {s}", .{ top_v, right_v, bottom_v, left_v }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, r.ptr, r.len);
-        }
+        return rawBoxShorthandJS(c, top_v, right_v, bottom_v, left_v) orelse qjs.JS_NewStringLen(c, "", 0);
     }
 
     // Try extracting longhand from stored shorthand (e.g., "margin-top" from "margin: 1px 2px")
@@ -2134,6 +2276,81 @@ fn styleRemoveProperty(
     const current_style = style_ptr.?[0..style_len];
     const prop = prop_s.ptr[0..prop_s.len];
 
+    if (dom_style.eqlIgnoreCase(prop, "flex")) {
+        var old_js: qjs.JSValue = qjs.JS_NewStringLen(c, "", 0);
+        if (dom_style.getStyleProperty(current_style, prop)) |ov| {
+            old_js = qjs.JS_NewStringLen(c, ov.ptr, ov.len);
+        } else {
+            const grow = dom_style.getStyleProperty(current_style, "flex-grow");
+            const shrink = dom_style.getStyleProperty(current_style, "flex-shrink");
+            const basis = dom_style.getStyleProperty(current_style, "flex-basis");
+            if (grow != null or shrink != null or basis != null) {
+                const vals = [_][]const u8{
+                    std.mem.trim(u8, grow orelse "0", " \t\r\n"),
+                    std.mem.trim(u8, shrink orelse "1", " \t\r\n"),
+                    std.mem.trim(u8, basis orelse "auto", " \t\r\n"),
+                };
+                old_js = joinedCssValuesJS(c, &vals) orelse old_js;
+            }
+        }
+
+        const names = [_][]const u8{ "flex", "flex-grow", "flex-shrink", "flex-basis" };
+        var buf: [4096]u8 = undefined;
+        var style_heap: ?[]u8 = null;
+        defer if (style_heap) |heap| std.heap.c_allocator.free(heap);
+        const style_buf = blk: {
+            if (removeStylePropertiesFromStyle(current_style, &names, &buf)) |new_style| break :blk new_style;
+            const heap = std.heap.c_allocator.alloc(u8, current_style.len) catch break :blk null;
+            style_heap = heap;
+            break :blk removeStylePropertiesFromStyle(current_style, &names, heap);
+        };
+        if (style_buf) |new_style| {
+            _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+            setDomDirty();
+        }
+        if (getDeclList(elem)) |list| list.removeShorthand("flex");
+        return old_js;
+    }
+
+    if (dom_style.eqlIgnoreCase(prop, "flex-flow")) {
+        var old_js: qjs.JSValue = qjs.JS_NewStringLen(c, "", 0);
+        if (dom_style.getStyleProperty(current_style, prop)) |ov| {
+            old_js = qjs.JS_NewStringLen(c, ov.ptr, ov.len);
+        } else {
+            const dir = dom_style.getStyleProperty(current_style, "flex-direction");
+            const wrap = dom_style.getStyleProperty(current_style, "flex-wrap");
+            if (dir != null or wrap != null) {
+                const d = std.mem.trim(u8, dir orelse "row", " \t\r\n");
+                const w = std.mem.trim(u8, wrap orelse "nowrap", " \t\r\n");
+                if (dom_style.eqlIgnoreCase(w, "nowrap")) {
+                    old_js = qjs.JS_NewStringLen(c, d.ptr, d.len);
+                } else if (dom_style.eqlIgnoreCase(d, "row")) {
+                    old_js = qjs.JS_NewStringLen(c, w.ptr, w.len);
+                } else {
+                    const vals = [_][]const u8{ d, w };
+                    old_js = joinedCssValuesJS(c, &vals) orelse old_js;
+                }
+            }
+        }
+
+        const names = [_][]const u8{ "flex-flow", "flex-direction", "flex-wrap" };
+        var buf: [4096]u8 = undefined;
+        var style_heap: ?[]u8 = null;
+        defer if (style_heap) |heap| std.heap.c_allocator.free(heap);
+        const style_buf = blk: {
+            if (removeStylePropertiesFromStyle(current_style, &names, &buf)) |new_style| break :blk new_style;
+            const heap = std.heap.c_allocator.alloc(u8, current_style.len) catch break :blk null;
+            style_heap = heap;
+            break :blk removeStylePropertiesFromStyle(current_style, &names, heap);
+        };
+        if (style_buf) |new_style| {
+            _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+            setDomDirty();
+        }
+        if (getDeclList(elem)) |list| list.removeShorthand("flex-flow");
+        return old_js;
+    }
+
     // Box shorthand removal — remove shorthand + all longhands, return old value
     if (getBoxLonghands(prop)) |longhands| {
         // Capture old value before removal (reconstruct from longhands if needed)
@@ -2144,7 +2361,15 @@ fn styleRemoveProperty(
             old_js = reconstructed;
         }
         var buf: [4096]u8 = undefined;
-        if (removeBoxShorthandFromStyle(current_style, prop, longhands, &buf)) |new_style| {
+        var style_heap: ?[]u8 = null;
+        defer if (style_heap) |heap| std.heap.c_allocator.free(heap);
+        const style_buf = blk: {
+            if (removeBoxShorthandFromStyle(current_style, prop, longhands, &buf)) |new_style| break :blk new_style;
+            const heap = std.heap.c_allocator.alloc(u8, current_style.len) catch break :blk null;
+            style_heap = heap;
+            break :blk removeBoxShorthandFromStyle(current_style, prop, longhands, heap);
+        };
+        if (style_buf) |new_style| {
             _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
             setDomDirty();
         }
@@ -2155,7 +2380,15 @@ fn styleRemoveProperty(
     const old_val = dom_style.getStyleProperty(current_style, prop);
 
     var buf: [4096]u8 = undefined;
-    if (dom_style.setStyleProperty(current_style, prop, "", &buf)) |new_style| {
+    var style_heap: ?[]u8 = null;
+    defer if (style_heap) |heap| std.heap.c_allocator.free(heap);
+    const style_buf = blk: {
+        if (dom_style.setStyleProperty(current_style, prop, "", &buf)) |new_style| break :blk new_style;
+        const heap = std.heap.c_allocator.alloc(u8, current_style.len) catch break :blk null;
+        style_heap = heap;
+        break :blk dom_style.setStyleProperty(current_style, prop, "", heap);
+    };
+    if (style_buf) |new_style| {
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
         setDomDirty();
     }
@@ -2418,7 +2651,7 @@ fn elementGetAttributes(
         \\      if (p==='length') return len;
         \\      if (p==='getNamedItem') return function(n){for(var i=0;i<len;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
         \\      if (p==='getNamedItemNS') return function(ns,n){for(var i=0;i<len;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
-        \\      if (p==='item') return function(i){return o[i]||null;};
+        \\      if (p==='item') return function(i){return o[i>>>0]||null;};
         \\      if (p==='setNamedItem') return function(a){};
         \\      if (p==='setNamedItemNS') return function(a){};
         \\      if (p==='removeNamedItem') return function(n){};
@@ -2580,9 +2813,7 @@ fn cssEscapeByte(buf: []u8, pos: usize, ch: u8, char_idx: usize, next_ch: ?u8) ?
     return p + 2;
 }
 
-/// Build CSS selector from space-separated class names: "a b" -> ".a.b"
-/// Class tokens are CSS-escaped so names with leading digits, punctuation etc. work.
-pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
+fn buildClassSelectorInto(class_name: []const u8, buf: []u8) ?[]const u8 {
     if (class_name.len == 0) return null;
     var pos: usize = 0;
     var i: usize = 0;
@@ -2610,6 +2841,31 @@ pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
     return buf[0..pos];
 }
 
+/// Build CSS selector from space-separated class names: "a b" -> ".a.b"
+/// Class tokens are CSS-escaped so names with leading digits, punctuation etc. work.
+pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
+    return buildClassSelectorInto(class_name, buf);
+}
+
+pub const BuiltClassSelector = struct {
+    value: []const u8,
+    storage: ?[]u8 = null,
+
+    pub fn deinit(self: BuiltClassSelector, allocator: std.mem.Allocator) void {
+        if (self.storage) |storage| allocator.free(storage);
+    }
+};
+
+pub fn buildClassSelectorDynamic(allocator: std.mem.Allocator, class_name: []const u8, stack_buf: *[512]u8) ?BuiltClassSelector {
+    if (buildClassSelector(class_name, stack_buf)) |selector| return .{ .value = selector };
+    if (std.mem.trim(u8, class_name, " \t\n\r\x0c").len == 0) return null;
+
+    const storage = allocator.alloc(u8, class_name.len * 4 + 1) catch return null;
+    errdefer allocator.free(storage);
+    const selector = buildClassSelectorInto(class_name, storage) orelse return null;
+    return .{ .value = selector, .storage = storage };
+}
+
 // ── element.dataset ─────────────────────────────────────────────────
 
 fn elementGetElementsByClassName(
@@ -2628,12 +2884,13 @@ fn elementGetElementsByClassName(
     // Build CSS selector: ".className" or ".a.b" for multiple classes
     const class_name = s.ptr[0..s.len];
     var selector_buf: [512]u8 = undefined;
-    const selector = buildClassSelector(class_name, &selector_buf) orelse {
+    const selector_holder = buildClassSelectorDynamic(std.heap.c_allocator, class_name, &selector_buf) orelse {
         // Whitespace-only or empty: return empty live HTMLCollection
         return dom_doc.makeLiveHTMLCollection(c, this_val, "");
     };
+    defer selector_holder.deinit(std.heap.c_allocator);
 
-    return dom_doc.makeLiveHTMLCollection(c, this_val, selector);
+    return dom_doc.makeLiveHTMLCollection(c, this_val, selector_holder.value);
 }
 
 fn elementGetElementsByTagName(
@@ -3164,7 +3421,11 @@ fn windowGetInnerWidth(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, 800); // Default; could be made configurable
+    // Prefer web_api viewport (set by the main loop on resize); fall back to
+    // dom_api's tracked viewport if the web_api value is still at its default.
+    const w = web_api_mod.getViewportWidth();
+    if (w > 0) return qjs.JS_NewInt32(c, @intCast(w));
+    return qjs.JS_NewInt32(c, @intFromFloat(g_viewport_width));
 }
 
 fn windowGetInnerHeight(
@@ -3174,7 +3435,9 @@ fn windowGetInnerHeight(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, 600); // Default; could be made configurable
+    const h = web_api_mod.getViewportHeight();
+    if (h > 0) return qjs.JS_NewInt32(c, @intCast(h));
+    return qjs.JS_NewInt32(c, @intFromFloat(g_viewport_height));
 }
 
 // ── innerText (getter/setter) ───────────────────────────────────────
@@ -4330,7 +4593,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const nlp_js =
             \\(function(){
             \\  var p={};
-            \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  p.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
             \\  p.forEach=function(cb,t){for(var i=0;i<this.length;i++)cb.call(t,this[i],i,this);};
             \\  p.map=function(cb,t){var r=[];for(var i=0;i<this.length;i++)r.push(cb.call(t,this[i],i,this));return r;};
             \\  p.join=function(s){var r='';for(var i=0;i<this.length;i++){if(i>0)r+=s===undefined?',':s;r+=this[i];}return r;};
@@ -4549,7 +4812,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      get:function(o,p){if(p==='length')return o._len;
             \\        if(p==='getNamedItem')return function(n){var l=o._len;for(var i=0;i<l;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
             \\        if(p==='getNamedItemNS')return function(ns,n){var l=o._len;for(var i=0;i<l;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
-            \\        if(p==='item')return function(i){return o[i]||null;};
+            \\        if(p==='item')return function(i){return o[i>>>0]||null;};
             \\        if(p==='setNamedItem')return function(a){return o._self.setAttributeNode(a);};
             \\        if(p==='setNamedItemNS')return function(a){return o._self.setAttributeNodeNS(a);};
             \\        if(p==='removeNamedItem')return function(n){var a=o._self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
@@ -4655,7 +4918,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof HTMLMenuElement!=='undefined'){rb(HTMLMenuElement,'compact');}
             \\  if(typeof HTMLModElement!=='undefined'){ru(HTMLModElement,'cite');rs(HTMLModElement,'dateTime','datetime');}
             \\  if(typeof HTMLQuoteElement!=='undefined'){ru(HTMLQuoteElement,'cite');}
-            \\  if(typeof DOMTokenList==='undefined'){globalThis.DOMTokenList=function(){};DOMTokenList.prototype[Symbol.toStringTag]='DOMTokenList';}
+            \\  if(typeof DOMTokenList==='undefined'){globalThis.DOMTokenList=function(){throw new TypeError("Illegal constructor");};DOMTokenList.prototype[Symbol.toStringTag]='DOMTokenList';}
             \\  if(typeof DOMStringMap==='undefined'){globalThis.DOMStringMap=function(){};DOMStringMap.prototype[Symbol.toStringTag]='DOMStringMap';}
             \\  if(typeof NamedNodeMap==='undefined'){globalThis.NamedNodeMap=function(){};NamedNodeMap.prototype[Symbol.toStringTag]='NamedNodeMap';}
             \\  if(typeof MutationRecord==='undefined'){globalThis.MutationRecord=function(){};MutationRecord.prototype[Symbol.toStringTag]='MutationRecord';}
@@ -4667,7 +4930,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  globalThis.__niNextNonDesc=function(n,root){while(n&&n!==root){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}return null;};
             \\  globalThis.__niPreRemove=function(node){for(var i=0;i<__niRegistry.length;i++){var it=__niRegistry[i];if(!it)continue;var ref=it._ref,root=it.root;if(node===root)continue;var d=ref,isAnc=false;while(d){if(d===node){isAnc=true;break;}d=d.parentNode;}if(!isAnc)continue;if(!it._before){it._ref=__niPrev(node);continue;}var next=__niNextNonDesc(node,root);if(next){it._ref=next;continue;}it._ref=__niPrev(node);it._before=false;}};
             \\  if(typeof MediaQueryList==='undefined'){globalThis.MediaQueryList=function(){};MediaQueryList.prototype[Symbol.toStringTag]='MediaQueryList';}
-            \\  function rrl(C,attr){Object.defineProperty(C.prototype,'relList',{get:function(){var el=this;var tl=Object.create(DOMTokenList.prototype);tl.toString=function(){return el.getAttribute(attr)||'';};Object.defineProperty(tl,'value',{get:function(){return el.getAttribute(attr)||'';},set:function(v){el.setAttribute(attr,v);}});tl.contains=function(t){return(' '+this.value+' ').indexOf(' '+t+' ')>=0;};tl.add=function(){var v=this.value;for(var i=0;i<arguments.length;i++){var t=arguments[i];if(!this.contains(t))v+=(v?' ':'')+t;}el.setAttribute(attr,v);};tl.remove=function(){for(var i=0;i<arguments.length;i++){var t=arguments[i];var v=(' '+this.value+' ').split(' '+t+' ').join(' ').trim();el.setAttribute(attr,v);}};tl.toggle=function(t,f){if(f!==undefined){if(f)this.add(t);else this.remove(t);return f;}if(this.contains(t)){this.remove(t);return false;}this.add(t);return true;};tl.item=function(i){var a=this.value.split(/\s+/).filter(Boolean);return a[i]||null;};Object.defineProperty(tl,'length',{get:function(){return this.value.split(/\s+/).filter(Boolean).length;}});tl.supports=function(){return true;};tl[Symbol.iterator]=function(){return this.value.split(/\s+/).filter(Boolean)[Symbol.iterator]();};return tl;},configurable:true,enumerable:true});}
+            \\  function rrl(C,attr){Object.defineProperty(C.prototype,'relList',{get:function(){var el=this;if(el.__relList)return el.__relList;function vt(t){t=String(t);if(t==='')throw new DOMException('The token provided must not be empty.','SyntaxError');if(/[\x09\x0A\x0C\x0D\x20]/.test(t))throw new DOMException('The token provided contains HTML space characters, which are not valid in tokens.','InvalidCharacterError');return t;}function tok(v){var a=String(v||'').split(/\s+/).filter(Boolean),r=[];for(var i=0;i<a.length;i++)if(r.indexOf(a[i])<0)r.push(a[i]);return r;}function upd(){if(el.getAttribute(attr)!==null)el.setAttribute(attr,tok(el.getAttribute(attr)).join(' '));}var tl=Object.create(DOMTokenList.prototype);tl.toString=function(){return el.getAttribute(attr)||'';};Object.defineProperty(tl,'value',{get:function(){return el.getAttribute(attr)||'';},set:function(v){el.setAttribute(attr,v);}});tl.contains=function(t){t=String(t);return tok(this.value).indexOf(t)>=0;};tl.add=function(){if(arguments.length===0){upd();return;}var add=[],a=tok(this.value);for(var i=0;i<arguments.length;i++)add.push(vt(arguments[i]));for(var j=0;j<add.length;j++)if(a.indexOf(add[j])<0)a.push(add[j]);el.setAttribute(attr,a.join(' '));};tl.remove=function(){if(arguments.length===0){upd();return;}var drop=[];for(var i=0;i<arguments.length;i++)drop.push(vt(arguments[i]));if(el.getAttribute(attr)===null)return;var a=tok(this.value),out=[];for(var j=0;j<a.length;j++)if(drop.indexOf(a[j])<0)out.push(a[j]);el.setAttribute(attr,out.join(' '));};tl.toggle=function(t,f){t=vt(t);if(f!==undefined){if(f)this.add(t);else this.remove(t);return !!f;}if(this.contains(t)){this.remove(t);return false;}this.add(t);return true;};tl.replace=function(o,n){o=String(o);n=String(n);if(o===''||n==='')throw new DOMException('The token provided must not be empty.','SyntaxError');if(/[\x09\x0A\x0C\x0D\x20]/.test(o)||/[\x09\x0A\x0C\x0D\x20]/.test(n))throw new DOMException('The token provided contains HTML space characters, which are not valid in tokens.','InvalidCharacterError');var a=tok(this.value),ok=false;for(var i=0;i<a.length;i++){if(a[i]===o){a[i]=n;ok=true;break;}}if(!ok)return false;var out=[];for(var j=0;j<a.length;j++)if(out.indexOf(a[j])<0)out.push(a[j]);el.setAttribute(attr,out.join(' '));return true;};tl.item=function(i){var a=tok(this.value);return a[i>>>0]||null;};Object.defineProperty(tl,'length',{get:function(){return tok(this.value).length;}});tl.supports=function(t){t=String(t);var kws=' alternate author bookmark canonical dns-prefetch external help icon license manifest modulepreload next nofollow noopener noreferrer opener pingback preconnect prefetch preload prerender prev search stylesheet tag ';return kws.indexOf(' '+t.toLowerCase()+' ')>=0;};tl.values=function(){return tok(this.value)[Symbol.iterator]();};tl.keys=function(){var a=tok(this.value),r=[];for(var i=0;i<a.length;i++)r.push(i);return r[Symbol.iterator]();};tl.entries=function(){var a=tok(this.value),r=[];for(var i=0;i<a.length;i++)r.push([i,a[i]]);return r[Symbol.iterator]();};tl.forEach=function(cb,thisArg){var a=tok(this.value);for(var i=0;i<a.length;i++)cb.call(thisArg,a[i],i,this);};tl[Symbol.iterator]=tl.values;Object.defineProperty(el,'__relList',{value:tl,configurable:true});return tl;},configurable:true,enumerable:true});}
             \\  if(typeof HTMLAnchorElement!=='undefined'){var A=HTMLAnchorElement;ru(A,'href');rs(A,'target');rs(A,'download');rs(A,'rel');rs(A,'hreflang');rs(A,'type');rs(A,'text');rrp(A);rrl(A,'rel');
             \\    (function(){function urlProp(p,fn){Object.defineProperty(A.prototype,p,{get:function(){try{var u=new URL(this.getAttribute('href')||'',document.baseURI);return fn(u);}catch(e){return'';}},configurable:true,enumerable:true});}
             \\    urlProp('protocol',function(u){return u.protocol;});urlProp('hostname',function(u){return u.hostname;});urlProp('port',function(u){return u.port;});urlProp('pathname',function(u){return u.pathname;});urlProp('search',function(u){return u.search;});urlProp('hash',function(u){return u.hash;});urlProp('host',function(u){return u.host;});urlProp('origin',function(u){return u.origin;});})();}
@@ -5540,12 +5803,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  };
             \\  Object.defineProperty(doc,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
-            \\  Object.defineProperty(doc,'childNodes',{get:function(){return Array.prototype.slice.call(_ch);},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'childNodes',{get:function(){var a=Array.prototype.slice.call(_ch);a.item=function(i){i=i>>>0;return i<a.length?a[i]:null;};return a;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'firstChild',{get:function(){return _ch.length>0?_ch[0]:null;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'lastChild',{get:function(){return _ch.length>0?_ch[_ch.length-1]:null;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'documentElement',{get:function(){return _elemCh(null);},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'doctype',{get:function(){return _dtCh(null);},configurable:true,enumerable:true});
-            \\  Object.defineProperty(doc,'children',{get:function(){return _ch.filter(function(n){return _nt(n)===1;});},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'children',{get:function(){var a=_ch.filter(function(n){return _nt(n)===1;});a.item=function(i){i=i>>>0;return i<a.length?a[i]:null;};return a;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'childElementCount',{get:function(){var c=0;for(var i=0;i<_ch.length;i++)if(_nt(_ch[i])===1)c++;return c;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'head',{get:function(){var de=_elemCh(null);return de?de.querySelector('head'):null;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'body',{get:function(){var de=_elemCh(null);return de?de.querySelector('body'):null;},configurable:true,enumerable:true});
@@ -5701,8 +5964,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function Document() {
             \\    Object.defineProperty(this,'nodeType',{value:9,writable:false,configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'nodeName',{value:'#document',writable:false,configurable:true,enumerable:true});
-            \\    this._childNodes = [];this._childNodes.item=function(i){return i>=0&&i<this.length?this[i]:null;};
-            \\    this._children = [];this._children.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\    this._childNodes = [];this._childNodes.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
+            \\    this._children = [];this._children.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
             \\    Object.defineProperty(this,'childNodes',{get:function(){return this._childNodes;},configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'children',{get:function(){return this._children;},configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'firstChild',{value:null,writable:true,configurable:true,enumerable:true});
@@ -5843,11 +6106,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\if(typeof document._childNodes==='undefined'){
             \\  var _nativeChildNodes=document.childNodes;
             \\  document._childNodes=_nativeChildNodes&&_nativeChildNodes.length?Array.from(_nativeChildNodes):[];
-            \\  document._childNodes.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  document._childNodes.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
             \\  document._children=[];
             \\  for(var _i=0;_i<document._childNodes.length;_i++){if(document._childNodes[_i]&&document._childNodes[_i].nodeType===1)document._children.push(document._childNodes[_i]);}
-            \\  document._children.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  document._children.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
             \\}
+            \\Object.defineProperty(document,'childNodes',{get:function(){var a=document._childNodes?Array.from(document._childNodes):[];a.item=function(i){i=i>>>0;return i<a.length?a[i]:null;};return a;},configurable:true,enumerable:true});
+            \\Object.defineProperty(document,'children',{get:function(){var a=document._children?Array.from(document._children):(document.documentElement?[document.documentElement]:[]);a.item=function(i){i=i>>>0;return i<a.length?a[i]:null;};return a;},configurable:true,enumerable:true});
         ;
         const fix_r = qjs.JS_Eval(ctx, fix_proto_js, fix_proto_js.len, "<fix-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
         qjs.JS_FreeValue(ctx, fix_r);
@@ -6090,7 +6355,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      get:function(t,p){
             \\        if(p==='length'){refresh();return arr.length;}
             \\        if(typeof p==='string'&&/^\d+$/.test(p)){refresh();var i=+p;return i<arr.length?arr[i]:void 0;}
-            \\        if(p==='item')return function(i){refresh();return i>=0&&i<arr.length?arr[i]:null;};
+            \\        if(p==='item')return function(i){refresh();i=i>>>0;return i<arr.length?arr[i]:null;};
             \\        if(p===Symbol.iterator)return Array.prototype[Symbol.iterator];
             \\        if(p==='keys')return Array.prototype.keys;
             \\        if(p==='values')return Array.prototype.values||Array.prototype[Symbol.iterator];
@@ -6261,14 +6526,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _CSSGroupingRuleBase(){}
             \\  Object.setPrototypeOf(_CSSGroupingRuleBase.prototype,_CSSRuleBase.prototype);
             \\  _CSSGroupingRuleBase.prototype.insertRule=function(rule,index){
-            \\    if(index===void 0)index=this.cssRules.length;
+            \\    if(index===void 0)index=0;
+            \\    index=index>>>0;
             \\    if(index<0||index>this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
             \\    var parsed=_parseOneRule(rule);if(!parsed)throw new DOMException('Invalid rule','SyntaxError');
-            \\    this.cssRules.splice(index,0,parsed);return index;
+            \\    parsed._parentRule=this;
+            \\    this.cssRules.splice(index,0,parsed);if(this._parentStyleSheet)_syncToDOM(this._parentStyleSheet);return index;
             \\  };
             \\  _CSSGroupingRuleBase.prototype.deleteRule=function(index){
+            \\    if(index===void 0)index=0;
+            \\    index=index>>>0;
             \\    if(index<0||index>=this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
+            \\    var removed=this.cssRules[index];
             \\    this.cssRules.splice(index,1);
+            \\    _clearParentRefs([removed]);
+            \\    if(this._parentStyleSheet)_syncToDOM(this._parentStyleSheet);
             \\  };
             \\  globalThis.CSSGroupingRule=_CSSGroupingRuleBase;
             \\
@@ -6309,17 +6581,52 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var entries=[],pos=0,len=text?text.length:0;
             \\    while(pos<len){
             \\      while(pos<len&&' \t\r\n'.indexOf(text[pos])!==-1)pos++;
+            \\      if(text[pos]==='/'&&text[pos+1]==='*'){
+            \\        pos+=2;
+            \\        while(pos+1<len&&!(text[pos]==='*'&&text[pos+1]==='/'))pos++;
+            \\        pos+=2;
+            \\        continue;
+            \\      }
             \\      if(pos>=len)break;
             \\      var ns=pos;
-            \\      while(pos<len&&text[pos]!==':'&&text[pos]!==';')pos++;
+            \\      while(pos<len&&text[pos]!==':'&&text[pos]!==';'){
+            \\        if(text[pos]==='/'&&text[pos+1]==='*'){
+            \\          pos+=2;
+            \\          while(pos+1<len&&!(text[pos]==='*'&&text[pos+1]==='/'))pos++;
+            \\          pos+=2;
+            \\          continue;
+            \\        }
+            \\        pos++;
+            \\      }
             \\      if(pos>=len||text[pos]!==':'){while(pos<len&&text[pos]!==';')pos++;if(pos<len)pos++;continue;}
-            \\      var nm=text.substring(ns,pos).trim().toLowerCase();pos++;
+            \\      var nm=_cssPropName(text.substring(ns,pos).replace(/\/\*[\s\S]*?\*\//g,' ').trim());pos++;
             \\      var vs=pos,dep=0;
-            \\      while(pos<len){var ch=text[pos];if(ch==='(')dep++;else if(ch===')')dep--;else if(ch===';'&&dep===0)break;pos++;}
+            \\      while(pos<len){
+            \\        var ch=text[pos];
+            \\        if(ch==='/'&&text[pos+1]==='*'){
+            \\          pos+=2;
+            \\          while(pos+1<len&&!(text[pos]==='*'&&text[pos+1]==='/'))pos++;
+            \\          pos+=2;
+            \\          continue;
+            \\        }
+            \\        if(ch==='"'||ch==="'"){
+            \\          var q=ch;pos++;
+            \\          while(pos<len){
+            \\            if(text[pos]==='\\'){pos+=2;continue;}
+            \\            if(text[pos]===q){pos++;break;}
+            \\            pos++;
+            \\          }
+            \\          continue;
+            \\        }
+            \\        if(ch==='(')dep++;
+            \\        else if(ch===')')dep--;
+            \\        else if(ch===';'&&dep===0)break;
+            \\        pos++;
+            \\      }
             \\      var raw=text.substring(vs,pos).trim();
             \\      var imp=false;
             \\      if(/!important\s*$/i.test(raw)){imp=true;raw=raw.replace(/\s*!important\s*$/i,'').trim();}
-            \\      if(nm&&raw)entries.push({name:nm,value:raw,important:imp});
+            \\      if(nm&&(raw||nm.indexOf('--')===0))entries.push({name:nm,value:raw,important:imp});
             \\      if(pos<len)pos++;
             \\    }
             \\    return entries;
@@ -6336,38 +6643,40 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this._rule=rule;this._sheet=sheet;
             \\    this._entries=_parseDecls(rule?rule._decls:'');
             \\  }
+            \\  function _cssPropName(n){n=String(n);return n.indexOf('--')===0?n:n.toLowerCase();}
             \\  CSSStyleDeclaration.prototype._commit=function(){
             \\    if(this._rule){this._rule._decls=_serializeDecls(this._entries);if(this._sheet)_syncToDOM(this._sheet);}
             \\  };
             \\  Object.defineProperty(CSSStyleDeclaration.prototype,'length',{get:function(){return this._entries.length;},enumerable:true,configurable:true});
-            \\  CSSStyleDeclaration.prototype.item=function(i){var e=this._entries[i];return e?e.name:'';};
+            \\  CSSStyleDeclaration.prototype.item=function(i){var e=this._entries[i>>>0];return e?e.name:'';};
             \\  CSSStyleDeclaration.prototype.getPropertyValue=function(n){
-            \\    n=n.toLowerCase();
+            \\    n=_cssPropName(n);
             \\    for(var i=0;i<this._entries.length;i++)if(this._entries[i].name===n)return this._entries[i].value;
             \\    return '';
             \\  };
             \\  CSSStyleDeclaration.prototype.getPropertyPriority=function(n){
-            \\    n=n.toLowerCase();
+            \\    n=_cssPropName(n);
             \\    for(var i=0;i<this._entries.length;i++)if(this._entries[i].name===n)return this._entries[i].important?'important':'';
             \\    return '';
             \\  };
             \\  CSSStyleDeclaration.prototype.setProperty=function(n,v,p){
-            \\    n=n.toLowerCase();v=String(v).trim();
-            \\    // CSSOM §6.7.3 step 4: non-empty priority that is not "important" → return
-            \\    if(typeof p==='string'&&p!==''&&p.toLowerCase()!=='important')return;
-            \\    var imp=typeof p==='string'&&p.toLowerCase()==='important';
+            \\    n=_cssPropName(n);v=arguments.length<2?'':String(v).trim();
+            \\    p=p===undefined?'':String(p);
+            \\    // CSSOM §6.7.3 step 4: invalid priority is ignored only when value is empty.
+            \\    if(v!==''&&p!==''&&p.toLowerCase()!=='important')return;
+            \\    var imp=p.toLowerCase()==='important';
             \\    for(var i=0;i<this._entries.length;i++){if(this._entries[i].name===n){if(v===''){this._entries.splice(i,1);}else{this._entries[i].value=v;this._entries[i].important=imp;}this._commit();return;}}
             \\    if(v!=='')this._entries.push({name:n,value:v,important:imp});
             \\    this._commit();
             \\  };
             \\  CSSStyleDeclaration.prototype.removeProperty=function(n){
-            \\    n=n.toLowerCase();
+            \\    n=_cssPropName(n);
             \\    for(var i=0;i<this._entries.length;i++){if(this._entries[i].name===n){var old=this._entries[i].value;this._entries.splice(i,1);this._commit();return old;}}
             \\    return '';
             \\  };
             \\  Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{
             \\    get:function(){return _serializeDecls(this._entries);},
-            \\    set:function(v){this._entries=_parseDecls(v);this._commit();},
+            \\    set:function(v){this._entries=_parseDecls(String(v));this._commit();},
             \\    enumerable:true,configurable:true
             \\  });
             \\  globalThis.CSSStyleDeclaration=CSSStyleDeclaration;
@@ -6376,7 +6685,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function CSSStyleRule(sel,decls,childRules){this._type=1;this._sel=sel;this._decls=decls||'';this.cssRules=childRules||[];this.style=new CSSStyleDeclaration(this,null);}
             \\  Object.setPrototypeOf(CSSStyleRule.prototype,_CSSGroupingRuleBase.prototype);
             \\  globalThis.CSSStyleRule=CSSStyleRule;
-            \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{get:function(){return this._sel;},set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=_canonSel(c);}catch(e){}},enumerable:true,configurable:true});
+            \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{get:function(){return this._sel;},set:function(v){var c=String(v).replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=_canonSel(c);if(this._parentStyleSheet)_syncToDOM(this._parentStyleSheet);}catch(e){}},enumerable:true,configurable:true});
             \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){
             \\    if(this.cssRules.length===0){return this._sel+' { '+(this._decls||'')+' }';}
             \\    var t=this._sel+' {\n';
@@ -6400,7 +6709,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.mediaText=this._items.join(', ');
             \\  }
             \\  Object.defineProperty(_MediaList.prototype,'length',{get:function(){return this._items.length;},enumerable:true,configurable:true});
-            \\  _MediaList.prototype.item=function(i){return this._items[i]||null;};
+            \\  _MediaList.prototype.item=function(i){return this._items[i>>>0]||null;};
             \\  _MediaList.prototype.toString=function(){return this.mediaText;};
             \\
             \\  // CSSOM §6.4.1: CSSStyleSheet constructor
@@ -6428,11 +6737,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.cssText)css+=r.cssText+'\n';}
             \\    return css;
             \\  }
-            \\  function _setParentSheet(rules,sheet){
+            \\  function _setParentSheet(rules,sheet,parentRule){
             \\    for(var i=0;i<rules.length;i++){
             \\      var r=rules[i];r._parentStyleSheet=sheet;
+            \\      r._parentRule=parentRule||null;
             \\      if(r.style&&r.style._sheet===null)r.style._sheet=sheet;
-            \\      if(r.cssRules&&r.cssRules.length)_setParentSheet(r.cssRules,sheet);
+            \\      if(r.cssRules&&r.cssRules.length)_setParentSheet(r.cssRules,sheet,r);
             \\    }
             \\  }
             \\  function _syncToDOM(sheet){
@@ -6473,13 +6783,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  _Sheet.prototype.insertRule=function(rule,index){
             \\    if(index===void 0)index=0;
+            \\    index=index>>>0;
             \\    // CSSOM §6.4: @import not allowed in constructed sheets
             \\    var ruleT=rule.replace(/\/\*[\s\S]*?\*\//g,' ').trim();
             \\    if(/^@import\b/i.test(ruleT)){throw new DOMException("@import rules are not allowed in constructed stylesheets.",'SyntaxError');}
-            \\    var bi=rule.indexOf('{');
+            \\    var bi=_findOpenBrace(rule,0);
             \\    if(bi===-1){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
             \\    var head=rule.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
-            \\    var ei=rule.lastIndexOf('}');
+            \\    var end=_findMatchingBrace(rule,bi);
+            \\    if(rule[end-1]!=='}'||rule.substring(end).replace(/\/\*[\s\S]*?\*\//g,' ').trim()){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
+            \\    var ei=end-1;
             \\    var body=ei>bi?rule.substring(bi+1,ei).trim():'';
             \\    if(!head){var ex=new DOMException("Invalid rule",'SyntaxError');ex.code=12;throw ex;}
             \\    if(index<0||index>this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
@@ -6499,12 +6812,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    return index;
             \\  };
             \\  _Sheet.prototype.deleteRule=function(index){
+            \\    if(index===void 0)index=0;
+            \\    index=index>>>0;
             \\    if(index<0||index>=this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
+            \\    var removed=this.cssRules[index];
             \\    this.cssRules.splice(index,1);
+            \\    _clearParentRefs([removed]);
             \\    _syncToDOM(this);
             \\  };
             \\  // Mutate in-place to preserve [SameObject] identity of cssRules
-            \\  function _replaceRules(arr,newRules){arr.length=0;for(var i=0;i<newRules.length;i++)arr.push(newRules[i]);}
+            \\  function _clearParentRefs(rules){for(var i=0;i<rules.length;i++){var r=rules[i];r._parentRule=null;r._parentStyleSheet=null;if(r.style)r.style._sheet=null;if(r.cssRules&&r.cssRules.length)_clearParentRefs(r.cssRules);}}
+            \\  function _replaceRules(arr,newRules){_clearParentRefs(arr);arr.length=0;for(var i=0;i<newRules.length;i++)arr.push(newRules[i]);}
             \\  // CSSOM §6.4.2: replaceSync — throws NotAllowedError for non-constructed, drops @import
             \\  _Sheet.prototype.replaceSync=function(css){
             \\    if(!this._constructed)throw new DOMException("replaceSync can only be called on constructed CSSStyleSheet.",'NotAllowedError');
@@ -6523,23 +6841,98 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  // ── style.sheet property via Element prototype getter ──
             \\  var _sheetMap=new WeakMap();
             \\  function _parseOneRule(text){
-            \\    var bi=text.indexOf('{');if(bi===-1)return null;
+            \\    var bi=_findOpenBrace(text,0);if(bi===-1)return null;
             \\    var sel=text.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
-            \\    var ei=text.lastIndexOf('}');var body=ei>bi?text.substring(bi+1,ei).trim():'';
+            \\    var end=_findMatchingBrace(text,bi);
+            \\    if(text[end-1]!=='}'||text.substring(end).replace(/\/\*[\s\S]*?\*\//g,' ').trim())throw new DOMException("Invalid rule",'SyntaxError');
+            \\    var ei=end-1;var body=ei>bi?text.substring(bi+1,ei).trim():'';
             \\    if(!sel)return null;
+            \\    if(/^@(media|supports)\b/i.test(sel))return _parseAtRule(sel,body);
+            \\    try{document.querySelector(sel);}catch(e){throw new DOMException("Invalid selector",'SyntaxError');}
             \\    var parsed=_parseBody(body);
             \\    return new CSSStyleRule(_canonSel(sel),parsed.decls,parsed.children);
+            \\  }
+            \\  function _findDeclSemi(text,start){
+            \\    var dep=0;
+            \\    for(var p=start;p<text.length;p++){
+            \\      var ch=text[p];
+            \\      if(ch==='/'&&text[p+1]==='*'){
+            \\        p+=2;
+            \\        while(p+1<text.length&&!(text[p]==='*'&&text[p+1]==='/'))p++;
+            \\        p++;
+            \\        continue;
+            \\      }
+            \\      if(ch==='"'||ch==="'"){
+            \\        var q=ch;p++;
+            \\        while(p<text.length){
+            \\          if(text[p]==='\\'){p+=2;continue;}
+            \\          if(text[p]===q)break;
+            \\          p++;
+            \\        }
+            \\        continue;
+            \\      }
+            \\      if(ch==='(')dep++;
+            \\      else if(ch===')'&&dep>0)dep--;
+            \\      else if(ch===';'&&dep===0)return p;
+            \\    }
+            \\    return -1;
+            \\  }
+            \\  function _findOpenBrace(text,start){
+            \\    for(var p=start;p<text.length;p++){
+            \\      var ch=text[p];
+            \\      if(ch==='/'&&text[p+1]==='*'){
+            \\        p+=2;
+            \\        while(p+1<text.length&&!(text[p]==='*'&&text[p+1]==='/'))p++;
+            \\        p++;
+            \\        continue;
+            \\      }
+            \\      if(ch==='"'||ch==="'"){
+            \\        var q=ch;p++;
+            \\        while(p<text.length){
+            \\          if(text[p]==='\\'){p+=2;continue;}
+            \\          if(text[p]===q)break;
+            \\          p++;
+            \\        }
+            \\        continue;
+            \\      }
+            \\      if(ch==='{')return p;
+            \\    }
+            \\    return -1;
+            \\  }
+            \\  function _findMatchingBrace(text,openIndex){
+            \\    var d=1;
+            \\    for(var p=openIndex+1;p<text.length;p++){
+            \\      var ch=text[p];
+            \\      if(ch==='/'&&text[p+1]==='*'){
+            \\        p+=2;
+            \\        while(p+1<text.length&&!(text[p]==='*'&&text[p+1]==='/'))p++;
+            \\        p++;
+            \\        continue;
+            \\      }
+            \\      if(ch==='"'||ch==="'"){
+            \\        var q=ch;p++;
+            \\        while(p<text.length){
+            \\          if(text[p]==='\\'){p+=2;continue;}
+            \\          if(text[p]===q)break;
+            \\          p++;
+            \\        }
+            \\        continue;
+            \\      }
+            \\      if(ch==='{')d++;
+            \\      else if(ch==='}'){d--;if(d===0)return p+1;}
+            \\    }
+            \\    return text.length;
             \\  }
             \\  function _parseBody(body){
             \\    var decls='',children=[],pendingDecls='',i=0;
             \\    while(i<body.length){
             \\      while(i<body.length&&' \n\r\t'.indexOf(body[i])!==-1)i++;
             \\      if(i>=body.length)break;
-            \\      if(body[i]==='@'){var bi=body.indexOf('{',i);if(bi===-1)break;var d=1,j=bi+1;while(j<body.length&&d>0){if(body[j]==='{')d++;if(body[j]==='}')d--;j++;}i=j;continue;}
-            \\      var bi=body.indexOf('{',i);var si=body.indexOf(';',i);
+            \\      if(body[i]==='@'){var bi=_findOpenBrace(body,i);if(bi===-1)break;var j=_findMatchingBrace(body,bi);i=j;continue;}
+            \\      var bi=_findOpenBrace(body,i);var si=_findDeclSemi(body,i);
             \\      if(bi!==-1&&(si===-1||bi<si)){
             \\        var sel=body.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
-            \\        var d=1,j=bi+1;while(j<body.length&&d>0){if(body[j]==='{')d++;if(body[j]==='}')d--;j++;}
+            \\        var j=_findMatchingBrace(body,bi);
             \\        var innerBody=body.substring(bi+1,j-1).trim();
             \\        if(pendingDecls){children.push(new CSSNestedDeclarations(pendingDecls.replace(/;\s*$/,'').trim()));pendingDecls='';}
             \\        if(sel){var inner=_parseBody(innerBody);children.push(new CSSStyleRule(_canonSel(sel),inner.decls,inner.children));}
@@ -6570,20 +6963,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var rules=[],i=0;
             \\    while(i<css.length){
             \\      while(i<css.length&&' \n\r\t'.indexOf(css[i])!==-1)i++;
+            \\      if(css[i]==='/'&&css[i+1]==='*'){
+            \\        i+=2;
+            \\        while(i+1<css.length&&!(css[i]==='*'&&css[i+1]==='/'))i++;
+            \\        i+=2;
+            \\        continue;
+            \\      }
             \\      if(i>=css.length)break;
             \\      if(css[i]==='@'){
-            \\        var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);
+            \\        var si2=_findDeclSemi(css,i),bi2=_findOpenBrace(css,i);
             \\        if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?css.length:si2+1;continue;}
             \\        var atHead2=css.substring(i,bi2).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
-            \\        var d=1,j=bi2+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}
+            \\        var j=_findMatchingBrace(css,bi2);
             \\        var innerBody2=css.substring(bi2+1,j-1).trim();
             \\        var atRule=_parseAtRule(atHead2,innerBody2);
             \\        if(atRule)rules.push(atRule);
             \\        i=j;continue;
             \\      }
-            \\      var bi=css.indexOf('{',i);if(bi===-1)break;
+            \\      var bi=_findOpenBrace(css,i);if(bi===-1)break;
             \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
-            \\      var d2=1,j2=bi+1;while(j2<css.length&&d2>0){if(css[j2]==='{')d2++;if(css[j2]==='}')d2--;j2++;}
+            \\      var j2=_findMatchingBrace(css,bi);
             \\      var innerBody=css.substring(bi+1,j2-1).trim();
             \\      if(sel){var parsed=_parseBody(innerBody);rules.push(new CSSStyleRule(_canonSel(sel),parsed.decls,parsed.children));}
             \\      i=j2;
@@ -6595,7 +6994,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var sh=_sheetMap.get(this);
             \\    if(!sh){sh=new _Sheet();sh._constructed=false;sh.ownerNode=this;_sheetMap.set(this,sh);sh._lastText=null;}
             \\    var txt=this.textContent||'';
-            \\    if(txt!==sh._lastText){sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;_setParentSheet(sh.cssRules,sh);}
+            \\    if(txt!==sh._lastText){_clearParentRefs(sh.cssRules);sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;_setParentSheet(sh.cssRules,sh);}
             \\    return sh;
             \\  },configurable:true,enumerable:true});
             \\
@@ -6608,7 +7007,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      if(el&&el.getAttribute&&el.getAttribute('data-adopted')==='1')continue;
             \\      if(el&&el.sheet)sheets.push(el.sheet);
             \\    }
-            \\    sheets.item=function(i){return this[i]||null;};
+            \\    sheets.item=function(i){return this[i>>>0]||null;};
             \\    return sheets;
             \\  },configurable:true,enumerable:true});
             \\
@@ -6705,7 +7104,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\              if(el.getAttribute&&el.getAttribute('data-adopted')==='1')continue;
             \\              if(el.sheet)sheets.push(el.sheet);
             \\            }
-            \\            sheets.item=function(i){return this[i]||null;};
+            \\            sheets.item=function(i){return this[i>>>0]||null;};
             \\            return sheets;
             \\          },
             \\          configurable:true,enumerable:true

@@ -64,6 +64,64 @@ fn classContains(class_str: []const u8, needle: []const u8) bool {
     return api.classContains(class_str, needle);
 }
 
+fn classTokenSeenBefore(class_str: []const u8, token: []const u8) bool {
+    var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
+    while (iter.next()) |cls| {
+        if (cls.ptr == token.ptr and cls.len == token.len) return false;
+        if (std.mem.eql(u8, cls, token)) return true;
+    }
+    return false;
+}
+
+fn appendClassToken(out: *std.ArrayListUnmanaged(u8), token: []const u8) !void {
+    if (out.items.len > 0) try out.append(std.heap.page_allocator, ' ');
+    try out.appendSlice(std.heap.page_allocator, token);
+}
+
+fn setClassAttributeBytes(elem: *lxb.lxb_dom_element_t, bytes: []const u8) void {
+    const ptr = if (bytes.len == 0) "" else bytes.ptr;
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, ptr, bytes.len);
+}
+
+fn dupCurrentAttributeValue(elem: *lxb.lxb_dom_element_t, name: []const u8) ?[]u8 {
+    var len: usize = 0;
+    const ptr = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &len) orelse return null;
+    const copy = std.heap.page_allocator.dupe(u8, ptr[0..len]) catch return null;
+    return copy;
+}
+
+fn dupAttrValue(attr: *anyopaque) ?[]u8 {
+    var len: usize = 0;
+    const ptr = lxb_dom_attr_value_noi(attr, &len) orelse return null;
+    return std.heap.page_allocator.dupe(u8, ptr[0..len]) catch null;
+}
+
+fn lowercaseAttrNameDynamic(
+    c: *qjs.JSContext,
+    name: []const u8,
+    stack_buf: *[1024]u8,
+    heap_buf: *?[]u8,
+) ?[]const u8 {
+    var has_upper = false;
+    for (name) |ch| {
+        if (ch >= 'A' and ch <= 'Z') {
+            has_upper = true;
+            break;
+        }
+    }
+    if (!has_upper) return name;
+    if (name.len <= stack_buf.len) return lowercaseAttrName(name, stack_buf);
+
+    heap_buf.* = std.heap.page_allocator.alloc(u8, name.len) catch {
+        _ = qjs.JS_ThrowTypeError(c, "out of memory");
+        return null;
+    };
+    for (name, 0..) |ch, i| {
+        heap_buf.*.?[i] = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+    }
+    return heap_buf.*.?;
+}
+
 /// Returns true if the element's owner document is an XML document
 /// (i.e. `document._isXmlDoc === true`). Used to gate ASCII-lowercasing
 /// of non-namespaced attribute names per DOM §4.9 / HTML §2.1: HTML
@@ -120,18 +178,8 @@ pub fn elementSetId(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
-    // Capture old value for MutationObserver
-    var _ov_buf: [4096]u8 = undefined;
-    var old_val: ?[]const u8 = null;
-    {
-        var ov_len: usize = 0;
-        const ov_ptr = lxb_dom_element_get_attribute(elem, "id", 2, &ov_len);
-        if (ov_ptr != null) {
-            const cl = @min(ov_len, _ov_buf.len);
-            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
-            old_val = _ov_buf[0..cl];
-        }
-    }
+    const old_val = dupCurrentAttributeValue(elem, "id");
+    defer if (old_val) |v| std.heap.page_allocator.free(v);
     _ = lxb_dom_element_set_attribute(elem, "id", 2, s.ptr, s.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     events.recordMutationWithOldValue(node, "attributes", null, null, "id", old_val);
@@ -165,18 +213,8 @@ pub fn elementSetClassName(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
-    // Capture old class value before modification
-    var _ov_buf: [4096]u8 = undefined;
-    var old_val: ?[]const u8 = null;
-    {
-        var ov_len: usize = 0;
-        const ov_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &ov_len);
-        if (ov_ptr != null) {
-            const cl = @min(ov_len, _ov_buf.len);
-            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
-            old_val = _ov_buf[0..cl];
-        }
-    }
+    const old_val = dupCurrentAttributeValue(elem, "class");
+    defer if (old_val) |v| std.heap.page_allocator.free(v);
     _ = lxb_dom_element_set_attribute(elem, "class", 5, s.ptr, s.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     events.recordMutationWithOldValue(node, "attributes", null, null, "class", old_val);
@@ -198,10 +236,12 @@ pub fn elementGetAttribute(
     defer qjs.JS_FreeCString(c, s.ptr);
     // DOM §4.9 getAttribute: ASCII-lowercase only for HTML-document elements.
     var lower_buf: [1024]u8 = undefined;
+    var lower_heap: ?[]u8 = null;
+    defer if (lower_heap) |h| std.heap.page_allocator.free(h);
     const name = if (isXmlDocumentForElement(c, this_val))
         s.ptr[0..s.len]
     else
-        lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+        (lowercaseAttrNameDynamic(c, s.ptr[0..s.len], &lower_buf, &lower_heap) orelse return quickjs.JS_NULL());
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
     if (val == null) {
@@ -235,23 +275,14 @@ pub fn elementSetAttribute(
     // DOM §4.9: if element is in an HTML document, ASCII-lowercase the
     // qualified name; XML documents preserve case.
     var lower_buf: [1024]u8 = undefined;
+    var lower_heap: ?[]u8 = null;
+    defer if (lower_heap) |h| std.heap.page_allocator.free(h);
     const attr_name = if (isXmlDocumentForElement(c, this_val))
         name.ptr[0..name.len]
     else
-        lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
-    // Capture old value before setting (for MutationObserver attributeOldValue)
-    // Must copy to stack buffer because lexbor invalidates pointer on set_attribute
-    var old_val_buf: [4096]u8 = undefined;
-    var old_val_copy: ?[]const u8 = null;
-    {
-        var ov_len: usize = 0;
-        const ov_ptr = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &ov_len);
-        if (ov_ptr != null) {
-            const copy_len = @min(ov_len, old_val_buf.len);
-            @memcpy(old_val_buf[0..copy_len], ov_ptr.?[0..copy_len]);
-            old_val_copy = old_val_buf[0..copy_len];
-        }
-    }
+        (lowercaseAttrNameDynamic(c, name.ptr[0..name.len], &lower_buf, &lower_heap) orelse return quickjs.JS_EXCEPTION());
+    const old_val_copy = dupCurrentAttributeValue(elem, attr_name);
+    defer if (old_val_copy) |v| std.heap.page_allocator.free(v);
     _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     // DOM §4.3.3: MutationObserver reachability is determined by the isDescendant
@@ -400,18 +431,8 @@ pub fn elementSetAttributeNS(
                                 const req_ns = namespace orelse "";
                                 if (std.mem.eql(u8, stored, req_ns)) {
                                     // Same ns+local, different prefix: update value in-place, keep original qname
-                                    // Capture old value for MutationObserver
-                                    var _ov_ns: [4096]u8 = undefined;
-                                    var ov_ns: ?[]const u8 = null;
-                                    {
-                                        var ovl: usize = 0;
-                                        const ovp = lxb_dom_attr_value_noi(attr, &ovl);
-                                        if (ovp != null) {
-                                            const cl2 = @min(ovl, _ov_ns.len);
-                                            @memcpy(_ov_ns[0..cl2], ovp.?[0..cl2]);
-                                            ov_ns = _ov_ns[0..cl2];
-                                        }
-                                    }
+                                    const ov_ns = dupAttrValue(attr);
+                                    defer if (ov_ns) |v| std.heap.page_allocator.free(v);
                                     _ = lxb_dom_element_set_attribute(elem, attr_qn.ptr, attr_qn.len, val.ptr, val.len);
                                     const node_m: *lxb.lxb_dom_node_t = @ptrCast(elem);
                                     events.recordMutationAttrNS(node_m, local_name, namespace, ov_ns);
@@ -431,18 +452,8 @@ pub fn elementSetAttributeNS(
         }
     }
 
-    // Capture old value before setting
-    var _ov_buf: [4096]u8 = undefined;
-    var old_val: ?[]const u8 = null;
-    {
-        var ov_len: usize = 0;
-        const ov_ptr = lxb_dom_element_get_attribute(elem, qname_s.ptr, qname_s.len, &ov_len);
-        if (ov_ptr != null) {
-            const cl = @min(ov_len, _ov_buf.len);
-            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
-            old_val = _ov_buf[0..cl];
-        }
-    }
+    const old_val = dupCurrentAttributeValue(elem, qname_s);
+    defer if (old_val) |v| std.heap.page_allocator.free(v);
     // Store using the qualified name (prefix:localName) to preserve prefix
     _ = lxb_dom_element_set_attribute(elem, qname_s.ptr, qname_s.len, val.ptr, val.len);
 
@@ -562,18 +573,8 @@ pub fn elementRemoveAttributeNS(
             const attr_qname = attr_name_ptr[0..attr_name_len];
             const attr_local = extractLocalName(attr_qname);
             if (std.mem.eql(u8, attr_local, local_s)) {
-                // Capture old value before removal
-                var _ov_buf2: [4096]u8 = undefined;
-                var ov2: ?[]const u8 = null;
-                {
-                    var ov_len: usize = 0;
-                    const ov_ptr = lxb_dom_attr_value_noi(attr, &ov_len);
-                    if (ov_ptr != null) {
-                        const cl = @min(ov_len, _ov_buf2.len);
-                        @memcpy(_ov_buf2[0..cl], ov_ptr.?[0..cl]);
-                        ov2 = _ov_buf2[0..cl];
-                    }
-                }
+                const ov2 = dupAttrValue(attr);
+                defer if (ov2) |v| std.heap.page_allocator.free(v);
                 // Remove by full qualified name
                 _ = lxb_dom_element_remove_attribute(elem, attr_qname.ptr, attr_qname.len);
                 const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -610,19 +611,11 @@ pub fn elementRemoveAttribute(
     const name_raw = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, name_raw.ptr);
     var lower_buf: [1024]u8 = undefined;
-    const name = lowercaseAttrName(name_raw.ptr[0..name_raw.len], &lower_buf);
-    // Capture old value before removal
-    var _ov_buf: [4096]u8 = undefined;
-    var old_val: ?[]const u8 = null;
-    {
-        var ov_len: usize = 0;
-        const ov_ptr = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &ov_len);
-        if (ov_ptr != null) {
-            const cl = @min(ov_len, _ov_buf.len);
-            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
-            old_val = _ov_buf[0..cl];
-        }
-    }
+    var lower_heap: ?[]u8 = null;
+    defer if (lower_heap) |h| std.heap.page_allocator.free(h);
+    const name = lowercaseAttrNameDynamic(c, name_raw.ptr[0..name_raw.len], &lower_buf, &lower_heap) orelse return quickjs.JS_EXCEPTION();
+    const old_val = dupCurrentAttributeValue(elem, name);
+    defer if (old_val) |v| std.heap.page_allocator.free(v);
     // DOM spec: removeAttribute is a no-op if attribute doesn't exist
     if (!lxb_dom_element_has_attribute(elem, name.ptr, name.len))
         return quickjs.JS_UNDEFINED();
@@ -647,10 +640,12 @@ pub fn elementHasAttribute(
     defer qjs.JS_FreeCString(c, s.ptr);
     // DOM §4.9 hasAttribute: ASCII-lowercase only for HTML-document elements.
     var lower_buf: [1024]u8 = undefined;
+    var lower_heap: ?[]u8 = null;
+    defer if (lower_heap) |h| std.heap.page_allocator.free(h);
     const name = if (isXmlDocumentForElement(c, this_val))
         s.ptr[0..s.len]
     else
-        lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+        (lowercaseAttrNameDynamic(c, s.ptr[0..s.len], &lower_buf, &lower_heap) orelse return quickjs.JS_NewBool(false));
     return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
 
@@ -673,25 +668,14 @@ pub fn elementToggleAttribute(
 
     // DOM spec: HTML elements lowercase attribute names
     var lower_buf: [1024]u8 = undefined;
-    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+    var lower_heap: ?[]u8 = null;
+    defer if (lower_heap) |h| std.heap.page_allocator.free(h);
+    const name = lowercaseAttrNameDynamic(c, s.ptr[0..s.len], &lower_buf, &lower_heap) orelse return quickjs.JS_EXCEPTION();
 
     const has = lxb_dom_element_has_attribute(elem, name.ptr, name.len);
 
-    // DOM §4.3.3: Capture old value BEFORE mutation so MutationObservers
-    // observing with attributeOldValue receive the correct prior value.
-    // lexbor invalidates the pointer returned by get_attribute after any
-    // set/remove, so the bytes must be copied into a stack buffer first.
-    var old_val_buf: [4096]u8 = undefined;
-    var old_val: ?[]const u8 = null;
-    if (has) {
-        var ov_len: usize = 0;
-        const ov_ptr = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &ov_len);
-        if (ov_ptr != null) {
-            const cl = @min(ov_len, old_val_buf.len);
-            @memcpy(old_val_buf[0..cl], ov_ptr.?[0..cl]);
-            old_val = old_val_buf[0..cl];
-        }
-    }
+    const old_val = if (has) dupCurrentAttributeValue(elem, name) else null;
+    defer if (old_val) |v| std.heap.page_allocator.free(v);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
 
     // If force argument provided
@@ -793,7 +777,6 @@ pub fn classListAdd(
         }
     }
 
-    // No args + no existing class attribute = no-op
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     // Save old class value before modification (lexbor invalidates pointer on set)
@@ -814,36 +797,16 @@ pub fn classListAdd(
         }
     }
     if (argc == 0 and (cur == null or cur_len == 0)) return quickjs.JS_UNDEFINED();
-
-    var buf: [4096]u8 = undefined;
-    var pos: usize = 0;
-    var seen_buf: [128][]const u8 = undefined;
-    var seen_count: usize = 0;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.heap.page_allocator);
 
     // First, collect existing unique tokens
     if (cur != null and cur_len > 0) {
         var iter = std.mem.tokenizeAny(u8, cur.?[0..cur_len], " \t\n\r\x0c");
         while (iter.next()) |cls| {
             if (cls.len == 0) continue;
-            var dup = false;
-            for (seen_buf[0..seen_count]) |s| {
-                if (std.mem.eql(u8, s, cls)) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) continue;
-            if (pos > 0 and pos < buf.len) {
-                buf[pos] = ' ';
-                pos += 1;
-            }
-            const copy_len = @min(cls.len, buf.len - pos);
-            @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
-            if (seen_count < seen_buf.len) {
-                seen_buf[seen_count] = buf[pos..][0..copy_len];
-                seen_count += 1;
-            }
-            pos += copy_len;
+            if (classContains(out.items, cls)) continue;
+            appendClassToken(&out, cls) catch return qjs.JS_ThrowTypeError(c, "out of memory");
         }
     }
 
@@ -854,29 +817,12 @@ pub fn classListAdd(
             const token_s = jsStringToSlice(c, a[arg_idx]) orelse continue;
             defer qjs.JS_FreeCString(c, token_s.ptr);
             const token = token_s.ptr[0..token_s.len];
-            var dup = false;
-            for (seen_buf[0..seen_count]) |s| {
-                if (std.mem.eql(u8, s, token)) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) continue;
-            if (pos > 0 and pos < buf.len) {
-                buf[pos] = ' ';
-                pos += 1;
-            }
-            const copy_len = @min(token.len, buf.len - pos);
-            @memcpy(buf[pos..][0..copy_len], token[0..copy_len]);
-            if (seen_count < seen_buf.len) {
-                seen_buf[seen_count] = buf[pos..][0..copy_len];
-                seen_count += 1;
-            }
-            pos += copy_len;
+            if (classContains(out.items, token)) continue;
+            appendClassToken(&out, token) catch return qjs.JS_ThrowTypeError(c, "out of memory");
         }
     }
 
-    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    setClassAttributeBytes(elem, out.items);
     events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", old_class_copy);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
@@ -910,69 +856,42 @@ pub fn classListRemove(
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
-    var _ocb: [4096]u8 = undefined;
+    var old_class_heap: ?[]u8 = null;
+    defer if (old_class_heap) |h| std.heap.page_allocator.free(h);
     var old_class_copy: ?[]const u8 = null;
     if (cur != null) {
-        const cl = @min(cur_len, _ocb.len);
-        @memcpy(_ocb[0..cl], cur.?[0..cl]);
-        old_class_copy = _ocb[0..cl];
+        old_class_heap = std.heap.page_allocator.alloc(u8, cur_len) catch null;
+        if (old_class_heap) |h| {
+            @memcpy(h, cur.?[0..cur_len]);
+            old_class_copy = h;
+        }
     }
     if (cur == null or cur_len == 0) return quickjs.JS_UNDEFINED();
 
-    // Collect tokens to remove
-    var remove_strs: [32][]const u8 = undefined;
-    var remove_ptrs: [32][*]const u8 = undefined;
-    var remove_count: usize = 0;
-    if (args) |a| {
-        var ri: usize = 0;
-        while (ri < @as(usize, @intCast(argc)) and remove_count < remove_strs.len) : (ri += 1) {
-            const token_s = jsStringToSlice(c, a[ri]) orelse continue;
-            remove_ptrs[remove_count] = token_s.ptr;
-            remove_strs[remove_count] = token_s.ptr[0..token_s.len];
-            remove_count += 1;
-        }
-    }
-    defer for (remove_ptrs[0..remove_count]) |p| qjs.JS_FreeCString(c, p);
-
     // Rebuild class string without removed classes, also dedup
-    var buf: [4096]u8 = undefined;
-    var pos: usize = 0;
-    var seen_buf: [128][]const u8 = undefined;
-    var seen_count: usize = 0;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.heap.page_allocator);
     var iter = std.mem.tokenizeAny(u8, cur.?[0..cur_len], " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
         // Skip if in remove list
         var should_remove = false;
-        for (remove_strs[0..remove_count]) |rm| {
-            if (std.mem.eql(u8, cls, rm)) {
-                should_remove = true;
-                break;
+        if (args) |a| {
+            var ri: usize = 0;
+            while (ri < @as(usize, @intCast(argc))) : (ri += 1) {
+                const token_s = jsStringToSlice(c, a[ri]) orelse continue;
+                defer qjs.JS_FreeCString(c, token_s.ptr);
+                if (std.mem.eql(u8, cls, token_s.ptr[0..token_s.len])) {
+                    should_remove = true;
+                    break;
+                }
             }
         }
         if (should_remove) continue;
-        // Dedup
-        var dup = false;
-        for (seen_buf[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) {
-                dup = true;
-                break;
-            }
-        }
-        if (dup) continue;
-        if (pos > 0 and pos < buf.len) {
-            buf[pos] = ' ';
-            pos += 1;
-        }
-        const copy_len = @min(cls.len, buf.len - pos);
-        @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
-        if (seen_count < seen_buf.len) {
-            seen_buf[seen_count] = buf[pos..][0..copy_len];
-            seen_count += 1;
-        }
-        pos += copy_len;
+        if (classContains(out.items, cls)) continue;
+        appendClassToken(&out, cls) catch return qjs.JS_ThrowTypeError(c, "out of memory");
     }
-    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    setClassAttributeBytes(elem, out.items);
     events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", old_class_copy);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
@@ -994,14 +913,22 @@ pub fn classListContains(
 
     const cls_name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, cls_name.ptr);
-    // DOM §7.1 contains() step 1: run validation steps (throws SyntaxError / InvalidCharacterError)
-    if (validateToken(c, cls_name.ptr[0..cls_name.len])) |exc| return exc;
     const token = cls_name.ptr[0..cls_name.len];
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
     return quickjs.JS_NewBool(classContains(cur.?[0..cur_len], token));
+}
+
+pub fn classListSupports(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_ThrowTypeError(c, "DOMTokenList has no supported tokens list.");
 }
 
 pub fn classListToggle(
@@ -1093,12 +1020,15 @@ pub fn classListReplace(
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
-    var _ocb: [4096]u8 = undefined;
+    var old_class_heap: ?[]u8 = null;
+    defer if (old_class_heap) |h| std.heap.page_allocator.free(h);
     var old_class_copy: ?[]const u8 = null;
     if (cur != null) {
-        const cl = @min(cur_len, _ocb.len);
-        @memcpy(_ocb[0..cl], cur.?[0..cl]);
-        old_class_copy = _ocb[0..cl];
+        old_class_heap = std.heap.page_allocator.alloc(u8, cur_len) catch null;
+        if (old_class_heap) |h| {
+            @memcpy(h, cur.?[0..cur_len]);
+            old_class_copy = h;
+        }
     }
     if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
 
@@ -1110,10 +1040,8 @@ pub fn classListReplace(
     const old_str = old_cls.ptr[0..old_cls.len];
     const new_str = new_cls.ptr[0..new_cls.len];
 
-    var buf: [4096]u8 = undefined;
-    var pos: usize = 0;
-    var seen_buf: [128][]const u8 = undefined;
-    var seen_count: usize = 0;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.heap.page_allocator);
     var replaced_first = false;
     var iter = std.mem.tokenizeAny(u8, cur_str, " \t\n\r\x0c");
     while (iter.next()) |tok| {
@@ -1129,48 +1057,13 @@ pub fn classListReplace(
                 continue;
             }
         }
-        // Dedup: skip if already seen
-        var dup = false;
-        for (seen_buf[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, effective_tok)) {
-                dup = true;
-                break;
-            }
-        }
-        if (dup) continue;
-        if (pos > 0 and pos < buf.len) {
-            buf[pos] = ' ';
-            pos += 1;
-        }
-        if (pos + effective_tok.len <= buf.len) {
-            @memcpy(buf[pos..][0..effective_tok.len], effective_tok);
-            if (seen_count < seen_buf.len) {
-                seen_buf[seen_count] = buf[pos..][0..effective_tok.len];
-                seen_count += 1;
-            }
-            pos += effective_tok.len;
-        }
+        if (classContains(out.items, effective_tok)) continue;
+        appendClassToken(&out, effective_tok) catch return qjs.JS_ThrowTypeError(c, "out of memory");
     }
-    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    setClassAttributeBytes(elem, out.items);
     events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", old_class_copy);
     setDomDirty();
     return quickjs.JS_NewBool(true);
-}
-
-pub fn classListEntries(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
-    // Stub: return empty array (full iterator support TODO)
-    const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewArray(c);
-}
-
-pub fn classListKeys(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
-    const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewArray(c);
-}
-
-pub fn classListValues(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
-    const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewArray(c);
 }
 
 /// Normalize class attribute: split by whitespace, deduplicate, rejoin with single spaces.
@@ -1181,38 +1074,16 @@ pub fn normalizeClassAttribute(elem: *lxb.lxb_dom_element_t) void {
     if (attr_ptr == null or attr_len == 0) return;
 
     const class_str = attr_ptr.?[0..attr_len];
-    var buf: [4096]u8 = undefined;
-    var pos: usize = 0;
-    var seen: [64][]const u8 = undefined;
-    var seen_count: usize = 0;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.heap.page_allocator);
 
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |tok| {
         if (tok.len == 0) continue;
-        // Deduplicate
-        var dup = false;
-        for (seen[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, tok)) {
-                dup = true;
-                break;
-            }
-        }
-        if (dup) continue;
-        if (seen_count < 64) {
-            seen[seen_count] = tok;
-            seen_count += 1;
-        }
-
-        if (pos > 0 and pos < buf.len) {
-            buf[pos] = ' ';
-            pos += 1;
-        }
-        if (pos + tok.len <= buf.len) {
-            @memcpy(buf[pos..][0..tok.len], tok);
-            pos += tok.len;
-        }
+        if (classTokenSeenBefore(class_str, tok)) continue;
+        appendClassToken(&out, tok) catch return;
     }
-    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    setClassAttributeBytes(elem, out.items);
 }
 
 pub fn classListItem(
@@ -1224,9 +1095,8 @@ pub fn classListItem(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    var idx: i32 = 0;
-    if (qjs.JS_ToInt32(c, &idx, args[0]) < 0) return quickjs.JS_NULL();
-    if (idx < 0) return quickjs.JS_NULL();
+    var idx: u32 = 0;
+    if (qjs.JS_ToUint32(c, &idx, args[0]) < 0) return quickjs.JS_NULL();
 
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
@@ -1237,27 +1107,13 @@ pub fn classListItem(
     if (attr_ptr == null or attr_len == 0) return quickjs.JS_NULL();
 
     const class_str = attr_ptr.?[0..attr_len];
-    var i: i32 = 0;
-    var seen: [64][]const u8 = undefined;
-    var seen_count: usize = 0;
+    var i: u32 = 0;
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
-        var dup = false;
-        for (seen[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            if (seen_count < 64) {
-                seen[seen_count] = cls;
-                seen_count += 1;
-            }
-            if (i == idx) return qjs.JS_NewStringLen(c, cls.ptr, cls.len);
-            i += 1;
-        }
+        if (classTokenSeenBefore(class_str, cls)) continue;
+        if (i == idx) return qjs.JS_NewStringLen(c, cls.ptr, cls.len);
+        i += 1;
     }
     return quickjs.JS_NULL();
 }
@@ -1283,23 +1139,10 @@ pub fn classListForEach(
 
     const class_str = attr_ptr.?[0..attr_len];
     var i: i32 = 0;
-    var seen_fe: [64][]const u8 = undefined;
-    var seen_fe_count: usize = 0;
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
-        var dup_fe = false;
-        for (seen_fe[0..seen_fe_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) {
-                dup_fe = true;
-                break;
-            }
-        }
-        if (dup_fe) continue;
-        if (seen_fe_count < 64) {
-            seen_fe[seen_fe_count] = cls;
-            seen_fe_count += 1;
-        }
+        if (classTokenSeenBefore(class_str, cls)) continue;
         var cb_args = [_]qjs.JSValue{
             qjs.JS_NewStringLen(c, cls.ptr, cls.len),
             qjs.JS_NewInt32(c, i),
@@ -1332,26 +1175,11 @@ pub fn classListGetLength(
     const class_str = attr_ptr.?[0..attr_len];
     // Count unique tokens split by ASCII whitespace (DOMTokenList spec)
     var count: i32 = 0;
-    var seen: [64][]const u8 = undefined;
-    var seen_count: usize = 0;
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
-        // Check for duplicate
-        var dup = false;
-        for (seen[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            if (seen_count < 64) {
-                seen[seen_count] = cls;
-                seen_count += 1;
-            }
-            count += 1;
-        }
+        if (classTokenSeenBefore(class_str, cls)) continue;
+        count += 1;
     }
     return qjs.JS_NewInt32(c, count);
 }
@@ -1421,6 +1249,7 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toggle", qjs.JS_NewCFunction(ctx, &classListToggle, "toggle", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "replace", qjs.JS_NewCFunction(ctx, &classListReplace, "replace", 2));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "item", qjs.JS_NewCFunction(ctx, &classListItem, "item", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "supports", qjs.JS_NewCFunction(ctx, &classListSupports, "supports", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toString", qjs.JS_NewCFunction(ctx, &classListGetValue, "toString", 0));
     // DOMTokenList spec: inherit keys/values/entries/forEach/Symbol.iterator from Array.prototype
     {
@@ -1458,6 +1287,7 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
     // Wrap classList in a Proxy for dynamic indexed access and Symbol.iterator
     const iter_js =
         \\(function(cl){
+        \\  try{if(typeof DOMTokenList==='function')Object.setPrototypeOf(cl,DOMTokenList.prototype);}catch(e){}
         \\  cl[Symbol.toStringTag]='DOMTokenList';
         \\  cl._tokens=function(){var e=this.__element;if(!e)return[];var c=e.getAttribute('class');if(!c)return[];var seen={},r=[];c.split(/[\x20\t\n\r\f]+/).forEach(function(s){if(s&&!seen[s]){seen[s]=1;r.push(s);}});return r;};
         \\  return new Proxy(cl,{get:function(t,p,r){if(p==='length'){return t._tokens().length;}if(typeof p==='string'&&/^\d+$/.test(p)){var toks=t._tokens();var i=parseInt(p);return i<toks.length?toks[i]:undefined;}if(p===Symbol.toStringTag)return'DOMTokenList';return Reflect.get(t,p,r);},set:function(t,p,v,r){return Reflect.set(t,p,v,r);},has:function(t,p){if(typeof p==='string'&&/^\d+$/.test(p)){return parseInt(p)<t._tokens().length;}return p in t;}});
@@ -1492,7 +1322,9 @@ pub fn elementGetClassList(
     }
     qjs.JS_FreeValue(c, cached);
     const cl = createClassList(c, this_val);
-    _ = qjs.JS_SetPropertyStr(c, this_val, "__classList", qjs.JS_DupValue(c, cl));
+    const cache_atom = qjs.JS_NewAtom(c, "__classList");
+    _ = qjs.JS_DefinePropertyValue(c, this_val, cache_atom, qjs.JS_DupValue(c, cl), qjs.JS_PROP_CONFIGURABLE);
+    qjs.JS_FreeAtom(c, cache_atom);
     return cl;
 }
 

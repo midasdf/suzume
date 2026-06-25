@@ -158,6 +158,7 @@ pub const Bytecode = struct {
     param_count: u16,
     max_stack: u16,
     has_rest: bool = false,
+    has_arguments: bool = false,
     /// Names of locals (by slot index). Populated by the compiler for top-level
     /// script and function bytecode so that `eval(...)` at runtime can map
     /// identifiers in the eval source to the calling frame's local slots

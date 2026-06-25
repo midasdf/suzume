@@ -42,6 +42,16 @@ test "JsValue strict equality" {
     try std.testing.expect(!JsValue.jsStrictEq(JsValue.initNumber(42), JsValue.initNumber(43)).asBool());
 }
 
+test "JsValue strict equality rejects NaN" {
+    try std.testing.expect(!JsValue.jsStrictEq(JsValue.nan_val, JsValue.nan_val).asBool());
+    try std.testing.expect(!JsValue.jsStrictEq(JsValue.initNumber(std.math.nan(f64)), JsValue.initNumber(std.math.nan(f64))).asBool());
+}
+
+test "JsValue abstract equality rejects NaN" {
+    try std.testing.expect(!JsValue.jsEq(JsValue.nan_val, JsValue.nan_val).asBool());
+    try std.testing.expect(JsValue.jsNe(JsValue.initNumber(std.math.nan(f64)), JsValue.initNumber(std.math.nan(f64))).asBool());
+}
+
 test "JsValue isTruthy" {
     try std.testing.expect(JsValue.initNumber(1).isTruthy());
     try std.testing.expect(!JsValue.initNumber(0).isTruthy());
@@ -56,6 +66,14 @@ test "JsValue isTruthy" {
 const Compiler = kotori.Compiler;
 const VM = kotori.VM;
 
+fn installTestIo() void {
+    kotori.io.io = std.testing.io;
+}
+
+fn resetTestIo() void {
+    kotori.io.io = null;
+}
+
 fn evalExpr(source: []const u8) !JsValue {
     var compiler = Compiler.init(std.testing.allocator, source);
     defer compiler.deinit();
@@ -63,6 +81,8 @@ fn evalExpr(source: []const u8) !JsValue {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     const result = try vm_inst.execute();
     return result;
@@ -76,6 +96,8 @@ fn evalWithMicrotasks(source: []const u8, global_name: []const u8) !JsValue {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     _ = try vm_inst.execute();
     // Drain microtasks (multiple rounds for chained promises)
@@ -111,6 +133,16 @@ test "eval: (1 + 2) * 3" {
 test "eval: 10 - 3" {
     const result = try evalExpr("10 - 3");
     try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: numeric operators trim vertical tab" {
+    const result = try evalExpr("\"\\v1.5\" - 0");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), result.asNumber(), 0.001);
+}
+
+test "eval: numeric operators trim non-breaking space" {
+    const result = try evalExpr("\"\\u00a01.5\\u00a0\" - 0");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), result.asNumber(), 0.001);
 }
 
 test "eval: -5" {
@@ -151,6 +183,24 @@ test "eval: 2 ** 10" {
 test "eval: 10 % 3" {
     const result = try evalExpr("10 % 3");
     try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: remainder keeps dividend sign" {
+    const result = try evalExpr(
+        \\(-5 % 2) === -1 &&
+        \\(5 % -2) === 1 &&
+        \\(-5 % -2) === -1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: remainder invalid operands produce NaN" {
+    const result = try evalExpr(
+        \\isNaN(1 % 0) &&
+        \\isNaN(0 % 0) &&
+        \\isNaN(Infinity % 2)
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: nested arithmetic" {
@@ -293,8 +343,7 @@ test "eval: prototype chain" {
         \\child.__proto__ = proto;
         \\child.x
     );
-    _ = result; // prototype chain via __proto__ assignment needs special handling
-    // TODO: enable once __proto__ set_prop is wired to prototype
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
 
 // ── Real-world JS patterns ───────────────────────────────────────
@@ -935,6 +984,21 @@ test "eval: array indexOf not found" {
     try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
 }
 
+test "eval: array indexOf coerces fromIndex" {
+    const result = try evalExpr(
+        \\var a = [1, 2, 1, 2];
+        \\a.indexOf(1, "1") * 10 + a.indexOf(1, -2)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 22.0), result.asNumber(), 0.001);
+}
+
+test "eval: array indexOf works on array-like objects" {
+    const result = try evalExpr(
+        \\Array.prototype.indexOf.call({0: "a", 1: "b", length: "2"}, "b")
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
 test "eval: array includes" {
     const result = try evalExpr("[1, 2, 3].includes(2)");
     try std.testing.expect(result.asBool());
@@ -943,6 +1007,14 @@ test "eval: array includes" {
 test "eval: array includes false" {
     const result = try evalExpr("[1, 2, 3].includes(5)");
     try std.testing.expect(!result.asBool());
+}
+
+test "eval: array includes coerces fromIndex and handles missing array-like entries" {
+    const result = try evalExpr(
+        \\Array.prototype.includes.call({0: "a", length: "2"}, undefined, "1") &&
+        \\[1, 2, 3].includes(1, 1) === false
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: array join" {
@@ -957,6 +1029,28 @@ test "eval: array join default comma" {
     const result = try evalExpr(
         \\var a = [1, 2, 3];
         \\a.join() === "1,2,3"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: array join coerces separator" {
+    const result = try evalExpr(
+        \\[1, 2, 3].join(0) === "10203"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: array join works on array-like objects" {
+    const result = try evalExpr(
+        \\Array.prototype.join.call({0: "a", 2: null, length: "4"}, "-") === "a---"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: array toLocaleString calls element methods" {
+    const result = try evalExpr(
+        \\var item = { toLocaleString: function() { return "local"; }, toString: function() { return "plain"; } };
+        \\[item, null, undefined, 3].toLocaleString() === "local,,,3"
     );
     try std.testing.expect(result.asBool());
 }
@@ -997,6 +1091,32 @@ test "eval: array slice negative" {
     try std.testing.expectApproxEqAbs(@as(f64, 9.0), result.asNumber(), 0.001);
 }
 
+test "eval: array slice coerces start and end" {
+    const result = try evalExpr(
+        \\var a = [10, 20, 30, 40];
+        \\var b = a.slice("1", "3");
+        \\b[0] + b[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 50.0), result.asNumber(), 0.001);
+}
+
+test "eval: array slice works on array-like objects" {
+    const result = try evalExpr(
+        \\var b = Array.prototype.slice.call({0: 10, 2: 30, length: "3"}, 1);
+        \\b.length === 2 && b[0] === undefined && b[1] === 30
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: array slice reads array-like accessors" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var b = Array.prototype.slice.call({ get 0() { calls = calls + 1; return 6; }, get length() { calls = calls + 1; return 1; } });
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 62.0), result.asNumber(), 0.001);
+}
+
 test "eval: array concat" {
     const result = try evalExpr(
         \\var a = [1, 2];
@@ -1005,6 +1125,26 @@ test "eval: array concat" {
         \\c.length
     );
     try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: array concat reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 7; } });
+        \\var b = a.concat([2]);
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
+test "eval: array concat works with object receiver" {
+    const result = try evalExpr(
+        \\var o = {x: 1};
+        \\var a = Array.prototype.concat.call(o, 2);
+        \\a.length === 2 && a[0] === o && a[1] === 2
+    );
+    try std.testing.expect(result.asBool());
 }
 
 // ── Phase 1f: String methods ──────────────────────────────────
@@ -1054,6 +1194,19 @@ test "eval: string slice negative" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: string position methods coerce numeric arguments" {
+    const result = try evalExpr(
+        \\"hello".charAt("1") === "e" &&
+        \\"ABC".charCodeAt("1") === 66 &&
+        \\"hello".substring("1", "3") === "el" &&
+        \\"hello".slice("1", "4") === "ell" &&
+        \\"x".padStart("3", "0") === "00x" &&
+        \\"x".padEnd("3", "0") === "x00" &&
+        \\"abc".at("-1") === "c"
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: string split" {
     const result = try evalExpr(
         \\var parts = "a,b,c".split(",");
@@ -1070,8 +1223,87 @@ test "eval: string split values" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: string split handles limit and empty separator" {
+    const result = try evalExpr(
+        \\var a = "a,b,c".split(",", 2);
+        \\var b = "abc".split("", 2);
+        \\var c = "あい".split("");
+        \\var d = "a,b".split(",", 0);
+        \\a.length === 2 && a[1] === "b" &&
+        \\b.length === 2 && b[0] === "a" && b[1] === "b" &&
+        \\c.length === 2 && c[0] === "あ" && c[1] === "い" &&
+        \\d.length === 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string regex split handles limit" {
+    const result = try evalExpr(
+        \\var a = "a1b2c".split(/\d/, 2);
+        \\a.length === 2 && a[0] === "a" && a[1] === "b"
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: string trim" {
     const result = try evalExpr("\"  hello  \".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles vertical tab and form feed" {
+    const result = try evalExpr("\"\\x0bhello\\f\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles non-breaking space" {
+    const result = try evalExpr("\"\\u00a0hello\\u00a0\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles byte order mark" {
+    const result = try evalExpr("\"\\ufeffhello\\ufeff\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles line separator" {
+    const result = try evalExpr("\"\\u2028hello\\u2028\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles paragraph separator" {
+    const result = try evalExpr("\"\\u2029hello\\u2029\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles em space" {
+    const result = try evalExpr("\"\\u2003hello\\u2003\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trim handles ideographic space" {
+    const result = try evalExpr("\"\\u3000hello\\u3000\".trim() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trimStart and trimEnd handle vertical tab and form feed" {
+    const result = try evalExpr("\"\\x0bhello\".trimStart() === \"hello\" && \"hello\\f\".trimEnd() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trimStart and trimEnd handle non-breaking space" {
+    const result = try evalExpr("\"\\u00a0hello\".trimStart() === \"hello\" && \"hello\\u00a0\".trimEnd() === \"hello\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string trimLeft and trimRight aliases" {
+    const result = try evalExpr(
+        \\typeof String.prototype.trimLeft === "function" &&
+        \\typeof String.prototype.trimRight === "function" &&
+        \\String.prototype.trimLeft === String.prototype.trimStart &&
+        \\String.prototype.trimRight === String.prototype.trimEnd &&
+        \\"  hello".trimLeft() === "hello" &&
+        \\"hello  ".trimRight() === "hello"
+    );
     try std.testing.expect(result.asBool());
 }
 
@@ -1085,6 +1317,14 @@ test "eval: string toLowerCase" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: string toLocale case methods" {
+    const result = try evalExpr(
+        \\"hello".toLocaleUpperCase() === "HELLO" &&
+        \\"HELLO".toLocaleLowerCase() === "hello"
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: string startsWith" {
     const result = try evalExpr("\"hello world\".startsWith(\"hello\")");
     try std.testing.expect(result.asBool());
@@ -1092,6 +1332,59 @@ test "eval: string startsWith" {
 
 test "eval: string endsWith" {
     const result = try evalExpr("\"hello world\".endsWith(\"world\")");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string search methods coerce primitive arguments" {
+    const result = try evalExpr(
+        \\"a123".indexOf(123) === 1 &&
+        \\"ababa".indexOf("ba", 2) === 3 &&
+        \\"abc".indexOf("", 2) === 2 &&
+        \\"a123".includes(123) &&
+        \\"ababa".includes("ba", 2) &&
+        \\"ababa".includes("ba", 4) === false &&
+        \\"true!".startsWith(true) &&
+        \\"abc".startsWith("b", 1) &&
+        \\"a-null".endsWith(null) &&
+        \\"abcd".endsWith("bc", 3) &&
+        \\"a1b1".split(1).join(",") === "a,b," &&
+        \\"a1b".replace(1, false) === "afalseb" &&
+        \\"undefined".includes() &&
+        \\"undefined".startsWith() &&
+        \\"undefined".endsWith() &&
+        \\"a123b123".lastIndexOf(123) === 5 &&
+        \\"ababa".lastIndexOf("ba", 2) === 1 &&
+        \\"abc".lastIndexOf("", 1) === 1 &&
+        \\"abc".lastIndexOf("b", 0) === -1 &&
+        \\"a1a1".replaceAll(1, false) === "afalseafalse" &&
+        \\"ab".replaceAll("", "-") === "-a-b-" &&
+        \\"あい".replaceAll("", "-") === "-あ-い-" &&
+        \\"x".concat(1, false, null) === "x1falsenull" &&
+        \\"123".localeCompare(123) === 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string pad methods coerce pad string" {
+    const result = try evalExpr(
+        \\"x".padStart(4, 12) === "121x" &&
+        \\"x".padEnd(4, false) === "xfal" &&
+        \\"x".padStart(4, "") === "x" &&
+        \\"x".padEnd(4, "") === "x" &&
+        \\"あ".padStart(3, "い") === "いいあ" &&
+        \\"あ".padEnd(3, "い") === "あいい"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string repeat coerces count and rejects range errors" {
+    const result = try evalExpr(
+        \\"ha".repeat("3") === "hahaha" &&
+        \\"x".repeat(true) === "x" &&
+        \\"x".repeat(undefined) === "" &&
+        \\(function(){ try { "x".repeat(-1); } catch (e) { return e.name === "RangeError"; } return false; })() &&
+        \\(function(){ try { "x".repeat(Infinity); } catch (e) { return e.name === "RangeError"; } return false; })()
+    );
     try std.testing.expect(result.asBool());
 }
 
@@ -1223,6 +1516,18 @@ test "eval: array forEach" {
     try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
 }
 
+test "eval: array forEach reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var sum = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 5; } });
+        \\a.forEach(function(x) { sum = sum + x; });
+        \\sum * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 51.0), result.asNumber(), 0.001);
+}
+
 test "eval: array map" {
     const result = try evalExpr(
         \\var doubled = [1, 2, 3].map(function(x) { return x * 2; });
@@ -1231,12 +1536,34 @@ test "eval: array map" {
     try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
 }
 
+test "eval: array map reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 6; } });
+        \\var b = a.map(function(x) { return x + 1; });
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
 test "eval: array filter" {
     const result = try evalExpr(
         \\var evens = [1, 2, 3, 4, 5, 6].filter(function(x) { return x % 2 === 0; });
         \\evens.length
     );
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: array filter reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 8; } });
+        \\var b = a.filter(function(x) { return x === 8; });
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 81.0), result.asNumber(), 0.001);
 }
 
 test "eval: map then filter chain" {
@@ -1456,6 +1783,17 @@ test "eval: Object.values returns values" {
     try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
 }
 
+test "eval: Object.values reads accessor values" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var obj = {};
+        \\Object.defineProperty(obj, "x", { enumerable: true, get: function() { calls = calls + 1; return 7; } });
+        \\var vals = Object.values(obj);
+        \\vals[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
 test "eval: Object.entries returns pairs" {
     const result = try evalExpr(
         \\var obj = { a: 100 };
@@ -1474,6 +1812,17 @@ test "eval: Object.entries pair structure" {
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
 
+test "eval: Object.entries reads accessor values" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var obj = {};
+        \\Object.defineProperty(obj, "x", { enumerable: true, get: function() { calls = calls + 1; return 8; } });
+        \\var entries = Object.entries(obj);
+        \\entries[0][1] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 81.0), result.asNumber(), 0.001);
+}
+
 test "eval: Object.assign copies properties" {
     const result = try evalExpr(
         \\var target = { a: 1 };
@@ -1482,6 +1831,30 @@ test "eval: Object.assign copies properties" {
         \\target.a + target.b + target.c
     );
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.assign reads accessor values" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var source = {};
+        \\Object.defineProperty(source, "x", { enumerable: true, get: function() { calls = calls + 1; return 9; } });
+        \\var target = {};
+        \\Object.assign(target, source);
+        \\target.x * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 91.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.assign copies symbol properties" {
+    const result = try evalExpr(
+        \\var s = Symbol("x");
+        \\var source = {};
+        \\source[s] = 7;
+        \\var target = {};
+        \\Object.assign(target, source);
+        \\target[s]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
 }
 
 test "eval: Object.assign overwrites" {
@@ -1501,6 +1874,28 @@ test "eval: Object.create with prototype" {
         \\obj.greet()
     );
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.create applies accessor descriptor map" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var props = {};
+        \\Object.defineProperty(props, "x", { get: function() { calls = calls + 1; return { value: 7, enumerable: true }; } });
+        \\var obj = Object.create(null, props);
+        \\obj.x * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.create applies symbol descriptor map" {
+    const result = try evalExpr(
+        \\var sym = Symbol("x");
+        \\var props = {};
+        \\props[sym] = { value: 8, enumerable: true };
+        \\var obj = Object.create(null, props);
+        \\obj[sym]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
 }
 
 test "eval: Object.keys empty object" {
@@ -1584,9 +1979,19 @@ test "eval: Math.max" {
     try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
 }
 
+test "eval: Math.max prefers positive zero" {
+    const result = try evalExpr("Object.is(Math.max(-0, 0), 0)");
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: Math.min" {
     const result = try evalExpr("Math.min(1, 5, 3)");
     try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.min prefers negative zero" {
+    const result = try evalExpr("Object.is(Math.min(0, -0), -0)");
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Math.pow" {
@@ -1602,6 +2007,31 @@ test "eval: Math.sqrt" {
 test "eval: Math.trunc" {
     const result = try evalExpr("Math.trunc(4.9)");
     try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.sign preserves negative zero" {
+    const result = try evalExpr("Object.is(Math.sign(-0), -0)");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Math.round preserves negative zero" {
+    const result = try evalExpr("Object.is(Math.round(-0.5), -0)");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Math basic methods coerce string numbers" {
+    const result = try evalExpr(
+        \\Math.floor("3.7") === 3 &&
+        \\Math.ceil("3.2") === 4 &&
+        \\Math.round("3.5") === 4 &&
+        \\Math.abs("-5") === 5 &&
+        \\Math.min("2", 1) === 1 &&
+        \\Math.max("2", 1) === 2 &&
+        \\Math.pow("2", "3") === 8 &&
+        \\Math.sqrt("144") === 12 &&
+        \\Math.trunc("4.9") === 4
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Math.PI" {
@@ -1620,6 +2050,309 @@ test "eval: Math.random returns 0..1" {
 test "eval: JSON.stringify number" {
     const result = try evalExpr("JSON.stringify(42)");
     try std.testing.expect(result.isString());
+}
+
+test "eval: JSON.stringify primitive exact output" {
+    const result = try evalExpr(
+        \\JSON.stringify(42) === '42' &&
+        \\JSON.stringify(null) === 'null' &&
+        \\JSON.stringify(true) === 'true' &&
+        \\JSON.stringify("x") === '"x"'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify non-finite numbers become null" {
+    const result = try evalExpr(
+        \\JSON.stringify(NaN) === 'null' &&
+        \\JSON.stringify(Infinity) === 'null' &&
+        \\JSON.stringify(-Infinity) === 'null' &&
+        \\JSON.stringify([NaN, Infinity]) === '[null,null]' &&
+        \\JSON.stringify({x: NaN}) === '{"x":null}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON method length properties" {
+    const result = try evalExpr("JSON.stringify.length === 3 && JSON.parse.length === 2");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify undefined top-level" {
+    const result = try evalExpr("JSON.stringify(undefined)");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: JSON.stringify function top-level" {
+    const result = try evalExpr("JSON.stringify(function(){})");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: JSON.stringify symbol top-level" {
+    const result = try evalExpr("JSON.stringify(Symbol('x'))");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: JSON.stringify omits undefined object property" {
+    const result = try evalExpr("JSON.stringify({a: undefined, b: 1}) === '{\"b\":1}'");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify omits function object property" {
+    const result = try evalExpr("JSON.stringify({a: function(){}, b: 1}) === '{\"b\":1}'");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify omits symbol object property" {
+    const result = try evalExpr("JSON.stringify({a: Symbol('x'), b: 1}) === '{\"b\":1}'");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify function array element becomes null" {
+    const result = try evalExpr("JSON.stringify([function(){}, 1]) === '[null,1]'");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify symbol array element becomes null" {
+    const result = try evalExpr("JSON.stringify([Symbol('x'), 1]) === '[null,1]'");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify sparse array holes become null" {
+    const result = try evalExpr(
+        \\var a = [];
+        \\a[2] = 3;
+        \\JSON.stringify(a) === '[null,null,3]'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify escapes backspace" {
+    const result = try evalExpr(
+        \\JSON.stringify("\b") === '"\\b"'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify escapes form feed" {
+    const result = try evalExpr(
+        \\JSON.stringify("\f") === '"\\f"'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify escapes nul" {
+    const result = try evalExpr(
+        \\JSON.stringify("\0") === '"\\u0000"'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify escapes quote in object key" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\o['a"b'] = 1;
+        \\JSON.stringify(o) === '{"a\\"b":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify escapes backslash in object key" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\o['a\\b'] = 1;
+        \\JSON.stringify(o) === '{"a\\\\b":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify escapes control object key" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\o["\0"] = 1;
+        \\JSON.stringify(o) === '{"\\u0000":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify calls root toJSON" {
+    const result = try evalExpr(
+        \\JSON.stringify({toJSON: function(){ return 7; }}) === '7'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify calls root toJSON once" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\JSON.stringify({toJSON: function(){ calls = calls + 1; return 7; }});
+        \\calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: JSON.stringify reads accessor toJSON" {
+    const result = try evalExpr(
+        \\var getterCalls = 0;
+        \\var o = {};
+        \\Object.defineProperty(o, "toJSON", { get: function(){ getterCalls = getterCalls + 1; return function(){ return 8; }; } });
+        \\JSON.stringify(o) === '8' && getterCalls === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify root toJSON unsupported result is undefined" {
+    const result = try evalExpr(
+        \\JSON.stringify({toJSON: function(){ return function(){}; }}) === undefined &&
+        \\JSON.stringify({toJSON: function(){ return Symbol('x'); }}) === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify passes property key to toJSON" {
+    const result = try evalExpr(
+        \\JSON.stringify({a: {toJSON: function(k){ return k; }}}) === '{"a":"a"}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify calls property toJSON once" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\JSON.stringify({a: {toJSON: function(){ calls = calls + 1; return 7; }}});
+        \\calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: JSON.stringify calls array element toJSON" {
+    const result = try evalExpr(
+        \\JSON.stringify([{toJSON: function(k){ return k; }}]) === '["0"]'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify array toJSON unsupported result becomes null" {
+    const result = try evalExpr(
+        \\JSON.stringify([
+        \\  {toJSON: function(){ return undefined; }},
+        \\  {toJSON: function(){ return function(){}; }}
+        \\]) === '[null,null]'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify reads array accessor element" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function(){ calls = calls + 1; return 7; } });
+        \\JSON.stringify(a) === '[7]' && calls === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify includes non-enumerable array element" {
+    const result = try evalExpr(
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { enumerable: false, value: 7 });
+        \\JSON.stringify(a) === '[7]'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify omits property when toJSON returns undefined" {
+    const result = try evalExpr(
+        \\JSON.stringify({a: {toJSON: function(){ return undefined; }}, b: 1}) === '{"b":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify omits property when toJSON returns symbol" {
+    const result = try evalExpr(
+        \\JSON.stringify({a: {toJSON: function(){ return Symbol('x'); }}, b: 1}) === '{"b":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify ignores symbol keyed properties" {
+    const result = try evalExpr(
+        \\var s = Symbol('x');
+        \\var o = {a: 1};
+        \\o[s] = 2;
+        \\JSON.stringify(o) === '{"a":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify ignores symbol descriptor properties" {
+    const result = try evalExpr(
+        \\var s = Symbol('x');
+        \\var o = {a: 1};
+        \\Object.defineProperty(o, s, { enumerable: true, value: 2 });
+        \\JSON.stringify(o) === '{"a":1}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify includes enumerable accessor property" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { enumerable: true, get: function(){ calls = calls + 1; return 7; } });
+        \\JSON.stringify(o) === '{"x":7}' && calls === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify skips non-enumerable descriptor property" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { enumerable: false, value: 7 });
+        \\JSON.stringify(o) === '{}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify throws TypeError on object cycle" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\var o = {};
+        \\o.self = o;
+        \\try { JSON.stringify(o); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify throws TypeError on array cycle" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\var a = [];
+        \\a[0] = a;
+        \\try { JSON.stringify(a); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify throws TypeError on toJSON cycle" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\var parent = {};
+        \\parent.child = {toJSON: function(){ return parent; }};
+        \\try { JSON.stringify(parent); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify allows repeated non-cyclic object" {
+    const result = try evalExpr(
+        \\var child = {x: 1};
+        \\JSON.stringify({a: child, b: child}) === '{"a":{"x":1},"b":{"x":1}}'
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: JSON.stringify object" {
@@ -1643,6 +2376,80 @@ test "eval: JSON.parse array" {
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
 }
 
+test "eval: JSON.parse coerces primitive input to string" {
+    const result = try evalExpr(
+        \\JSON.parse(true) === true &&
+        \\JSON.parse(null) === null &&
+        \\JSON.parse(42) === 42
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.parse coerces object input to string" {
+    const result = try evalExpr(
+        \\JSON.parse({toString: function(){ return '{"x":7}'; }}).x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: JSON.parse rejects trailing primitive junk" {
+    const result = try evalExpr("JSON.parse('truex')");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: JSON.parse rejects trailing object junk" {
+    const result = try evalExpr("JSON.parse('{\"x\":1}x')");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: JSON.parse rejects invalid number forms" {
+    const result = try evalExpr(
+        \\JSON.parse('+1') === undefined &&
+        \\JSON.parse('01') === undefined &&
+        \\JSON.parse('1.') === undefined &&
+        \\JSON.parse('1e') === undefined &&
+        \\JSON.parse('1e+') === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.parse rejects invalid object and array punctuation" {
+    const result = try evalExpr(
+        \\JSON.parse('{\"x\" 1}') === undefined &&
+        \\JSON.parse('{\"x\":1 \"y\":2}') === undefined &&
+        \\JSON.parse('{\"x\":1,}') === undefined &&
+        \\JSON.parse('[1 2]') === undefined &&
+        \\JSON.parse('[1,]') === undefined &&
+        \\JSON.parse('[1,,2]') === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.parse rejects missing object and array close" {
+    const result = try evalExpr(
+        \\JSON.parse('{\"x\":1') === undefined &&
+        \\JSON.parse('[1,2') === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.parse rejects unterminated strings" {
+    const result = try evalExpr(
+        \\JSON.parse('"abc') === undefined &&
+        \\JSON.parse('{\"x:1}') === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.parse rejects invalid string escapes" {
+    const result = try evalExpr(
+        \\JSON.parse('"\\v"') === undefined &&
+        \\JSON.parse('"\\u00zz"') === undefined &&
+        \\JSON.parse('"' + "\n" + '"') === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: JSON roundtrip" {
     const result = try evalExpr(
         \\var obj = { a: 1, b: true };
@@ -1660,13 +2467,97 @@ test "eval: parseInt basic" {
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
 
+test "eval: parseInt and parseFloat coerce input" {
+    const result = try evalExpr(
+        \\parseInt({toString: function(){ return "11"; }}, "2") === 3 &&
+        \\parseFloat({toString: function(){ return "1.5"; }}) === 1.5
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseInt handles radix and hex prefix" {
+    const result = try evalExpr(
+        \\parseInt(42, 2) !== 42 &&
+        \\parseInt("0x10") === 16 &&
+        \\parseInt("-0x10") === -16 &&
+        \\parseInt("0x10", 16) === 16 &&
+        \\parseInt("10", Infinity) === 10 &&
+        \\isNaN(parseInt("10", 1)) &&
+        \\isNaN(parseInt("10", 37))
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseInt trims form feed" {
+    const result = try evalExpr("parseInt(\"\\f42\") === 42");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseInt trims non-breaking space" {
+    const result = try evalExpr("parseInt(\"\\u00a042\\u00a0\") === 42");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseFloat accepts numeric prefix" {
+    const result = try evalExpr(
+        \\parseFloat("1.5px") === 1.5 &&
+        \\parseFloat("-.25rem") === -0.25 &&
+        \\parseFloat("1e2px") === 100 &&
+        \\parseFloat("1e") === 1 &&
+        \\isNaN(parseFloat("px1"))
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseFloat accepts Infinity prefix" {
+    const result = try evalExpr(
+        \\parseFloat("Infinitypx") === Infinity &&
+        \\parseFloat("-Infinitypx") === -Infinity
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseFloat trims form feed" {
+    const result = try evalExpr("parseFloat(\"\\f1.5\") === 1.5");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: parseFloat trims non-breaking space" {
+    const result = try evalExpr("parseFloat(\"\\u00a01.5\\u00a0\") === 1.5");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Number parse aliases reuse global functions" {
+    const result = try evalExpr(
+        \\Number.parseInt === parseInt &&
+        \\Number.parseFloat === parseFloat
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: isNaN true" {
     const result = try evalExpr("isNaN(0/0)");
     try std.testing.expect(result.asBool());
 }
 
+test "eval: global isNaN coerces strings" {
+    const result = try evalExpr(
+        \\isNaN("42") === false &&
+        \\isNaN("not-a-number") === true
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: isFinite number" {
     const result = try evalExpr("isFinite(42)");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: global isFinite coerces strings" {
+    const result = try evalExpr(
+        \\isFinite("42") === true &&
+        \\isFinite("not-a-number") === false
+    );
     try std.testing.expect(result.asBool());
 }
 
@@ -1709,6 +2600,15 @@ test "eval: Map has/delete" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: Map clear" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 1], ["b", 2]]);
+        \\var ret = m.clear();
+        \\m.size === 0 && !m.has("a") && ret === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: Map overwrite value" {
     const result = try evalExpr(
         \\var m = new Map();
@@ -1717,6 +2617,88 @@ test "eval: Map overwrite value" {
         \\m.get("a")
     );
     try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map constructor consumes entries" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 1], ["b", 2], ["a", 9]]);
+        \\m.size === 2 && m.get("a") === 9 && m.get("b") === 2
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map constructor consumes array-like entries" {
+    const result = try evalExpr(
+        \\var entries = {0: {0: "x", 1: 7, length: 2}, length: 1};
+        \\new Map(entries).get("x")
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map constructor rejects invalid entries" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Map("ab"); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map constructor allows missing entry value" {
+    const result = try evalExpr(
+        \\var m = new Map([["a"]]);
+        \\m.has("a") && m.get("a") === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map requires new" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { Map(); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map is iterable" {
+    const result = try evalExpr(
+        \\var sum = 0;
+        \\for (var entry of new Map([["a", 2], ["b", 3]])) {
+        \\  sum = sum + entry[1];
+        \\}
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map uses SameValueZero keys" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set(NaN, 1);
+        \\m.set(NaN, 2);
+        \\m.size === 1 && m.get(NaN) === 2
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map set missing args stores undefined" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set();
+        \\var removed = m.delete();
+        \\m.size === 0 && removed
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map method lengths" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set.length === 2 && m.get.length === 1 && m.has.length === 1 &&
+        \\m.delete.length === 1 && m.clear.length === 0 && m.forEach.length === 1
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Map forEach" {
@@ -1731,6 +2713,54 @@ test "eval: Map forEach" {
     try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
 }
 
+test "eval: Map forEach uses thisArg" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 1]]);
+        \\var ctx = {ok: 7};
+        \\var out = 0;
+        \\m.forEach(function(value, key, self) {
+        \\  if (this === ctx && key === "a" && self === m) out = value + this.ok;
+        \\}, ctx);
+        \\out
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map forEach visits appended entries" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 1]]);
+        \\var sum = 0;
+        \\m.forEach(function(value, key) {
+        \\  sum = sum + value;
+        \\  if (key === "a") m.set("b", 2);
+        \\});
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map forEach does not skip after deleting current entry" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 1], ["b", 2]]);
+        \\var sum = 0;
+        \\m.forEach(function(value, key) {
+        \\  sum = sum + value;
+        \\  if (key === "a") m.delete("a");
+        \\});
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map forEach rejects non-callable callback" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Map().forEach(1); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
 // ── Set ─────────────────────────────────────────────────────────
 
 test "eval: new Set basic" {
@@ -1742,6 +2772,83 @@ test "eval: new Set basic" {
         \\s.size
     );
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set constructor consumes array-like values" {
+    const result = try evalExpr(
+        \\var src = {0: "a", 1: "a", 2: "b", length: 3};
+        \\var s = new Set(src);
+        \\s.size === 2 && s.has("b")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set constructor consumes string iterable" {
+    const result = try evalExpr(
+        \\var s = new Set("aba");
+        \\s.size === 2 && s.has("a") && s.has("b")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set constructor rejects non-iterable primitive" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Set(1); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set requires new" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { Set(); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set is iterable" {
+    const result = try evalExpr(
+        \\var sum = 0;
+        \\for (var value of new Set([1, 2, 2, 3])) {
+        \\  sum = sum + value;
+        \\}
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set uses SameValueZero values" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add(NaN);
+        \\s.add(NaN);
+        \\s.size === 1 && s.has(NaN)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set add missing arg stores undefined" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add();
+        \\s.add(undefined);
+        \\var had = s.has();
+        \\var removed = s.delete();
+        \\s.size === 0 && had && removed
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set method lengths" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add.length === 1 && s.has.length === 1 && s.delete.length === 1 &&
+        \\s.clear.length === 0 && s.forEach.length === 1
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Set has/delete" {
@@ -1767,6 +2874,54 @@ test "eval: Set forEach" {
         \\sum
     );
     try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set forEach uses thisArg" {
+    const result = try evalExpr(
+        \\var s = new Set([3]);
+        \\var ctx = {ok: 4};
+        \\var out = 0;
+        \\s.forEach(function(value, key, self) {
+        \\  if (this === ctx && key === value && self === s) out = value + this.ok;
+        \\}, ctx);
+        \\out
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set forEach visits appended values" {
+    const result = try evalExpr(
+        \\var s = new Set([1]);
+        \\var sum = 0;
+        \\s.forEach(function(value) {
+        \\  sum = sum + value;
+        \\  if (value === 1) s.add(2);
+        \\});
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set forEach does not skip after deleting current value" {
+    const result = try evalExpr(
+        \\var s = new Set([1, 2]);
+        \\var sum = 0;
+        \\s.forEach(function(value) {
+        \\  sum = sum + value;
+        \\  if (value === 1) s.delete(1);
+        \\});
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set forEach rejects non-callable callback" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Set().forEach(1); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
 }
 
 // ── for-of / for-in ─────────────────────────────────────────────
@@ -1910,6 +3065,16 @@ test "eval: regex exec returns match" {
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
 }
 
+test "eval: regexp methods coerce primitive input" {
+    const result = try evalExpr(
+        \\/123/.test(123) &&
+        \\/undef/.test() &&
+        \\/[0-9]+/.exec(123)[0] === "123" &&
+        \\/undef/.exec()[0] === "undef"
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: string match" {
     const result = try evalExpr(
         \\var m = "hello world".match(/world/);
@@ -1923,6 +3088,16 @@ test "eval: string search" {
         \\"abc123".search(/\d/)
     );
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: string regex helpers coerce primitive arguments" {
+    const result = try evalExpr(
+        \\"abc123".search(123) === 3 &&
+        \\"abc123".match(123)[0] === "123" &&
+        \\"a1b".replace(1, function(){ return false; }) === "afalseb" &&
+        \\"a1b".replace(1, function(){ return null; }) === "anullb"
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: regex char class" {
@@ -2144,6 +3319,8 @@ test "eval: setTimeout callback fires on runPendingTimers" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
 
     // Execute: x is still 0, timer is queued
@@ -2161,6 +3338,30 @@ test "eval: setTimeout callback fires on runPendingTimers" {
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), x_val.asNumber(), 0.001);
 }
 
+test "eval: timer APIs coerce string delay and id" {
+    var compiler = kotori.Compiler.init(std.testing.allocator,
+        \\var x = 0;
+        \\var id = setTimeout(function() { x = 99; }, "0");
+        \\clearTimeout(String(id));
+        \\x
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
+    try vm_inst.initBuiltins();
+
+    _ = try vm_inst.execute();
+    _ = try vm_inst.runPendingTimers();
+
+    const x_id = try compiler.parser.pool.intern("x");
+    const x_val = vm_inst.globals.get(x_id) orelse JsValue.undefined_val;
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), x_val.asNumber(), 0.001);
+}
+
 test "eval: clearTimeout cancels timer" {
     var compiler = kotori.Compiler.init(std.testing.allocator,
         \\var x = 0;
@@ -2173,6 +3374,8 @@ test "eval: clearTimeout cancels timer" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
 
     _ = try vm_inst.execute();
@@ -2194,6 +3397,8 @@ test "eval: setInterval fires repeatedly" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
 
     _ = try vm_inst.execute();
@@ -2247,6 +3452,30 @@ test "Promise constructor with reject" {
     try std.testing.expectApproxEqAbs(@as(f64, 55.0), result.asNumber(), 0.001);
 }
 
+test "Promise constructor rejects when executor throws" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\new Promise(function() {
+        \\    throw 4;
+        \\}).catch(function(e) { result = e; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "Promise constructor ignores executor throw after resolve" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\new Promise(function(resolve) {
+        \\    resolve(3);
+        \\    throw 4;
+        \\}).then(
+        \\    function(v) { result = v; },
+        \\    function(e) { result = e; }
+        \\);
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
 test "Promise then chaining" {
     const result = try evalWithMicrotasks(
         \\var result = 0;
@@ -2266,6 +3495,81 @@ test "Promise catch then chain" {
         \\    .then(function(v) { result = v; });
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "Promise finally passes through fulfillment value" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(5)
+        \\    .finally(function() { return 9; })
+        \\    .then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "Promise finally passes through rejection reason" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.reject(7)
+        \\    .finally(function() { return 9; })
+        \\    .catch(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "Promise finally waits for returned thenable" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(5)
+        \\    .finally(function() {
+        \\        return { then: function(resolve) { result = 1; resolve(9); } };
+        \\    })
+        \\    .then(function(v) { result = result * 10 + v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "Promise finally rejected returned promise overrides original value" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(5)
+        \\    .finally(function() { return Promise.reject(9); })
+        \\    .then(
+        \\        function() { result = 1; },
+        \\        function(e) { result = e; }
+        \\    );
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 9.0), result.asNumber(), 0.001);
+}
+
+test "Promise finally ignores non-callable handler" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(3)
+        \\    .finally({})
+        \\    .then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "Promise then rejects when handler throws" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(1)
+        \\    .then(function() { throw 8; })
+        \\    .catch(function(e) { result = e; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "Promise finally rejects when handler throws" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(1)
+        \\    .finally(function() { throw 6; })
+        \\    .catch(function(e) { result = e; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
 test "async function returns promise that resolves" {
@@ -2357,11 +3661,79 @@ test "array reduce no initial value" {
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
+test "array reduce reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1, 2];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 4; } });
+        \\var result = a.reduce(function(acc, x) { return acc + x; }) * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 61.0), result.asNumber(), 0.001);
+}
+
 test "array reduceRight" {
     const result = try evalWithMicrotasks(
         \\var result = [1, 2, 3, 4].reduceRight(function(acc, x) { return acc + x; });
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "array reduceRight reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1, 2];
+        \\Object.defineProperty(a, 1, { get: function() { calls = calls + 1; return 5; } });
+        \\var result = a.reduceRight(function(acc, x) { return acc + x; }) * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 61.0), result.asNumber(), 0.001);
+}
+
+test "array reduce works on array-like objects" {
+    const result = try evalExpr(
+        \\Array.prototype.reduce.call({0: 2, 1: 3, length: "2"}, function(acc, x) { return acc + x; }, 5)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "array reduce skips missing array-like elements" {
+    const result = try evalExpr(
+        \\Array.prototype.reduce.call({1: 4, length: 3}, function(acc, x) { return acc + x; })
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "array reduceRight works on array-like objects" {
+    const result = try evalExpr(
+        \\Array.prototype.reduceRight.call({0: 2, 1: 3, length: "2"}, function(acc, x) { return acc * 10 + x; }, 1)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 132.0), result.asNumber(), 0.001);
+}
+
+test "array reduce empty without initial throws TypeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { [].reduce(function(acc, x) { return acc + x; }); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "array reduceRight empty without initial throws TypeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { [].reduceRight(function(acc, x) { return acc + x; }); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "array reduce non-callable callback throws TypeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { [1].reduce({}); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
 }
 
 // ── Array.find / findIndex ──
@@ -2394,6 +3766,26 @@ test "array findIndex returns -1 when not found" {
     try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
 }
 
+test "array find reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 7; } });
+        \\var result = a.find(function(x) { return x === 7; }) * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
+test "array findLastIndex reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1, 2];
+        \\Object.defineProperty(a, 1, { get: function() { calls = calls + 1; return 8; } });
+        \\var result = a.findLastIndex(function(x) { return x === 8; }) * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 11.0), result.asNumber(), 0.001);
+}
+
 // ── Array.some / every ──
 
 test "array some true" {
@@ -2422,6 +3814,26 @@ test "array every false" {
         \\var result = [2, 3, 6].every(function(x) { return x % 2 === 0; }) ? 1 : 0;
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "array some reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 9; } });
+        \\var result = (a.some(function(x) { return x === 9; }) ? 10 : 0) + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 11.0), result.asNumber(), 0.001);
+}
+
+test "array every reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 4; } });
+        \\var result = (a.every(function(x) { return x === 4; }) ? 10 : 0) + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 11.0), result.asNumber(), 0.001);
 }
 
 // ── Array.sort ──
@@ -2453,6 +3865,15 @@ test "array sort descending" {
     try std.testing.expectApproxEqAbs(@as(f64, 321.0), result.asNumber(), 0.001);
 }
 
+test "array sort compareFn coerces return value" {
+    const result = try evalWithMicrotasks(
+        \\var a = [3, 1, 2];
+        \\a.sort(function(x, y) { return "" + (x - y); });
+        \\var result = a[0] * 100 + a[1] * 10 + a[2];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 123.0), result.asNumber(), 0.001);
+}
+
 // ── Array.splice ──
 
 test "array splice delete" {
@@ -2473,6 +3894,15 @@ test "array splice insert" {
     try std.testing.expectApproxEqAbs(@as(f64, 5234.0), result.asNumber(), 0.001);
 }
 
+test "array splice coerces start and deleteCount" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, 2, 3, 4];
+        \\var removed = a.splice("1", "2");
+        \\var result = removed[0] * 1000 + removed[1] * 100 + a.length * 10 + a[1];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 2324.0), result.asNumber(), 0.001);
+}
+
 // ── Array.flat / flatMap ──
 
 test "array flat" {
@@ -2482,11 +3912,65 @@ test "array flat" {
     try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
 }
 
+test "array flat coerces depth" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, [2, [3]]];
+        \\var result = a.flat("2").length * 10 + a.flat(1.9)[1];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 32.0), result.asNumber(), 0.001);
+}
+
+test "array flat works on array-like objects" {
+    const result = try evalWithMicrotasks(
+        \\var out = Array.prototype.flat.call({0: [1, 2], 1: 3, length: "2"});
+        \\var result = out.length * 100 + out[0] * 10 + out[2];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 313.0), result.asNumber(), 0.001);
+}
+
+test "array flat reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return [4]; } });
+        \\var out = a.flat();
+        \\var result = out[0] * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 41.0), result.asNumber(), 0.001);
+}
+
 test "array flatMap" {
     const result = try evalWithMicrotasks(
         \\var result = [1, 2, 3].flatMap(function(x) { return [x, x * 2]; }).length;
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "array flatMap works on array-like objects" {
+    const result = try evalWithMicrotasks(
+        \\var out = Array.prototype.flatMap.call({0: 2, 1: 3, length: "2"}, function(x) { return [x, x * 10]; });
+        \\var result = out.length * 1000 + out[0] * 100 + out[3];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 4230.0), result.asNumber(), 0.001);
+}
+
+test "array flatMap reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 5; } });
+        \\var out = a.flatMap(function(x) { return [x + 1]; });
+        \\var result = out[0] * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 61.0), result.asNumber(), 0.001);
+}
+
+test "array flatMap non-callable callback throws TypeError" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\try { [1].flatMap({}); } catch (e) { if (e.name === "TypeError") result = 1; }
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
 }
 
 // ── Array.fill / at / unshift ──
@@ -2500,11 +3984,44 @@ test "array fill" {
     try std.testing.expectApproxEqAbs(@as(f64, 1004.0), result.asNumber(), 0.001);
 }
 
+test "array fill coerces start and end" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, 2, 3, 4];
+        \\a.fill(9, "1", "3");
+        \\var result = a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1994.0), result.asNumber(), 0.001);
+}
+
 test "array at negative index" {
     const result = try evalWithMicrotasks(
         \\var result = [1, 2, 3].at(-1);
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "array at coerces index" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].at("1") * 10 + [1, 2, 3].at("-1");
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 23.0), result.asNumber(), 0.001);
+}
+
+test "array at works on array-like objects" {
+    const result = try evalWithMicrotasks(
+        \\var result = Array.prototype.at.call({0: 4, 2: 8, length: "3"}, -1);
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "array at reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 6; } });
+        \\var result = a.at(0) * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 61.0), result.asNumber(), 0.001);
 }
 
 test "array unshift" {
@@ -2525,12 +4042,38 @@ test "array keys" {
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
 }
 
+test "array keys works on array-like objects" {
+    const result = try evalWithMicrotasks(
+        \\var result = Array.prototype.keys.call({length: "3"}).length;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "array values reads accessor elements" {
+    const result = try evalWithMicrotasks(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 8; } });
+        \\var v = a.values();
+        \\var result = v[0] * 10 + calls;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 81.0), result.asNumber(), 0.001);
+}
+
 test "array entries" {
     const result = try evalWithMicrotasks(
         \\var e = [10, 20].entries();
         \\var result = e[0][0] * 100 + e[0][1] * 10 + e[1][0];
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 101.0), result.asNumber(), 0.001);
+}
+
+test "array entries works on array-like objects" {
+    const result = try evalWithMicrotasks(
+        \\var e = Array.prototype.entries.call({0: 4, 1: 5, length: "2"});
+        \\var result = e[0][0] * 100 + e[0][1] * 10 + e[1][1];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 45.0), result.asNumber(), 0.001);
 }
 
 test "array toString" {
@@ -2698,6 +4241,8 @@ test "export default expression" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     _ = try vm_inst.execute();
     const default_sid = try compiler.parser.pool.intern("default");
@@ -2716,6 +4261,8 @@ test "export const declaration" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     _ = try vm_inst.execute();
     const x_sid = try compiler.parser.pool.intern("x");
@@ -2737,6 +4284,8 @@ test "export function declaration" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     _ = try vm_inst.execute();
     const add_sid = try compiler.parser.pool.intern("add");
@@ -2755,6 +4304,8 @@ test "export named from locals" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     _ = try vm_inst.execute();
     const a_sid = try compiler.parser.pool.intern("a");
@@ -2778,6 +4329,8 @@ test "import side-effect only (no crash)" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     _ = try vm_inst.execute();
     const r_sid = try compiler.parser.pool.intern("result");
@@ -2807,6 +4360,8 @@ test "import binding resolves from module_exports" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     // Pre-seed: simulate a loaded module that exports "foo" = 999
     const foo_sid = try compiler.parser.pool.intern("foo");
@@ -2937,6 +4492,235 @@ test "Number toString radix 16" {
     try std.testing.expect(result.isString());
 }
 
+test "Number toLocaleString basic" {
+    const result = try evalExpr("(123).toLocaleString() === \"123\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "Number formatting methods coerce digit arguments" {
+    const result = try evalExpr(
+        \\(3.14159).toFixed("2") === "3.14" &&
+        \\(255).toString("16") === "ff" &&
+        \\(1.5).toPrecision("2").indexOf("e") >= 0 &&
+        \\(1.5).toExponential("2").indexOf("e") >= 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Number constructor trims form feed" {
+    const result = try evalExpr("Number(\"\\f1.5\") === 1.5");
+    try std.testing.expect(result.asBool());
+}
+
+test "Number constructor trims non-breaking space" {
+    const result = try evalExpr("Number(\"\\u00a01.5\\u00a0\") === 1.5");
+    try std.testing.expect(result.asBool());
+}
+
+test "Boolean prototype toString" {
+    const result = try evalExpr("Boolean.prototype.toString.call(true) === \"true\"");
+    try std.testing.expect(result.asBool());
+}
+
+test "Boolean prototype valueOf" {
+    const result = try evalExpr(
+        \\Boolean.prototype.hasOwnProperty("valueOf") &&
+        \\Boolean.prototype.valueOf.call(false) === false
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Boolean prototype constructor" {
+    const result = try evalExpr("Boolean.prototype.constructor === Boolean");
+    try std.testing.expect(result.asBool());
+}
+
+test "String prototype constructor" {
+    const result = try evalExpr("String.prototype.constructor === String");
+    try std.testing.expect(result.asBool());
+}
+
+test "Number prototype constructor" {
+    const result = try evalExpr("Number.prototype.constructor === Number");
+    try std.testing.expect(result.asBool());
+}
+
+test "Array prototype constructor" {
+    const result = try evalExpr("Array.prototype.constructor === Array");
+    try std.testing.expect(result.asBool());
+}
+
+test "Date prototype constructor" {
+    const result = try evalExpr("Date.prototype.constructor === Date");
+    try std.testing.expect(result.asBool());
+}
+
+test "RegExp prototype constructor" {
+    const result = try evalExpr("RegExp.prototype.constructor === RegExp");
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype constructor" {
+    const result = try evalExpr("Map.prototype.constructor === Map");
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype set works with call" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\var ret = Map.prototype.set.call(m, "a", 3);
+        \\ret === m && m.get("a") === 3 && m.size === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype get works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3]]);
+        \\Map.prototype.get.call(m, "a")
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "Map prototype has works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3]]);
+        \\Map.prototype.has.call(m, "a") && !Map.prototype.has.call(m, "b")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype delete works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3]]);
+        \\Map.prototype.delete.call(m, "a") && !m.has("a") && m.size === 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype clear works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3], ["b", 4]]);
+        \\Map.prototype.clear.call(m);
+        \\m.size === 0 && !m.has("a") && !m.has("b")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype values works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3], ["b", 4]]);
+        \\var values = Map.prototype.values.call(m);
+        \\values.length === 2 && values[0] === 3 && values[1] === 4
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype keys works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3], ["b", 4]]);
+        \\var keys = Map.prototype.keys.call(m);
+        \\keys.length === 2 && keys[0] === "a" && keys[1] === "b"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype entries works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3], ["b", 4]]);
+        \\var entries = Map.prototype.entries.call(m);
+        \\entries.length === 2 && entries[0][0] === "a" && entries[0][1] === 3 && entries[1][0] === "b" && entries[1][1] === 4
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Map prototype forEach works with call" {
+    const result = try evalExpr(
+        \\var m = new Map([["a", 3], ["b", 4]]);
+        \\var sum = 0;
+        \\var keys = "";
+        \\Map.prototype.forEach.call(m, function(value, key) { sum = sum + value; keys = keys + key; });
+        \\sum === 7 && keys === "ab"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype constructor" {
+    const result = try evalExpr("Set.prototype.constructor === Set");
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype add works with call" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\var ret = Set.prototype.add.call(s, "a");
+        \\ret === s && s.has("a") && s.size === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype has works with call" {
+    const result = try evalExpr(
+        \\var s = new Set(["a"]);
+        \\Set.prototype.has.call(s, "a")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype delete works with call" {
+    const result = try evalExpr(
+        \\var s = new Set(["a"]);
+        \\Set.prototype.delete.call(s, "a") && !s.has("a") && s.size === 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype clear works with call" {
+    const result = try evalExpr(
+        \\var s = new Set(["a", "b"]);
+        \\Set.prototype.clear.call(s);
+        \\s.size === 0 && !s.has("a") && !s.has("b")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype values works with call" {
+    const result = try evalExpr(
+        \\var s = new Set(["a", "b"]);
+        \\var values = Set.prototype.values.call(s);
+        \\values.length === 2 && values[0] === "a" && values[1] === "b"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype keys works with call" {
+    const result = try evalExpr(
+        \\var s = new Set(["a", "b"]);
+        \\var keys = Set.prototype.keys.call(s);
+        \\keys.length === 2 && keys[0] === "a" && keys[1] === "b"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype entries works with call" {
+    const result = try evalExpr(
+        \\var s = new Set(["a", "b"]);
+        \\var entries = Set.prototype.entries.call(s);
+        \\entries.length === 2 && entries[0][0] === "a" && entries[0][1] === "a" && entries[1][0] === "b" && entries[1][1] === "b"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Set prototype forEach works with call" {
+    const result = try evalExpr(
+        \\var s = new Set([3, 4]);
+        \\var sum = 0;
+        \\Set.prototype.forEach.call(s, function(value, key) { sum = sum + value + key; });
+        \\sum === 14
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "Number.isNaN true" {
     const result = try evalExpr(
         \\Number.isNaN(NaN);
@@ -2970,6 +4754,17 @@ test "Number.isInteger false for float" {
         \\Number.isInteger(42.5);
     );
     try std.testing.expect(result.asBool() == false);
+}
+
+test "Number.isSafeInteger" {
+    const result = try evalExpr(
+        \\Number.isSafeInteger(42) &&
+        \\Number.isSafeInteger(Number.MAX_SAFE_INTEGER) &&
+        \\!Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1) &&
+        \\!Number.isSafeInteger(42.5) &&
+        \\!Number.isSafeInteger("42")
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "Number.MAX_SAFE_INTEGER" {
@@ -3039,6 +4834,57 @@ test "Date toISOString" {
     try std.testing.expect(result.isString());
 }
 
+test "Date JSON.stringify uses toJSON" {
+    const result = try evalExpr(
+        \\var d = new Date(0);
+        \\JSON.stringify(d) === '"' + d.toISOString() + '"' &&
+        \\JSON.stringify({d: d}) === '{"d":"' + d.toISOString() + '"}'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Date invalid value serializes as null" {
+    const result = try evalExpr(
+        \\var d = new Date(NaN);
+        \\var threw = false;
+        \\try { d.toISOString(); } catch (e) { threw = e.name === "RangeError"; }
+        \\isNaN(d.getTime()) &&
+        \\d.toString() === "Invalid Date" &&
+        \\d.toJSON() === null &&
+        \\JSON.stringify(d) === "null" &&
+        \\JSON.stringify({d: d}) === '{"d":null}' &&
+        \\threw
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Date method lengths" {
+    const result = try evalExpr(
+        \\Date.length === 7 &&
+        \\Date.now.length === 0 &&
+        \\Date.parse.length === 1 &&
+        \\Date.UTC.length === 7 &&
+        \\Date.prototype.toISOString.length === 0 &&
+        \\Date.prototype.toJSON.length === 1 &&
+        \\Date.prototype.setTime.length === 1 &&
+        \\Date.prototype.setFullYear.length === 3 &&
+        \\Date.prototype.setMonth.length === 2 &&
+        \\Date.prototype.setDate.length === 1 &&
+        \\Date.prototype.setHours.length === 4 &&
+        \\Date.prototype.setMinutes.length === 3 &&
+        \\Date.prototype.setSeconds.length === 2 &&
+        \\Date.prototype.setMilliseconds.length === 1 &&
+        \\Date.prototype.setUTCFullYear.length === 3 &&
+        \\Date.prototype.setUTCMonth.length === 2 &&
+        \\Date.prototype.setUTCDate.length === 1 &&
+        \\Date.prototype.setUTCHours.length === 4 &&
+        \\Date.prototype.setUTCMinutes.length === 3 &&
+        \\Date.prototype.setUTCSeconds.length === 2 &&
+        \\Date.prototype.setUTCMilliseconds.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "Date getMonth zero-based" {
     const result = try evalWithMicrotasks(
         \\var d = new Date(2026, 3, 12);
@@ -3069,6 +4915,49 @@ test "Date setFullYear" {
         \\var result = d.getFullYear();
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 2030.0), result.asNumber(), 0.001);
+}
+
+test "Date numeric APIs coerce string arguments" {
+    const result = try evalExpr(
+        \\var d = new Date("2026", "0", "2", "3", "4", "5", "6");
+        \\var localOk = d.getFullYear() === 2026 &&
+        \\  d.getMonth() === 0 &&
+        \\  d.getDate() === 2 &&
+        \\  d.getHours() === 3 &&
+        \\  d.getMinutes() === 4 &&
+        \\  d.getSeconds() === 5 &&
+        \\  d.getMilliseconds() === 6;
+        \\var u = new Date(Date.UTC("2026", "0", "2", "3", "4", "5", "6"));
+        \\var utcOk = u.getUTCFullYear() === 2026 &&
+        \\  u.getUTCMonth() === 0 &&
+        \\  u.getUTCDate() === 2 &&
+        \\  u.getUTCHours() === 3 &&
+        \\  u.getUTCMinutes() === 4 &&
+        \\  u.getUTCSeconds() === 5 &&
+        \\  u.getUTCMilliseconds() === 6;
+        \\var s = new Date(0);
+        \\s.setFullYear("2027", "1", "3");
+        \\s.setHours("4", "5", "6", "7");
+        \\var setterOk = s.getFullYear() === 2027 &&
+        \\  s.getMonth() === 1 &&
+        \\  s.getDate() === 3 &&
+        \\  s.getHours() === 4 &&
+        \\  s.getMinutes() === 5 &&
+        \\  s.getSeconds() === 6 &&
+        \\  s.getMilliseconds() === 7;
+        \\var us = new Date(0);
+        \\us.setUTCFullYear("2027", "1", "3");
+        \\us.setUTCHours("4", "5", "6", "7");
+        \\var utcSetterOk = us.getUTCFullYear() === 2027 &&
+        \\  us.getUTCMonth() === 1 &&
+        \\  us.getUTCDate() === 3 &&
+        \\  us.getUTCHours() === 4 &&
+        \\  us.getUTCMinutes() === 5 &&
+        \\  us.getUTCSeconds() === 6 &&
+        \\  us.getUTCMilliseconds() === 7;
+        \\localOk && utcOk && setterOk && utcSetterOk
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "Date getUTCHours epoch" {
@@ -3419,6 +5308,51 @@ test "eval: WeakMap basic" {
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
 
+test "eval: WeakMap prototype constructor" {
+    const result = try evalExpr("WeakMap.prototype.constructor === WeakMap");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap prototype set works with call" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\let o = {};
+        \\let ret = WeakMap.prototype.set.call(wm, o, 9);
+        \\ret === wm && wm.get(o) === 9
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap prototype get works with call" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\let o = {};
+        \\wm.set(o, 9);
+        \\WeakMap.prototype.get.call(wm, o)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 9.0), result.asNumber(), 0.001);
+}
+
+test "eval: WeakMap prototype has works with call" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\let o = {};
+        \\wm.set(o, 9);
+        \\WeakMap.prototype.has.call(wm, o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap prototype delete works with call" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\let o = {};
+        \\wm.set(o, 9);
+        \\WeakMap.prototype.delete.call(wm, o) && !wm.has(o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: WeakMap has and delete" {
     const result = try evalExpr(
         \\let wm = new WeakMap();
@@ -3431,12 +5365,172 @@ test "eval: WeakMap has and delete" {
     try std.testing.expect(!result.asBool());
 }
 
+test "eval: WeakMap constructor consumes entries" {
+    const result = try evalExpr(
+        \\let o = {};
+        \\let wm = new WeakMap([[o, 7]]);
+        \\wm.get(o)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: WeakMap constructor allows missing entry value" {
+    const result = try evalExpr(
+        \\let o = {};
+        \\let wm = new WeakMap([[o]]);
+        \\wm.has(o) && wm.get(o) === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap constructor rejects primitive keys" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { new WeakMap([[1, 2]]); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap constructor rejects non-iterable primitive" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { new WeakMap(1); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap set missing value stores undefined" {
+    const result = try evalExpr(
+        \\let o = {};
+        \\let wm = new WeakMap();
+        \\wm.set(o);
+        \\wm.has(o) && wm.get(o) === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap set missing key throws" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { new WeakMap().set(); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap method lengths" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\wm.set.length === 2 && wm.get.length === 1 && wm.has.length === 1 && wm.delete.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakMap requires new" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { WeakMap(); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: WeakSet basic" {
     const result = try evalExpr(
         \\let ws = new WeakSet();
         \\let o = {};
         \\ws.add(o);
         \\ws.has(o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet prototype constructor" {
+    const result = try evalExpr("WeakSet.prototype.constructor === WeakSet");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet prototype add works with call" {
+    const result = try evalExpr(
+        \\let ws = new WeakSet();
+        \\let o = {};
+        \\let ret = WeakSet.prototype.add.call(ws, o);
+        \\ret === ws && ws.has(o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet prototype has works with call" {
+    const result = try evalExpr(
+        \\let ws = new WeakSet();
+        \\let o = {};
+        \\ws.add(o);
+        \\WeakSet.prototype.has.call(ws, o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet prototype delete works with call" {
+    const result = try evalExpr(
+        \\let ws = new WeakSet();
+        \\let o = {};
+        \\ws.add(o);
+        \\WeakSet.prototype.delete.call(ws, o) && !ws.has(o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet constructor consumes values" {
+    const result = try evalExpr(
+        \\let o = {};
+        \\let ws = new WeakSet([o]);
+        \\ws.has(o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet constructor rejects primitive values" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { new WeakSet([1]); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet constructor rejects non-iterable primitive" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { new WeakSet(1); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet add missing value throws" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { new WeakSet().add(); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet method lengths" {
+    const result = try evalExpr(
+        \\let ws = new WeakSet();
+        \\ws.add.length === 1 && ws.has.length === 1 && ws.delete.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet requires new" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { WeakSet(); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
     );
     try std.testing.expect(result.asBool());
 }
@@ -3689,6 +5783,17 @@ test "eval: array iterator done" {
         \\it.next().done
     );
     try std.testing.expect(result.asBool());
+}
+
+test "eval: array iterator reads accessor elements" {
+    const result = try evalExpr(
+        \\let calls = 0;
+        \\let a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 7; } });
+        \\let it = a[Symbol.iterator]();
+        \\it.next().value * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
 }
 
 // ── Phase F: Empty string falsiness ─────────────────────────────
@@ -4009,6 +6114,29 @@ test "eval: Math.clz32 zero" {
     try std.testing.expectApproxEqAbs(@as(f64, 32.0), result.asNumber(), 0.001);
 }
 
+test "eval: Math.imul wraps int32 product" {
+    const result = try evalExpr(
+        \\Math.imul(2, 4) === 8 &&
+        \\Math.imul(0xffffffff, 5) === -5
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Math.asinh" {
+    const result = try evalExpr("Math.asinh(0) === 0 && Math.asinh(1) > 0");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Math.acosh" {
+    const result = try evalExpr("Math.acosh(1) === 0 && Math.acosh(2) > 0");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Math.atanh" {
+    const result = try evalExpr("Math.atanh(0) === 0 && Math.atanh(0.5) > 0");
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: Math.sinh" {
     const result = try evalExpr("Math.sinh(0)");
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
@@ -4037,6 +6165,22 @@ test "eval: Math.log1p" {
 test "eval: Math.expm1" {
     const result = try evalExpr("Math.expm1(0)");
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math extended methods coerce string numbers" {
+    const result = try evalExpr(
+        \\Math.sin("0") === 0 &&
+        \\Math.cos("0") === 1 &&
+        \\Math.atan2("1", "1") > 0 &&
+        \\Math.log2("8") === 3 &&
+        \\Math.cbrt("27") === 3 &&
+        \\Math.hypot("3", "4") === 5 &&
+        \\Math.clz32("1") === 31 &&
+        \\Math.fround("5.5") === 5.5 &&
+        \\Math.log1p("0") === 0 &&
+        \\Math.expm1("0") === 0
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Math.LN2" {
@@ -4070,6 +6214,13 @@ test "eval: encodeURIComponent special chars" {
     try std.testing.expect(result.isString());
 }
 
+test "eval: encodeURIComponent preserves mark chars" {
+    const result = try evalExpr(
+        \\encodeURIComponent("!'()*") === "!'()*"
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: decodeURIComponent roundtrip" {
     const result = try evalExpr(
         \\decodeURIComponent(encodeURIComponent("hello world"))
@@ -4089,6 +6240,45 @@ test "eval: decodeURI roundtrip" {
         \\decodeURI(encodeURI("test value"))
     );
     try std.testing.expect(result.isString());
+}
+
+test "eval: decodeURI preserves escaped reserved characters" {
+    const result = try evalExpr(
+        \\decodeURI("%3Fq%3Da%26b") === "%3Fq%3Da%26b"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: decodeURI decodes escaped mark characters" {
+    const result = try evalExpr(
+        \\decodeURI("%21%27%28%29%2A") === "!'()*"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: decodeURIComponent malformed escape throws URIError" {
+    const result = try evalExpr(
+        \\(function(){ try { decodeURIComponent("%"); } catch (e) { return e.name === "URIError"; } return false; })()
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: decodeURIComponent malformed utf8 throws URIError" {
+    const result = try evalExpr(
+        \\(function(){ try { decodeURIComponent("%FF"); } catch (e) { return e.name === "URIError"; } return false; })()
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: URI functions coerce input" {
+    const result = try evalExpr(
+        \\encodeURIComponent(123) === "123" &&
+        \\encodeURI(false) === "false" &&
+        \\decodeURIComponent({toString: function(){ return "a%20b"; }}) === "a b" &&
+        \\decodeURI({toString: function(){ return "a%20b"; }}) === "a b" &&
+        \\encodeURIComponent() === "undefined"
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: encodeURIComponent decode roundtrip equality" {
@@ -4125,6 +6315,16 @@ test "eval: String.fromCharCode A" {
 test "eval: String.fromCodePoint A" {
     const result = try evalExpr(
         \\String.fromCodePoint(65) === "A"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: String code constructors coerce and validate" {
+    const result = try evalExpr(
+        \\String.fromCharCode("65") === "A" &&
+        \\String.fromCodePoint("65") === "A" &&
+        \\(function(){ try { String.fromCodePoint(0x110000); } catch (e) { return e.name === "RangeError"; } return false; })() &&
+        \\(function(){ try { String.fromCodePoint(1.5); } catch (e) { return e.name === "RangeError"; } return false; })()
     );
     try std.testing.expect(result.asBool());
 }
@@ -4167,6 +6367,14 @@ test "eval: substr with length" {
 test "eval: substr negative start" {
     const result = try evalExpr(
         \\"hello".substr(-3) === "llo"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: codePointAt and substr coerce numeric arguments" {
+    const result = try evalExpr(
+        \\"AB".codePointAt("1") === 66 &&
+        \\"hello".substr("1", "3") === "ell"
     );
     try std.testing.expect(result.asBool());
 }
@@ -4221,6 +6429,118 @@ test "eval: Array.from with mapFn" {
     try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
 }
 
+test "eval: Array.from mapFn uses thisArg" {
+    const result = try evalExpr(
+        \\let a = Array.from([1, 2], function(x) { return x * this.factor; }, { factor: 3 });
+        \\a[0] + a[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 9.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from non-callable mapFn throws TypeError" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { Array.from([1], {}); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.from null and undefined throw TypeError" {
+    const result = try evalExpr(
+        \\let count = 0;
+        \\try { Array.from(null); } catch (e) { if (e.name === "TypeError") count = count + 1; }
+        \\try { Array.from(undefined); } catch (e) { if (e.name === "TypeError") count = count + 1; }
+        \\count
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from primitive number returns empty array" {
+    const result = try evalExpr(
+        \\Array.from(42).length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from array-like coerces string length" {
+    const result = try evalExpr(
+        \\let a = Array.from({0: 5, 1: 6, length: "2"});
+        \\a[0] * 10 + a[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 56.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from array-like preserves missing entries as undefined" {
+    const result = try evalExpr(
+        \\let a = Array.from({0: 5, length: "3"});
+        \\a.length === 3 && a[1] === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array generic methods coerce array-like string length" {
+    const result = try evalExpr(
+        \\let a = Array.prototype.map.call({0: 2, 1: 3, length: "2"}, x => x * 10);
+        \\a[0] + a[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 50.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from array-like reads accessor elements" {
+    const result = try evalExpr(
+        \\let calls = 0;
+        \\let a = Array.from({ get 0() { calls = calls + 1; return 7; }, length: 1 });
+        \\a[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array generic methods read array-like accessor elements" {
+    const result = try evalExpr(
+        \\let calls = 0;
+        \\let a = Array.prototype.map.call({ get 0() { calls = calls + 1; return 4; }, length: 1 }, x => x + 1);
+        \\a[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 51.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from array-like accessor throw propagates" {
+    const result = try evalExpr(
+        \\let caught = 0;
+        \\try { Array.from({ get 0() { throw 7; }, length: 1 }); } catch (e) { caught = e; }
+        \\caught
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array generic method accessor throw propagates" {
+    const result = try evalExpr(
+        \\let caught = 0;
+        \\try { Array.prototype.map.call({ get 0() { throw 8; }, length: 1 }, x => x); } catch (e) { caught = e; }
+        \\caught
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from array-like reads length accessor" {
+    const result = try evalExpr(
+        \\let calls = 0;
+        \\let a = Array.from({0: 4, get length() { calls = calls + 1; return "1"; }});
+        \\a[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 41.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array generic method length accessor throw propagates" {
+    const result = try evalExpr(
+        \\let caught = 0;
+        \\try { Array.prototype.map.call({ get length() { throw 9; } }, x => x); } catch (e) { caught = e; }
+        \\caught
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 9.0), result.asNumber(), 0.001);
+}
+
 // ── Abstract equality (==) ──────────────────────────────────────
 
 test "eval: null == undefined" {
@@ -4252,6 +6572,18 @@ test "eval: string == number coercion" {
     const result = try evalExpr(
         \\"42" == 42
     );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string == number trims vertical tab" {
+    const result = try evalExpr(
+        \\"\v42" == 42
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string == number trims non-breaking space" {
+    const result = try evalExpr("\"\\u00a042\\u00a0\" == 42");
     try std.testing.expect(result.asBool());
 }
 
@@ -4310,6 +6642,20 @@ test "eval: != with coercion" {
 test "eval: !== without coercion" {
     const result = try evalExpr(
         \\"42" !== 42
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: NaN is never strictly equal" {
+    const result = try evalExpr(
+        \\NaN !== NaN && !(NaN === NaN)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: NaN is never abstractly equal" {
+    const result = try evalExpr(
+        \\NaN != NaN && !(NaN == NaN)
     );
     try std.testing.expect(result.asBool());
 }
@@ -4561,6 +6907,24 @@ test "eval: Object.hasOwn sees defineProperty data property" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: Object.hasOwn coerces numeric keys" {
+    const result = try evalExpr(
+        \\var o = {0: "x"};
+        \\Object.hasOwn(o, 0)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.hasOwn supports symbol keys" {
+    const result = try evalExpr(
+        \\var s = Symbol("x");
+        \\var o = {};
+        \\o[s] = 1;
+        \\Object.hasOwn(o, s)
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: Object.defineProperty defaults are false" {
     const result = try evalExpr(
         \\var o = {};
@@ -4579,6 +6943,34 @@ test "eval: propertyIsEnumerable false for default defineProperty" {
         \\o.propertyIsEnumerable("x")
     );
     try std.testing.expect(result.isBool());
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: propertyIsEnumerable coerces numeric keys" {
+    const result = try evalExpr(
+        \\var o = {0: "x"};
+        \\o.propertyIsEnumerable(0)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: propertyIsEnumerable supports symbol keys" {
+    const result = try evalExpr(
+        \\var s = Symbol("x");
+        \\var o = {};
+        \\o[s] = 1;
+        \\o.propertyIsEnumerable(s)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: propertyIsEnumerable respects symbol descriptor attrs" {
+    const result = try evalExpr(
+        \\var s = Symbol("x");
+        \\var o = {};
+        \\Object.defineProperty(o, s, { value: 1, enumerable: false });
+        \\o.propertyIsEnumerable(s)
+    );
     try std.testing.expect(!result.asBool());
 }
 
@@ -4673,6 +7065,37 @@ test "eval: Object.fromEntries roundtrip" {
     try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
 }
 
+test "eval: Object.fromEntries reads accessor entries" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var pair = ["x", 1];
+        \\Object.defineProperty(pair, 1, { get: function() { calls = calls + 1; return 7; } });
+        \\var entries = [pair];
+        \\Object.defineProperty(entries, 0, { get: function() { calls = calls + 1; return pair; } });
+        \\var o = Object.fromEntries(entries);
+        \\o.x * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 72.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.fromEntries works on array-like entries" {
+    const result = try evalExpr(
+        \\var pair = {0: "x", 1: 8, length: "2"};
+        \\var entries = {0: pair, length: "1"};
+        \\Object.fromEntries(entries).x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.fromEntries supports symbol keys" {
+    const result = try evalExpr(
+        \\var s = Symbol("x");
+        \\var o = Object.fromEntries([[s, 9]]);
+        \\o[s]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 9.0), result.asNumber(), 0.001);
+}
+
 // ── Phase I: String.prototype.matchAll ──────────────────────────
 
 test "eval: matchAll basic iteration" {
@@ -4707,7 +7130,20 @@ test "eval: matchAll with string pattern" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: matchAll coerces primitive pattern" {
+    const result = try evalExpr(
+        \\var it = "abc123".matchAll(123);
+        \\it.next().value[0] === "123"
+    );
+    try std.testing.expect(result.asBool());
+}
+
 // ── Phase J: Object.prototype ───────────────────────────────────
+
+test "eval: Object.prototype.constructor" {
+    const result = try evalExpr("Object.prototype.constructor === Object");
+    try std.testing.expect(result.asBool());
+}
 
 test "eval: hasOwnProperty own prop" {
     const result = try evalExpr(
@@ -4739,6 +7175,14 @@ test "eval: Object.prototype.toString on array" {
         \\Object.prototype.toString.call(a)
     );
     try std.testing.expect(result.isString());
+}
+
+test "eval: Object.prototype.toLocaleString delegates to toString" {
+    const result = try evalExpr(
+        \\var o = { toString: function() { return "ok"; } };
+        \\o.toLocaleString() === "ok"
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Object.prototype.valueOf returns self" {
@@ -4813,6 +7257,15 @@ test "eval: structuredClone primitives" {
 test "eval: String.normalize returns self" {
     const result = try evalExpr(
         \\"hello".normalize() === "hello"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: String.normalize invalid form throws RangeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { "hello".normalize("BAD"); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok;
     );
     try std.testing.expect(result.asBool());
 }
@@ -4963,6 +7416,30 @@ test "eval: Uint8Array from length" {
     try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
 }
 
+test "eval: Uint8Array length coerces string" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array("4");
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array negative length throws RangeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Uint8Array(-1); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Uint8Array NaN length becomes zero" {
+    const result = try evalExpr(
+        \\new Uint8Array(NaN).length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
 test "eval: Uint8Array index read/write" {
     const result = try evalExpr(
         \\var a = new Uint8Array(3);
@@ -4970,6 +7447,15 @@ test "eval: Uint8Array index read/write" {
         \\a[0] + a[1] + a[2]
     );
     try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array index write coerces string value" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(1);
+        \\a[0] = "257";
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
 }
 
 test "eval: Uint8Array from array" {
@@ -4980,12 +7466,68 @@ test "eval: Uint8Array from array" {
     try std.testing.expectApproxEqAbs(@as(f64, 68.0), result.asNumber(), 0.001);
 }
 
+test "eval: Uint8Array from array coerces values" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(["65", true, null]);
+        \\a[0] + a[1] + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 66.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array constructor reads array accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var src = [1];
+        \\Object.defineProperty(src, 0, { get: function() { calls = calls + 1; return "8"; } });
+        \\var a = new Uint8Array(src);
+        \\a[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 81.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array constructor works on array-like objects" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array({0: "4", 2: 6, length: "3"});
+        \\a.length * 1000 + a[0] * 100 + a[1] * 10 + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3406.0), result.asNumber(), 0.001);
+}
+
 test "eval: ArrayBuffer constructor" {
     const result = try evalExpr(
         \\var b = new ArrayBuffer(8);
         \\b.byteLength
     );
     try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: ArrayBuffer prototype constructor" {
+    const result = try evalExpr("ArrayBuffer.prototype.constructor === ArrayBuffer");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: ArrayBuffer length coerces string" {
+    const result = try evalExpr(
+        \\var b = new ArrayBuffer("8");
+        \\b.byteLength
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: ArrayBuffer negative length throws RangeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new ArrayBuffer(-1); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: ArrayBuffer NaN length becomes zero" {
+    const result = try evalExpr(
+        \\new ArrayBuffer(NaN).byteLength
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }
 
 test "eval: Uint8Array from ArrayBuffer" {
@@ -4996,6 +7538,36 @@ test "eval: Uint8Array from ArrayBuffer" {
         \\v[0] + v.length
     );
     try std.testing.expectApproxEqAbs(@as(f64, 46.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array from ArrayBuffer honors byteOffset and length" {
+    const result = try evalExpr(
+        \\var b = new ArrayBuffer(4);
+        \\var all = new Uint8Array(b);
+        \\all[1] = 6; all[2] = 7;
+        \\var v = new Uint8Array(b, 1, 2);
+        \\v[1] = 9;
+        \\v[0] * 1000 + all[2] * 100 + v.length * 10 + v.byteLength
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6922.0), result.asNumber(), 0.001);
+}
+
+test "eval: Int16Array from ArrayBuffer rejects misaligned offset" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Int16Array(new ArrayBuffer(4), 1); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Int16Array from ArrayBuffer rejects misaligned byteLength" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Int16Array(new ArrayBuffer(3)); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
 }
 
 test "eval: Uint8Array byte overflow wraps" {
@@ -5125,6 +7697,14 @@ test "eval: btoa encode" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: btoa coerces primitive input" {
+    const result = try evalExpr(
+        \\btoa(123) === "MTIz" &&
+        \\btoa(false) === "ZmFsc2U="
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: atob decode" {
     const result = try evalExpr(
         \\atob("SGVsbG8=") === "Hello"
@@ -5153,6 +7733,25 @@ test "eval: Array.toSorted" {
     try std.testing.expectApproxEqAbs(@as(f64, 31.0), result.asNumber(), 0.001);
 }
 
+test "eval: Array.toSorted works on array-like objects" {
+    const result = try evalExpr(
+        \\var b = Array.prototype.toSorted.call({0: 3, 1: 1, 2: 2, length: "3"});
+        \\b[0] * 100 + b[1] * 10 + b[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 123.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.toSorted reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 9; } });
+        \\var b = a.toSorted();
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 91.0), result.asNumber(), 0.001);
+}
+
 test "eval: Array.toReversed" {
     const result = try evalExpr(
         \\var a = [1,2,3]; var b = a.toReversed(); a[0] * 10 + b[0]
@@ -5160,11 +7759,59 @@ test "eval: Array.toReversed" {
     try std.testing.expectApproxEqAbs(@as(f64, 13.0), result.asNumber(), 0.001);
 }
 
+test "eval: Array.toReversed works on array-like objects" {
+    const result = try evalExpr(
+        \\var b = Array.prototype.toReversed.call({0: 10, 2: 30, length: "3"});
+        \\b.length === 3 && b[0] === 30 && b[1] === undefined && b[2] === 10
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.toReversed reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 8; } });
+        \\var b = a.toReversed();
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 81.0), result.asNumber(), 0.001);
+}
+
 test "eval: Array.toSpliced" {
     const result = try evalExpr(
         \\var a = [1,2,3,4]; var b = a.toSpliced(1, 2, 8, 9); b.length * 10 + b[1]
     );
     try std.testing.expectApproxEqAbs(@as(f64, 48.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.toSpliced works on array-like objects" {
+    const result = try evalExpr(
+        \\var b = Array.prototype.toSpliced.call({0: 1, 2: 3, length: "3"}, 1, 1, 8);
+        \\b.length === 3 && b[0] === 1 && b[1] === 8 && b[2] === 3
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.toSpliced reads accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var a = [1, 2];
+        \\Object.defineProperty(a, 0, { get: function() { calls = calls + 1; return 7; } });
+        \\var b = a.toSpliced(1, 0, 9);
+        \\b[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 71.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.toSpliced coerces start and deleteCount" {
+    const result = try evalExpr(
+        \\var a = [1,2,3,4];
+        \\var b = a.toSpliced("1", "2", 8);
+        \\var c = a.toSpliced("-2", "1", 9);
+        \\b[1] * 100 + b.length * 10 + c[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 839.0), result.asNumber(), 0.001);
 }
 
 test "eval: WeakRef deref" {
@@ -5248,6 +7895,11 @@ test "eval: Date.now" {
     try std.testing.expect(result.asBool());
 }
 
+test "eval: Date.prototype.toGMTString aliases toUTCString" {
+    const result = try evalExpr("Date.prototype.toGMTString === Date.prototype.toUTCString");
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: JSON.stringify object multi-key" {
     const result = try evalExpr(
         \\JSON.stringify({a:1, b:"two"})
@@ -5314,6 +7966,40 @@ test "eval: Function.apply" {
     try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
 }
 
+test "eval: Function.apply accepts array-like arguments" {
+    const result = try evalExpr(
+        \\function sum(a, b) { return a + b; }
+        \\sum.apply(null, {0: 10, 1: 20, length: "2"})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: Function.apply reads array-like accessors" {
+    const result = try evalExpr(
+        \\let calls = 0;
+        \\function id(x) { return x; }
+        \\id.apply(null, { get 0() { calls = calls + 1; return 6; }, get length() { calls = calls + 1; return 1; } }) * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 62.0), result.asNumber(), 0.001);
+}
+
+test "eval: Function.apply rejects primitive argArray" {
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (function(){}).apply(null, 1); } catch (e) { ok = e.name === "TypeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Function.apply null argArray passes no arguments" {
+    const result = try evalExpr(
+        \\function count() { return arguments.length; }
+        \\count.apply(null, null)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
 test "eval: Function.bind basic" {
     const result = try evalExpr(
         \\function add(a, b) { return a + b; }
@@ -5356,6 +8042,93 @@ test "eval: Uint8Array slice" {
         \\b[0] + b[1] + b.length
     );
     try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array slice and set coerce numeric arguments" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array([1,2,3,4,5]);
+        \\var b = a.slice("1", "3");
+        \\a.set(["7", "8"], "1");
+        \\b[0] * 1000 + b[1] * 100 + a[1] * 10 + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2378.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array set reads array accessor elements" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var src = [1];
+        \\Object.defineProperty(src, 0, { get: function() { calls = calls + 1; return "9"; } });
+        \\var a = new Uint8Array(1);
+        \\a.set(src);
+        \\a[0] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 91.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array set works on array-like objects" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(3);
+        \\a.set({0: "4", 2: 6, length: "3"});
+        \\a[0] * 100 + a[1] * 10 + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 406.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array set out of range throws RangeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Uint8Array(2).set([1,2,3]); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Uint8Array set negative offset throws RangeError" {
+    const result = try evalExpr(
+        \\var ok = false;
+        \\try { new Uint8Array(2).set([1], -1); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Uint8Array slice handles negative indices" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array([1,2,3,4,5]);
+        \\var b = a.slice("-4", -1);
+        \\b[0] * 100 + b[1] * 10 + b[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 234.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array subarray shares backing bytes" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array([1,2,3,4,5]);
+        \\var b = a.subarray(-4, -1);
+        \\b[0] = 9;
+        \\a[1] * 100 + b[1] * 10 + b.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 933.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array set handles overlapping source" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array([1,2,3,4]);
+        \\a.set(a.subarray(0, 3), 1);
+        \\a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1123.0), result.asNumber(), 0.001);
+}
+
+test "eval: integer typed arrays store non-finite values as zero" {
+    const result = try evalExpr(
+        \\var u8 = new Uint8Array([NaN]);
+        \\var u16 = new Uint16Array([Infinity]);
+        \\var i32 = new Int32Array([-Infinity]);
+        \\u8[0] + u16[0] + i32[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }
 
 // ── TypedArray kind differentiation (ECMA-262 §23.2) ───────────────
@@ -5516,6 +8289,63 @@ test "eval: Object.getOwnPropertyDescriptors includes symbol keys" {
         \\descs[sym].value
     );
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.getOwnPropertySymbols returns own symbol keys" {
+    const result = try evalExpr(
+        \\var sym = Symbol("test");
+        \\var obj = {};
+        \\obj[sym] = 42;
+        \\var syms = Object.getOwnPropertySymbols(obj);
+        \\syms.length === 1 && syms[0] === sym
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.defineProperty supports symbol keys" {
+    const result = try evalExpr(
+        \\var sym = Symbol("test");
+        \\var obj = {};
+        \\Object.defineProperty(obj, sym, { value: 42, enumerable: true });
+        \\var desc = Object.getOwnPropertyDescriptor(obj, sym);
+        \\obj[sym] + desc.value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 84.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.defineProperties supports symbol keys" {
+    const result = try evalExpr(
+        \\var sym = Symbol("test");
+        \\var obj = {};
+        \\var props = {};
+        \\props[sym] = { value: 5, enumerable: true };
+        \\Object.defineProperties(obj, props);
+        \\obj[sym]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.defineProperties reads accessor descriptor map" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var obj = {};
+        \\var props = {};
+        \\Object.defineProperty(props, "x", { get: function() { calls = calls + 1; return { value: 6, enumerable: true }; } });
+        \\Object.defineProperties(obj, props);
+        \\obj.x * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 61.0), result.asNumber(), 0.001);
+}
+
+test "eval: symbol accessor descriptor get returns value" {
+    const result = try evalExpr(
+        \\var calls = 0;
+        \\var sym = Symbol("test");
+        \\var obj = {};
+        \\Object.defineProperty(obj, sym, { enumerable: true, get: function() { calls = calls + 1; return 6; } });
+        \\obj[sym] * 10 + calls
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 61.0), result.asNumber(), 0.001);
 }
 
 // ── Phase 4: accessor descriptor tests ─────────────────────────────
@@ -5828,6 +8658,154 @@ test "Layer 0A: Object.defineProperty.length === 3" {
     try std.testing.expect(result.asBool());
 }
 
+test "Layer 0A: Object.prototype method lengths" {
+    const result = try evalExpr(
+        \\Object.prototype.hasOwnProperty.length === 1 &&
+        \\Object.prototype.toString.length === 0 &&
+        \\Object.prototype.valueOf.length === 0 &&
+        \\Object.prototype.isPrototypeOf.length === 1 &&
+        \\Object.prototype.propertyIsEnumerable.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Symbol Proxy Reflect method lengths" {
+    const result = try evalExpr(
+        \\Symbol.length === 0 &&
+        \\Symbol.for.length === 1 &&
+        \\Symbol.keyFor.length === 1 &&
+        \\Proxy.length === 2 &&
+        \\Proxy.revocable.length === 2 &&
+        \\Reflect.get.length === 2 &&
+        \\Reflect.set.length === 3 &&
+        \\Reflect.has.length === 2 &&
+        \\Reflect.deleteProperty.length === 2 &&
+        \\Reflect.ownKeys.length === 1 &&
+        \\Reflect.apply.length === 3
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: TypedArray method lengths" {
+    const result = try evalExpr(
+        \\Uint8Array.prototype.slice.length === 2 &&
+        \\Uint8Array.prototype.set.length === 1 &&
+        \\Uint8Array.prototype.subarray.length === 2
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: RegExp method lengths" {
+    const result = try evalExpr(
+        \\RegExp.length === 2 &&
+        \\/x/.test.length === 1 &&
+        \\/x/.exec.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Generator method lengths" {
+    const result = try evalExpr(
+        \\function* g() {}
+        \\async function* ag() {}
+        \\let it = g();
+        \\let ait = ag();
+        \\it.next.length === 1 &&
+        \\it.return.length === 1 &&
+        \\ait.next.length === 1 &&
+        \\ait.return.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: String and Number method lengths" {
+    const result = try evalExpr(
+        \\String.length === 1 &&
+        \\String.fromCharCode.length === 1 &&
+        \\String.fromCodePoint.length === 1 &&
+        \\String.prototype.charAt.length === 1 &&
+        \\String.prototype.charCodeAt.length === 1 &&
+        \\String.prototype.indexOf.length === 1 &&
+        \\String.prototype.includes.length === 1 &&
+        \\String.prototype.substring.length === 2 &&
+        \\String.prototype.slice.length === 2 &&
+        \\String.prototype.split.length === 2 &&
+        \\String.prototype.trim.length === 0 &&
+        \\String.prototype.toUpperCase.length === 0 &&
+        \\String.prototype.toLowerCase.length === 0 &&
+        \\String.prototype.startsWith.length === 1 &&
+        \\String.prototype.endsWith.length === 1 &&
+        \\String.prototype.replace.length === 2 &&
+        \\String.prototype.match.length === 1 &&
+        \\String.prototype.matchAll.length === 1 &&
+        \\String.prototype.search.length === 1 &&
+        \\String.prototype.repeat.length === 1 &&
+        \\String.prototype.padStart.length === 1 &&
+        \\String.prototype.padEnd.length === 1 &&
+        \\String.prototype.trimStart.length === 0 &&
+        \\String.prototype.trimEnd.length === 0 &&
+        \\String.prototype.replaceAll.length === 2 &&
+        \\String.prototype.lastIndexOf.length === 1 &&
+        \\String.prototype.concat.length === 1 &&
+        \\String.prototype.at.length === 1 &&
+        \\String.prototype.codePointAt.length === 1 &&
+        \\String.prototype.substr.length === 2 &&
+        \\String.prototype.toString.length === 0 &&
+        \\String.prototype.normalize.length === 0 &&
+        \\String.prototype.localeCompare.length === 1 &&
+        \\String.prototype.valueOf.length === 0 &&
+        \\Number.length === 1 &&
+        \\Number.prototype.toFixed.length === 1 &&
+        \\Number.prototype.toString.length === 1 &&
+        \\Number.prototype.toPrecision.length === 1 &&
+        \\Number.prototype.toExponential.length === 1 &&
+        \\Number.prototype.valueOf.length === 0 &&
+        \\Number.isNaN.length === 1 &&
+        \\Number.isFinite.length === 1 &&
+        \\Number.isInteger.length === 1 &&
+        \\Number.parseInt.length === 2 &&
+        \\Number.parseFloat.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Math method lengths" {
+    const result = try evalExpr(
+        \\Math.floor.length === 1 &&
+        \\Math.ceil.length === 1 &&
+        \\Math.round.length === 1 &&
+        \\Math.abs.length === 1 &&
+        \\Math.min.length === 2 &&
+        \\Math.max.length === 2 &&
+        \\Math.random.length === 0 &&
+        \\Math.pow.length === 2 &&
+        \\Math.sqrt.length === 1 &&
+        \\Math.log.length === 1 &&
+        \\Math.log10.length === 1 &&
+        \\Math.trunc.length === 1 &&
+        \\Math.sign.length === 1 &&
+        \\Math.sin.length === 1 &&
+        \\Math.cos.length === 1 &&
+        \\Math.tan.length === 1 &&
+        \\Math.asin.length === 1 &&
+        \\Math.acos.length === 1 &&
+        \\Math.atan.length === 1 &&
+        \\Math.atan2.length === 2 &&
+        \\Math.exp.length === 1 &&
+        \\Math.log2.length === 1 &&
+        \\Math.cbrt.length === 1 &&
+        \\Math.hypot.length === 2 &&
+        \\Math.clz32.length === 1 &&
+        \\Math.sinh.length === 1 &&
+        \\Math.cosh.length === 1 &&
+        \\Math.tanh.length === 1 &&
+        \\Math.fround.length === 1 &&
+        \\Math.log1p.length === 1 &&
+        \\Math.expm1.length === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "Layer 0A: TypeError.length === 1" {
     const result = try evalExpr("TypeError.length === 1");
     try std.testing.expect(result.asBool());
@@ -5976,10 +8954,12 @@ test "Layer 0A: thenable adoption runs after sync frame completes" {
     const result = try evalWithMicrotasks(
         \\const log = [];
         \\Promise.resolve({ then: function(res){ log.push('then'); res(99); } })
-        \\  .then(function(v){ log.push('resolved:' + v); });
+        \\  .then(function(v){
+        \\    log.push('resolved:' + v);
+        \\    globalThis.__r = (log[0] === 'sync' && log[1] === 'then' && log[2] === 'resolved:99');
+        \\  });
         \\log.push('sync');
         \\// After microtask drain: ['sync','then','resolved:99']
-        \\globalThis.__r = (log[0] === 'sync' && log[1] === 'then' && log[2] === 'resolved:99');
     ,
         "__r",
     );
@@ -5989,10 +8969,8 @@ test "Layer 0A: thenable adoption runs after sync frame completes" {
 // Gap 5a: thenable resolves with inner value.
 test "Layer 0A: thenable resolves promise with value passed to res()" {
     const result = try evalWithMicrotasks(
-        \\var captured;
         \\Promise.resolve({ then: function(res){ res(7); } })
-        \\  .then(function(v){ captured = v; });
-        \\globalThis.__r = captured;
+        \\  .then(function(v){ globalThis.__r = v; });
     ,
         "__r",
     );
@@ -6002,11 +8980,9 @@ test "Layer 0A: thenable resolves promise with value passed to res()" {
 // Gap 5b: throwing .then getter rejects the promise (§27.2.1.3.2 step 9).
 test "Layer 0A: throwing .then getter rejects outer promise" {
     const result = try evalWithMicrotasks(
-        \\var caught = false;
         \\Promise.resolve(Object.defineProperty({}, 'then', {
         \\  get: function(){ throw new TypeError('boom'); }
-        \\})).catch(function(e){ caught = (e instanceof TypeError); });
-        \\globalThis.__r = caught;
+        \\})).catch(function(e){ globalThis.__r = (e instanceof TypeError); });
     ,
         "__r",
     );
@@ -6016,9 +8992,7 @@ test "Layer 0A: throwing .then getter rejects outer promise" {
 // Gap 5b: non-callable .then falls through to fulfill (§27.2.1.3.2 step 11).
 test "Layer 0A: non-callable .then fulfills with resolution itself" {
     const result = try evalWithMicrotasks(
-        \\var got;
-        \\Promise.resolve({ then: 42 }).then(function(v){ got = (v && v.then); });
-        \\globalThis.__r = got;
+        \\Promise.resolve({ then: 42 }).then(function(v){ globalThis.__r = (v && v.then); });
     ,
         "__r",
     );
@@ -6053,7 +9027,6 @@ test "Layer 0E: large function body triggers long-jump encoding" {
     try std.testing.expectApproxEqAbs(@as(f64, 1444150.0), result.asNumber(), 1.0);
 }
 
-
 // Layer 0D: instruction budget — infinite loop must throw RangeError, not hang.
 test "Layer 0D: instruction budget exhaustion throws RangeError" {
     const source = "var x = 0; while (true) { x = x + 1; }";
@@ -6063,6 +9036,8 @@ test "Layer 0D: instruction budget exhaustion throws RangeError" {
     defer bc.deinit(std.testing.allocator);
     var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
     defer vm_inst.deinit();
+    installTestIo();
+    defer resetTestIo();
     try vm_inst.initBuiltins();
     // Set a low budget so the infinite loop is interrupted quickly.
     vm_inst.setBudget(1_000);

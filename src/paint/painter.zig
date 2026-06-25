@@ -374,10 +374,26 @@ fn lightenColour(colour: u32) u32 {
 fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32) void {
     const style = box.style;
     const bbox = box.borderBox();
-    const sx: i32 = @intFromFloat(bbox.x - scroll_x);
-    const sy: i32 = @intFromFloat(bbox.y - scroll_y);
-    const sw: i32 = @intFromFloat(@max(bbox.width, 0));
-    const sh: i32 = @intFromFloat(@max(bbox.height, 0));
+    // Skip rendering when the box has non-finite dimensions (e.g. a JS-built
+    // DOM with computed height that overflowed to f32 max). Attempting to
+    // @intFromFloat an infinity panics; the box is invisible anyway so the
+    // safest thing is to bail out before touching the framebuffer.
+    if (!std.math.isFinite(bbox.x) or !std.math.isFinite(bbox.y) or
+        !std.math.isFinite(bbox.width) or !std.math.isFinite(bbox.height)) return;
+    if (!std.math.isFinite(scroll_x) or !std.math.isFinite(scroll_y)) return;
+    // Clamp the (possibly very large) values to safe integer bounds before
+    // the @intFromFloat casts. 16384px is well past any real screen; anything
+    // bigger just wastes fill rate and risks overflow in subsequent math.
+    // The position diff (bbox.x - scroll_x) can overflow f32 range when
+    // bbox.x is finite but huge; clamp the position itself too.
+    const clamped_x = @max(@min(bbox.x, 16384.0), -16384.0);
+    const clamped_y = @max(@min(bbox.y, 16384.0), -16384.0);
+    const clamped_w = @max(@min(bbox.width, 16384.0), 0.0);
+    const clamped_h = @max(@min(bbox.height, 16384.0), 0.0);
+    const sx: i32 = @intFromFloat(clamped_x - scroll_x);
+    const sy: i32 = @intFromFloat(clamped_y - scroll_y);
+    const sw: i32 = @intFromFloat(clamped_w);
+    const sh: i32 = @intFromFloat(clamped_h);
 
     const has_radius = style.border_radius_tl > 0.5 or style.border_radius_tr > 0.5 or
         style.border_radius_bl > 0.5 or style.border_radius_br > 0.5;
@@ -387,24 +403,33 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
         // smaller filled rounded rect for background on top (creating a border effect).
         // Use the most prominent border color.
         const border_color = if ((style.border_top_color >> 24) > 0) style.border_top_color else if ((style.border_left_color >> 24) > 0) style.border_left_color else if ((style.border_bottom_color >> 24) > 0) style.border_bottom_color else style.border_right_color;
-        const bw_top: i32 = @intFromFloat(style.border_top_width);
-        const bw_right: i32 = @intFromFloat(style.border_right_width);
-        const bw_bottom: i32 = @intFromFloat(style.border_bottom_width);
-        const bw_left: i32 = @intFromFloat(style.border_left_width);
+        // Clamp border widths and radii to safe bounds. Non-finite values can
+        // come from runaway computed styles (see the box.content guard above);
+        // @intFromFloat panics on infinity so we clamp first.
+        const safe = struct {
+            fn f(v: f32) i32 {
+                if (!std.math.isFinite(v)) return 0;
+                return @intFromFloat(@max(@min(v, 16384.0), 0.0));
+            }
+        }.f;
+        const bw_top: i32 = safe(style.border_top_width);
+        const bw_right: i32 = safe(style.border_right_width);
+        const bw_bottom: i32 = safe(style.border_bottom_width);
+        const bw_left: i32 = safe(style.border_left_width);
 
         if (bw_top > 0 or bw_right > 0 or bw_bottom > 0 or bw_left > 0) {
             // Outer rounded rect (border)
-            surface.fillRoundedRectPerCorner(sx, sy, sw, sh, @intFromFloat(style.border_radius_tl), @intFromFloat(style.border_radius_tr), @intFromFloat(style.border_radius_bl), @intFromFloat(style.border_radius_br), Surface.argbToColour(border_color));
+            surface.fillRoundedRectPerCorner(sx, sy, sw, sh, safe(style.border_radius_tl), safe(style.border_radius_tr), safe(style.border_radius_bl), safe(style.border_radius_br), Surface.argbToColour(border_color));
             // Inner rounded rect (punch out interior with background or parent color)
             const inner_x = sx + bw_left;
             const inner_y = sy + bw_top;
             const inner_w = sw - bw_left - bw_right;
             const inner_h = sh - bw_top - bw_bottom;
             if (inner_w > 0 and inner_h > 0) {
-                const inner_r_tl = @max(@as(i32, @intFromFloat(style.border_radius_tl)) - bw_left, 0);
-                const inner_r_tr = @max(@as(i32, @intFromFloat(style.border_radius_tr)) - bw_right, 0);
-                const inner_r_bl = @max(@as(i32, @intFromFloat(style.border_radius_bl)) - bw_left, 0);
-                const inner_r_br = @max(@as(i32, @intFromFloat(style.border_radius_br)) - bw_right, 0);
+                const inner_r_tl = @max(safe(style.border_radius_tl) - bw_left, 0);
+                const inner_r_tr = @max(safe(style.border_radius_tr) - bw_right, 0);
+                const inner_r_bl = @max(safe(style.border_radius_bl) - bw_left, 0);
+                const inner_r_br = @max(safe(style.border_radius_br) - bw_right, 0);
                 // Use background color for inner fill (or transparent/dark for the "hole")
                 const bg = if ((style.background_color >> 24) > 0) style.background_color else 0x00000000;
                 surface.fillRoundedRectPerCorner(inner_x, inner_y, inner_w, inner_h, inner_r_tl, inner_r_tr, inner_r_bl, inner_r_br, Surface.argbToColour(bg));
@@ -412,23 +437,23 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
         }
     } else {
         // Straight borders (no radius) — with border-style support
-        if (style.border_top_width > 0 and style.border_top_style != .none and style.border_top_style != .hidden) {
-            const bw: i32 = @intFromFloat(style.border_top_width);
+        if (style.border_top_width > 0 and std.math.isFinite(style.border_top_width) and style.border_top_style != .none and style.border_top_style != .hidden) {
+            const bw: i32 = @intFromFloat(@max(@min(style.border_top_width, 16384.0), 0.0));
             const colour = Surface.argbToColour(style.border_top_color);
             paintBorderEdge(surface, sx, sy, sw, bw, colour, style.border_top_style, true, true);
         }
-        if (style.border_bottom_width > 0 and style.border_bottom_style != .none and style.border_bottom_style != .hidden) {
-            const bw: i32 = @intFromFloat(style.border_bottom_width);
+        if (style.border_bottom_width > 0 and std.math.isFinite(style.border_bottom_width) and style.border_bottom_style != .none and style.border_bottom_style != .hidden) {
+            const bw: i32 = @intFromFloat(@max(@min(style.border_bottom_width, 16384.0), 0.0));
             const colour = Surface.argbToColour(style.border_bottom_color);
             paintBorderEdge(surface, sx, sy + sh - bw, sw, bw, colour, style.border_bottom_style, true, false);
         }
-        if (style.border_left_width > 0 and style.border_left_style != .none and style.border_left_style != .hidden) {
-            const bw: i32 = @intFromFloat(style.border_left_width);
+        if (style.border_left_width > 0 and std.math.isFinite(style.border_left_width) and style.border_left_style != .none and style.border_left_style != .hidden) {
+            const bw: i32 = @intFromFloat(@max(@min(style.border_left_width, 16384.0), 0.0));
             const colour = Surface.argbToColour(style.border_left_color);
             paintBorderEdge(surface, sx, sy, bw, sh, colour, style.border_left_style, false, true);
         }
-        if (style.border_right_width > 0 and style.border_right_style != .none and style.border_right_style != .hidden) {
-            const bw: i32 = @intFromFloat(style.border_right_width);
+        if (style.border_right_width > 0 and std.math.isFinite(style.border_right_width) and style.border_right_style != .none and style.border_right_style != .hidden) {
+            const bw: i32 = @intFromFloat(@max(@min(style.border_right_width, 16384.0), 0.0));
             const colour = Surface.argbToColour(style.border_right_color);
             paintBorderEdge(surface, sx + sw - bw, sy, bw, sh, colour, style.border_right_style, false, false);
         }
@@ -499,6 +524,21 @@ fn paintBoxShadow(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f
 
 fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: f32, scroll_x: f32, clip: ClipRect, image_cache: ?*ImageCache, accumulated_opacity: f32) void {
     if (clip.isEmpty()) return;
+
+    // Skip boxes with non-finite geometry — these come from runaway layout
+    // output (e.g. JS-built DOM with computed height overflowing to f32 max).
+    // Painting them would @intFromFloat an infinity and panic. The box is
+    // invisible anyway so we just bail out for it and its subtree. Check both
+    // the content rect and the derived border/padding boxes (a finite content
+    // with non-finite padding/border still produces non-finite borderBox).
+    if (!std.math.isFinite(box.content.x) or !std.math.isFinite(box.content.y) or
+        !std.math.isFinite(box.content.width) or !std.math.isFinite(box.content.height)) return;
+    if (!std.math.isFinite(box.padding.left) or !std.math.isFinite(box.padding.right) or
+        !std.math.isFinite(box.padding.top) or !std.math.isFinite(box.padding.bottom)) return;
+    if (!std.math.isFinite(box.border.left) or !std.math.isFinite(box.border.right) or
+        !std.math.isFinite(box.border.top) or !std.math.isFinite(box.border.bottom)) return;
+    if (!std.math.isFinite(box.margin.left) or !std.math.isFinite(box.margin.right) or
+        !std.math.isFinite(box.margin.top) or !std.math.isFinite(box.margin.bottom)) return;
 
     // Accumulate opacity through the tree (CSS compositing group behavior).
     // Enforce minimum opacity — many modern sites set opacity:0 and rely on
@@ -802,23 +842,34 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                         var render_w: u32 = dst_w;
                         var render_h: u32 = dst_h;
                         if (img.width > 0 and img.height > 0 and dst_w > 0 and dst_h > 0) {
-                            const img_aspect = @as(f32, @floatFromInt(img.width)) / @as(f32, @floatFromInt(img.height));
-                            const box_aspect = @as(f32, @floatFromInt(dst_w)) / @as(f32, @floatFromInt(dst_h));
+                            // img_aspect / box_aspect divide-by-zero / overflow
+                            // guard. img.height or dst_h can be 0 (or the aspect
+                            // can be inf for absurd box dimensions) and @intFromFloat
+                            // panics on infinity — fall back to "use image's native
+                            // size" if either denominator is zero.
+                            const img_h_safe: f32 = if (img.height == 0) 1.0 else @as(f32, @floatFromInt(img.height));
+                            const dst_h_safe: f32 = if (dst_h == 0) 1.0 else @as(f32, @floatFromInt(dst_h));
+                            const img_aspect = @as(f32, @floatFromInt(img.width)) / img_h_safe;
+                            const box_aspect = @as(f32, @floatFromInt(dst_w)) / dst_h_safe;
                             switch (box.style.object_fit) {
                                 .contain => {
                                     if (img_aspect > box_aspect) {
-                                        render_h = @intFromFloat(@as(f32, @floatFromInt(dst_w)) / img_aspect);
+                                        const rh = @as(f32, @floatFromInt(dst_w)) / img_aspect;
+                                        if (std.math.isFinite(rh)) render_h = @intFromFloat(rh);
                                         render_y += @divTrunc(@as(i32, @intCast(dst_h -| render_h)), 2);
                                     } else {
-                                        render_w = @intFromFloat(@as(f32, @floatFromInt(dst_h)) * img_aspect);
+                                        const rw = @as(f32, @floatFromInt(dst_h)) * img_aspect;
+                                        if (std.math.isFinite(rw)) render_w = @intFromFloat(rw);
                                         render_x += @divTrunc(@as(i32, @intCast(dst_w -| render_w)), 2);
                                     }
                                 },
                                 .cover => {
                                     if (img_aspect > box_aspect) {
-                                        render_w = @intFromFloat(@as(f32, @floatFromInt(dst_h)) * img_aspect);
+                                        const rw = @as(f32, @floatFromInt(dst_h)) * img_aspect;
+                                        if (std.math.isFinite(rw)) render_w = @intFromFloat(rw);
                                     } else {
-                                        render_h = @intFromFloat(@as(f32, @floatFromInt(dst_w)) / img_aspect);
+                                        const rh = @as(f32, @floatFromInt(dst_w)) / img_aspect;
+                                        if (std.math.isFinite(rh)) render_h = @intFromFloat(rh);
                                     }
                                 },
                                 .none => {
@@ -1491,9 +1542,46 @@ fn blitImageRotated(surface: *Surface, dst_x: i32, dst_y: i32, dst_w: u32, dst_h
 }
 
 /// Compute the total content height of a box tree (for scroll limits).
+///
+/// The root box's margin box only covers its own bounds — when a child
+/// overflows its parent (e.g. a flex child with intrinsic content larger than
+/// the flex container's `height: 100%` allotted slot), the overflow does NOT
+/// extend the root box. To make scrollHeight / screenshot capture reflect
+/// what the user actually needs to see, we recurse into all descendants and
+/// track the maximum bottom edge, skipping descendants of `overflow: hidden`
+/// ancestors (those are clipped visually so they don't extend scroll area).
 pub fn contentHeight(box: *const Box) f32 {
-    const mbox = box.marginBox();
-    return mbox.y + mbox.height;
+    var max_h: f32 = 0;
+    contentHeightRecurse(box, &max_h);
+    return max_h;
+}
+
+fn contentHeightRecurse(box: *const Box, max_h: *f32) void {
+    switch (box.box_type) {
+        .block, .anonymous_block, .inline_box => {
+            const mbox = box.marginBox();
+            const bottom = mbox.y + mbox.height;
+            // Guard against NaN or infinity from a runaway layout calculation
+            // (e.g. JS-built DOM with absurd dimensions). We only update max_h
+            // for finite values so one bad box doesn't poison scrollHeight.
+            if (std.math.isFinite(bottom) and bottom > max_h.*) max_h.* = bottom;
+            // Skip children of overflow:hidden boxes (they're clipped visually)
+            if (box.style.overflow_y == .hidden) return;
+            for (box.children.items) |child| {
+                contentHeightRecurse(child, max_h);
+            }
+        },
+        .inline_text => {
+            for (box.lines.items) |line| {
+                const bottom = line.y + line.height;
+                if (std.math.isFinite(bottom) and bottom > max_h.*) max_h.* = bottom;
+            }
+        },
+        .replaced => {
+            const bottom = box.content.y + box.content.height;
+            if (std.math.isFinite(bottom) and bottom > max_h.*) max_h.* = bottom;
+        },
+    }
 }
 
 /// Compute the total content width of a box tree (for horizontal scroll limits).

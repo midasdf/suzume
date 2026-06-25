@@ -5,6 +5,7 @@
 const std = @import("std");
 const kotori = @import("kotori");
 const kotori_dom = @import("kotori_dom");
+const kotori_runtime = @import("kotori_runtime");
 
 const VM = kotori.VM;
 const JsValue = kotori.JsValue;
@@ -47,8 +48,8 @@ const TestCtx = struct {
         }
 
         // Arena allocator for all kotori allocations (bulk-freed on deinit)
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        const alloc = arena.allocator();
+        const arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        const alloc = std.heap.page_allocator;
 
         // Compile JS
         var compiler = Compiler.init(alloc, js_src);
@@ -57,6 +58,8 @@ const TestCtx = struct {
         // Create VM
         var vm = VM.init(alloc, &bc, compiler.parser.pool);
         try vm.initBuiltins();
+
+        kotori.io.io = std.testing.io;
 
         // Init DOM bindings
         try kotori_dom.initDomBuiltins(&vm, doc);
@@ -99,6 +102,7 @@ const TestCtx = struct {
 
     fn deinit(self: *TestCtx) void {
         kotori_dom.deinit();
+        kotori.io.io = null;
         // Arena bulk-frees all kotori allocations
         self.arena.deinit();
         _ = lxb_html_document_destroy(self.doc);
@@ -110,8 +114,7 @@ const TestCtx = struct {
 // ══════════════════════════════════════════════════════════════════════
 
 test "getElementById returns element" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"test\">Hello</div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"test\">Hello</div></body></html>",
         \\var el = document.getElementById("test");
         \\el.tagName;
     );
@@ -123,8 +126,7 @@ test "getElementById returns element" {
 }
 
 test "getElementById returns null for missing" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"test\">Hello</div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"test\">Hello</div></body></html>",
         \\document.getElementById("nope");
     );
     defer ctx.deinit();
@@ -134,8 +136,7 @@ test "getElementById returns null for missing" {
 }
 
 test "textContent read" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\">Hello World</div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\">Hello World</div></body></html>",
         \\var el = document.getElementById("t");
         \\el.textContent;
     );
@@ -147,8 +148,7 @@ test "textContent read" {
 }
 
 test "textContent write" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\">Old</div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\">Old</div></body></html>",
         \\var el = document.getElementById("t");
         \\el.textContent = "New";
     );
@@ -166,8 +166,7 @@ test "textContent write" {
 }
 
 test "innerHTML read" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"><span>Hi</span></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"><span>Hi</span></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.innerHTML;
     );
@@ -179,8 +178,7 @@ test "innerHTML read" {
 }
 
 test "innerHTML write" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\">Old</div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\">Old</div></body></html>",
         \\var el = document.getElementById("t");
         \\el.innerHTML = "<b>Bold</b>";
     );
@@ -191,8 +189,7 @@ test "innerHTML write" {
 }
 
 test "createElement and appendChild" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"container\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"container\"></div></body></html>",
         \\var c = document.getElementById("container");
         \\var p = document.createElement("p");
         \\p.textContent = "Added";
@@ -207,8 +204,7 @@ test "createElement and appendChild" {
 }
 
 test "setAttribute and getAttribute" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.setAttribute("data-value", "42");
         \\el.getAttribute("data-value");
@@ -221,8 +217,7 @@ test "setAttribute and getAttribute" {
 }
 
 test "className read/write" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\" class=\"old\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" class=\"old\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.className = "new-class";
         \\el.className;
@@ -235,8 +230,7 @@ test "className read/write" {
 }
 
 test "style property read/write" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\" style=\"color: blue;\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: blue;\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style.color;
     );
@@ -248,8 +242,7 @@ test "style property read/write" {
 }
 
 test "style property write via camelCase" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style.backgroundColor = "red";
         \\el.style.backgroundColor;
@@ -261,9 +254,36 @@ test "style property write via camelCase" {
     try std.testing.expectEqualStrings("red", bg);
 }
 
+test "style.cssFloat aliases float" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.cssFloat = "left";
+        \\style.getPropertyValue("float") === "left" &&
+        \\style.cssFloat === "left" &&
+        \\style.removeProperty("float") === "left";
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "style property setters coerce DOMString values" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.color = { toString: function() { return "red"; } };
+        \\var prop = style.getPropertyValue("color") === "red";
+        \\style.cssText = { toString: function() { return "width: 2px;"; } };
+        \\prop && style.getPropertyValue("width") === "2px";
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
 test "querySelector by class" {
-    var ctx = try TestCtx.init(
-        "<html><body><div class=\"foo\">A</div><div class=\"bar\">B</div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div class=\"foo\">A</div><div class=\"bar\">B</div></body></html>",
         \\var el = document.querySelector(".bar");
         \\el.textContent;
     );
@@ -275,8 +295,7 @@ test "querySelector by class" {
 }
 
 test "querySelector by tag" {
-    var ctx = try TestCtx.init(
-        "<html><body><span>First</span><p>Second</p></body></html>",
+    var ctx = try TestCtx.init("<html><body><span>First</span><p>Second</p></body></html>",
         \\var el = document.querySelector("p");
         \\el.textContent;
     );
@@ -288,8 +307,7 @@ test "querySelector by tag" {
 }
 
 test "querySelector by tag.class" {
-    var ctx = try TestCtx.init(
-        "<html><body><div class=\"a\">X</div><p class=\"a\">Y</p></body></html>",
+    var ctx = try TestCtx.init("<html><body><div class=\"a\">X</div><p class=\"a\">Y</p></body></html>",
         \\var el = document.querySelector("p.a");
         \\el.textContent;
     );
@@ -301,8 +319,7 @@ test "querySelector by tag.class" {
 }
 
 test "DOM traversal: parentNode, firstChild, nextSibling" {
-    var ctx = try TestCtx.init(
-        "<html><body><ul id=\"list\"><li>A</li><li>B</li></ul></body></html>",
+    var ctx = try TestCtx.init("<html><body><ul id=\"list\"><li>A</li><li>B</li></ul></body></html>",
         \\var ul = document.getElementById("list");
         \\var first = ul.firstElementChild;
         \\var second = first.nextElementSibling;
@@ -316,8 +333,7 @@ test "DOM traversal: parentNode, firstChild, nextSibling" {
 }
 
 test "createTextNode and appendChild" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var tn = document.createTextNode("hello");
         \\el.appendChild(tn);
@@ -331,8 +347,7 @@ test "createTextNode and appendChild" {
 }
 
 test "addEventListener stores listener" {
-    var ctx = try TestCtx.init(
-        "<html><body><button id=\"btn\">Click</button></body></html>",
+    var ctx = try TestCtx.init("<html><body><button id=\"btn\">Click</button></body></html>",
         \\var btn = document.getElementById("btn");
         \\btn.addEventListener("click", function() { });
     );
@@ -344,9 +359,43 @@ test "addEventListener stores listener" {
     try std.testing.expectEqualStrings("click", listeners[0].event_type);
 }
 
+test "EventTarget dispatchEvent reads type accessor" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var target = new EventTarget();
+        \\var calls = [];
+        \\var fired = 0;
+        \\target.addEventListener("ping", function() { fired = 1; });
+        \\target.dispatchEvent({
+        \\  get type() { calls.push("type"); return "ping"; }
+        \\});
+        \\calls.join(",") + ":" + fired;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("type:1", val);
+}
+
+test "window dispatchEvent reads type accessor" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var fired = 0;
+        \\window.addEventListener("ping", function() { fired = 1; });
+        \\window.dispatchEvent({
+        \\  get type() { calls.push("type"); return "ping"; }
+        \\});
+        \\calls.join(",") + ":" + fired;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("type:1", val);
+}
+
 test "document.body access" {
-    var ctx = try TestCtx.init(
-        "<html><body><p>Hello</p></body></html>",
+    var ctx = try TestCtx.init("<html><body><p>Hello</p></body></html>",
         \\document.body.tagName;
     );
     defer ctx.deinit();
@@ -357,8 +406,7 @@ test "document.body access" {
 }
 
 test "nodeType returns element type" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.nodeType;
     );
@@ -370,8 +418,7 @@ test "nodeType returns element type" {
 }
 
 test "children returns array of elements" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"p\"><span>A</span><span>B</span></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"p\"><span>A</span><span>B</span></div></body></html>",
         \\var el = document.getElementById("p");
         \\el.children.length;
     );
@@ -382,8 +429,7 @@ test "children returns array of elements" {
 }
 
 test "removeChild detaches node" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"p\"><span id=\"c\">X</span></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"p\"><span id=\"c\">X</span></div></body></html>",
         \\var p = document.getElementById("p");
         \\var c = document.getElementById("c");
         \\p.removeChild(c);
@@ -399,8 +445,7 @@ test "removeChild detaches node" {
 // ── Shadow DOM Phase 1: JS-runtime behavioral tests ──────────────────
 
 test "attachShadow-twice-throws NotSupportedError" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\host.attachShadow({ mode: "open" });
         \\var caught = "";
@@ -418,9 +463,24 @@ test "attachShadow-twice-throws NotSupportedError" {
     try std.testing.expectEqualStrings("NotSupportedError", name);
 }
 
+test "attachShadow init dictionary reads mode accessor" {
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var calls = [];
+        \\var sr = host.attachShadow({
+        \\  get mode() { calls.push("mode"); return "open"; }
+        \\});
+        \\calls.join(",") + ":" + (sr.__isShadowRoot === true);
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("mode:true", val);
+}
+
 test "querySelector-scoping: light tree querySelector does not find shadow tree elements" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\var sr = host.attachShadow({ mode: "open" });
         \\var inner = document.createElement("span");
@@ -437,8 +497,7 @@ test "querySelector-scoping: light tree querySelector does not find shadow tree 
 }
 
 test "outerHTML-excludes-shadow: host outerHTML does not contain shadow content" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\var sr = host.attachShadow({ mode: "open" });
         \\var p = document.createElement("p");
@@ -456,8 +515,7 @@ test "outerHTML-excludes-shadow: host outerHTML does not contain shadow content"
 }
 
 test "getRootNode-composed: false returns ShadowRoot, true returns document" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\var sr = host.attachShadow({ mode: "open" });
         \\var inner = document.createElement("span");
@@ -475,9 +533,27 @@ test "getRootNode-composed: false returns ShadowRoot, true returns document" {
     try std.testing.expectEqualStrings("shadow+document", val);
 }
 
+test "getRootNode options dictionary reads composed accessor" {
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\var calls = [];
+        \\sr.appendChild(inner);
+        \\var root = inner.getRootNode({
+        \\  get composed() { calls.push("composed"); return true; }
+        \\});
+        \\calls.join(",") + ":" + (root === document);
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("composed:true", val);
+}
+
 test "isConnected-in-shadow: element inside shadow tree of connected host is connected" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\var sr = host.attachShadow({ mode: "open" });
         \\var inner = document.createElement("span");
@@ -494,8 +570,7 @@ test "isConnected-in-shadow: element inside shadow tree of connected host is con
 // ── Shadow DOM Phase 2: event retargeting + composedPath ──────────────
 
 test "retargeted-target: listener on host sees event.target = host (not inner)" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\host.setAttribute("id", "host");
         \\var sr = host.attachShadow({ mode: "open" });
@@ -514,9 +589,31 @@ test "retargeted-target: listener on host sees event.target = host (not inner)" 
     try std.testing.expectEqualStrings("host", val);
 }
 
+test "dispatchEvent plain object reads event accessors" {
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\var calls = [];
+        \\var fired = 0;
+        \\sr.appendChild(inner);
+        \\inner.addEventListener("ping", function(e) { fired = 1; });
+        \\inner.dispatchEvent({
+        \\  get type() { calls.push("type"); return "ping"; },
+        \\  get composed() { calls.push("composed"); return false; },
+        \\  get bubbles() { calls.push("bubbles"); return true; }
+        \\});
+        \\calls.join(",") + ":" + fired;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("type,composed,bubbles:1", val);
+}
+
 test "composedPath-composed-true: includes both shadow and light nodes" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\host.setAttribute("id", "host");
         \\var sr = host.attachShadow({ mode: "open" });
@@ -545,8 +642,7 @@ test "composedPath-composed-true: includes both shadow and light nodes" {
 }
 
 test "composedPath-composed-false: listener outside shadow never fires" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\host.setAttribute("id", "host");
         \\var sr = host.attachShadow({ mode: "open" });
@@ -565,9 +661,20 @@ test "composedPath-composed-false: listener outside shadow never fires" {
     try std.testing.expectEqualStrings("notfired", val);
 }
 
+test "composedPath on undispatched Event is empty" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new Event("x");
+        \\var path = ev.composedPath();
+        \\Array.isArray(path) && path.length === 0 && path.join("|") === "";
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    try std.testing.expect(result.isTruthy());
+}
+
 test "closed-tree-filtering: listener inside closed shadow sees inner; host listener sees retargeted only" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"host\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"host\"></div></body></html>",
         \\var host = document.getElementById("host");
         \\host.setAttribute("id", "host");
         \\var sr = host.attachShadow({ mode: "closed" });
@@ -602,8 +709,7 @@ test "closed-tree-filtering: listener inside closed shadow sees inner; host list
 // ══════════════════════════════════════════════════════════════════════
 
 test "scrollTo(x, y) sets scrollLeft and scrollTop" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"s\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
         \\var el = document.getElementById("s");
         \\el.scrollTo(40, 80);
         \\"" + el.scrollLeft + "," + el.scrollTop;
@@ -615,8 +721,7 @@ test "scrollTo(x, y) sets scrollLeft and scrollTop" {
 }
 
 test "scrollTo({top, left}) sets position via options dict" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"s\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
         \\var el = document.getElementById("s");
         \\el.scrollTo({ top: 100, left: 25 });
         \\"" + el.scrollLeft + "," + el.scrollTop;
@@ -627,9 +732,37 @@ test "scrollTo({top, left}) sets position via options dict" {
     try std.testing.expectEqualStrings("25,100", val);
 }
 
+test "scrollTo options dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
+        \\var calls = [];
+        \\var el = document.getElementById("s");
+        \\el.scrollTo({
+        \\  get top() { calls.push("top"); return 11; },
+        \\  get left() { calls.push("left"); return 22; }
+        \\});
+        \\calls.join(",") + ":" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("top,left:22,11", val);
+}
+
+test "scroll methods coerce string numeric arguments" {
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scrollTo("40", "80");
+        \\el.scrollBy({ left: "2", top: "3" });
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("42,83", val);
+}
+
 test "scrollBy accumulates delta on top of current position" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"s\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
         \\var el = document.getElementById("s");
         \\el.scrollTo(10, 20);
         \\el.scrollBy(5, 15);
@@ -641,9 +774,25 @@ test "scrollBy accumulates delta on top of current position" {
     try std.testing.expectEqualStrings("15,35", val);
 }
 
+test "scrollBy options dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
+        \\var calls = [];
+        \\var el = document.getElementById("s");
+        \\el.scrollTo(10, 10);
+        \\el.scrollBy({
+        \\  get top() { calls.push("top"); return 4; },
+        \\  get left() { calls.push("left"); return 6; }
+        \\});
+        \\calls.join(",") + ":" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("top,left:16,14", val);
+}
+
 test "scroll() is an alias for scrollTo()" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"s\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
         \\var el = document.getElementById("s");
         \\el.scroll(7, 3);
         \\"" + el.scrollLeft + "," + el.scrollTop;
@@ -655,8 +804,7 @@ test "scroll() is an alias for scrollTo()" {
 }
 
 test "scrollBy clamps to zero (no negative scroll)" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"s\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
         \\var el = document.getElementById("s");
         \\el.scrollTo(10, 10);
         \\el.scrollBy(-50, -50);
@@ -669,11 +817,10 @@ test "scrollBy clamps to zero (no negative scroll)" {
 }
 
 test "scrollTop setter directly sets scroll position" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"s\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"s\"></div></body></html>",
         \\var el = document.getElementById("s");
-        \\el.scrollTop = 55;
-        \\el.scrollLeft = 33;
+        \\el.scrollTop = "55";
+        \\el.scrollLeft = "33";
         \\"" + el.scrollLeft + "," + el.scrollTop;
     );
     defer ctx.deinit();
@@ -688,8 +835,7 @@ test "scrollTop setter directly sets scroll position" {
 
 test "form.submit() is a no-op on a disconnected form" {
     // Disconnected form: submit() must return undefined without throwing.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var f = document.createElement("form");
         \\var thrown = false;
         \\try { f.submit(); } catch(e) { thrown = true; }
@@ -702,8 +848,7 @@ test "form.submit() is a no-op on a disconnected form" {
 }
 
 test "form.submit() on connected form dispatches non-cancelable submit event" {
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"></form></body></html>",
         \\var f = document.getElementById("f");
         \\var fired = false;
         \\var wasCancelable = true;
@@ -718,8 +863,7 @@ test "form.submit() on connected form dispatches non-cancelable submit event" {
 }
 
 test "form.requestSubmit() on connected form dispatches cancelable submit event" {
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"></form></body></html>",
         \\var f = document.getElementById("f");
         \\var fired = false;
         \\var wasCancelable = false;
@@ -734,8 +878,7 @@ test "form.requestSubmit() on connected form dispatches cancelable submit event"
 }
 
 test "form.requestSubmit() is a no-op on a disconnected form" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var f = document.createElement("form");
         \\var fired = false;
         \\f.addEventListener("submit", function(){ fired = true; });
@@ -749,8 +892,7 @@ test "form.requestSubmit() is a no-op on a disconnected form" {
 }
 
 test "form.requestSubmit(submitter) rejects button not belonging to this form" {
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"></form><form id=\"g\"><button id=\"b\"></button></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"></form><form id=\"g\"><button id=\"b\"></button></form></body></html>",
         \\var f = document.getElementById("f");
         \\var b = document.getElementById("b");
         \\var threw = false;
@@ -764,8 +906,7 @@ test "form.requestSubmit(submitter) rejects button not belonging to this form" {
 }
 
 test "form.requestSubmit() preventDefault cancels submission" {
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"></form></body></html>",
         \\var f = document.getElementById("f");
         \\var submits = 0;
         \\f.addEventListener("submit", function(e){ submits++; e.preventDefault(); });
@@ -786,8 +927,7 @@ test "form.requestSubmit() preventDefault cancels submission" {
 
 test "input.willValidate is true for enabled text input (§4.10.18.2)" {
     // §4.10.18.2: submittable element not barred from constraint validation.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.willValidate ? "true" : "false";
     );
@@ -799,8 +939,7 @@ test "input.willValidate is true for enabled text input (§4.10.18.2)" {
 
 test "input[type=hidden].willValidate is false (§4.10.18.2)" {
     // §4.10.18.2: hidden inputs are barred from constraint validation.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"hidden\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"hidden\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.willValidate ? "true" : "false";
     );
@@ -812,8 +951,7 @@ test "input[type=hidden].willValidate is false (§4.10.18.2)" {
 
 test "input.validity.valid is true for non-required empty input (§4.10.18.3)" {
     // §4.10.18.3: ValidityState.valid reflects no constraint violations.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.validity.valid ? "valid" : "invalid";
     );
@@ -825,8 +963,7 @@ test "input.validity.valid is true for non-required empty input (§4.10.18.3)" {
 
 test "required input with empty value has valueMissing (§4.10.18.3)" {
     // §4.10.18.3: valueMissing flag when required + empty value.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.validity.valueMissing ? "valueMissing" : "ok";
     );
@@ -838,8 +975,7 @@ test "required input with empty value has valueMissing (§4.10.18.3)" {
 
 test "input.checkValidity() returns true for valid input (§4.10.18.4)" {
     // §4.10.18.4: checkValidity returns true when there are no violations.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.checkValidity() ? "valid" : "invalid";
     );
@@ -851,8 +987,7 @@ test "input.checkValidity() returns true for valid input (§4.10.18.4)" {
 
 test "input.checkValidity() returns false and fires invalid event (§4.10.18.4)" {
     // §4.10.18.4: checkValidity fires non-bubbling 'invalid' event when invalid.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\var fired = false;
         \\i.addEventListener("invalid", function(){ fired = true; });
@@ -867,8 +1002,7 @@ test "input.checkValidity() returns false and fires invalid event (§4.10.18.4)"
 
 test "input.setCustomValidity sets customError (§4.10.18.5)" {
     // §4.10.18.5: setCustomValidity with non-empty string sets customError flag.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\" value=\"ok\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\" value=\"ok\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.setCustomValidity("bad value");
         \\i.validity.customError ? "customError" : "none";
@@ -881,8 +1015,7 @@ test "input.setCustomValidity sets customError (§4.10.18.5)" {
 
 test "input.setCustomValidity('') clears customError (§4.10.18.5)" {
     // §4.10.18.5: empty string clears the custom validity message.
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\" value=\"ok\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\" value=\"ok\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.setCustomValidity("bad");
         \\i.setCustomValidity("");
@@ -895,8 +1028,7 @@ test "input.setCustomValidity('') clears customError (§4.10.18.5)" {
 }
 
 test "input.reportValidity() returns true for valid input (§4.10.18.4)" {
-    var ctx = try TestCtx.init(
-        "<html><body><form><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
         \\var i = document.getElementById("i");
         \\i.reportValidity() ? "valid" : "invalid";
     );
@@ -909,8 +1041,7 @@ test "input.reportValidity() returns true for valid input (§4.10.18.4)" {
 test "form.checkValidity() returns false when input is invalid (§4.10.21.2)" {
     // §4.10.21.2: statically validate the constraints — form returns false if
     // any submittable element is invalid.
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
         \\var f = document.getElementById("f");
         \\f.checkValidity() ? "valid" : "invalid";
     );
@@ -921,8 +1052,7 @@ test "form.checkValidity() returns false when input is invalid (§4.10.21.2)" {
 }
 
 test "form.checkValidity() returns true when all inputs are valid (§4.10.21.2)" {
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
         \\var f = document.getElementById("f");
         \\f.checkValidity() ? "valid" : "invalid";
     );
@@ -938,8 +1068,7 @@ test "form.checkValidity() returns true when all inputs are valid (§4.10.21.2)"
 
 test "form.elements returns collection of submittable elements (§4.10.21.1)" {
     // §4.10.21.1: elements is an HTMLFormControlsCollection of listed elements.
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"><input type=\"text\"><select><option>a</option></select><textarea></textarea><button type=\"button\"></button></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"><input type=\"text\"><select><option>a</option></select><textarea></textarea><button type=\"button\"></button></form></body></html>",
         \\var f = document.getElementById("f");
         \\f.elements.length + "";
     );
@@ -951,8 +1080,7 @@ test "form.elements returns collection of submittable elements (§4.10.21.1)" {
 
 test "form.length reflects element count (§4.10.21.1)" {
     // §4.10.21.1: form.length is the number of listed elements.
-    var ctx = try TestCtx.init(
-        "<html><body><form id=\"f\"><input type=\"text\"><input type=\"text\"></form></body></html>",
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"><input type=\"text\"><input type=\"text\"></form></body></html>",
         \\var f = document.getElementById("f");
         \\f.length + "";
     );
@@ -960,6 +1088,217 @@ test "form.length reflects element count (§4.10.21.1)" {
     const result = try ctx.run();
     const v = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("2", v);
+}
+
+test "form.elements exposes item and namedItem" {
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"><input id=\"a\" name=\"g\"><input name=\"g\"></form></body></html>",
+        \\var elems = document.getElementById("f").elements;
+        \\elems.item(4294967296) === elems[0] &&
+        \\elems.item(1e100) === elems[0] &&
+        \\elems.item(NaN) === elems[0] &&
+        \\elems.item("1") === elems[1] &&
+        \\elems.item(-1) === null &&
+        \\elems.namedItem("a") === elems[0] &&
+        \\elems.namedItem("g").length === 2 &&
+        \\elems.namedItem("g").item(NaN) === elems[0];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "RadioNodeList.item index converts with ToUint32" {
+    var ctx = try TestCtx.init("<html><body><form id=\"f\"><input name=\"g\" value=\"a\"><input name=\"g\" value=\"b\"></form></body></html>",
+        \\var list = document.getElementById("f").g;
+        \\list.item(4294967296) === list.item(0) &&
+        \\list.item(1e100) === list.item(0) &&
+        \\list.item(NaN) === list.item(0) &&
+        \\list.item("1") === list[1] &&
+        \\list.item(-1) === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CharacterData methods handle huge unsigned long inputs" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var t = document.createTextNode("abc");
+        \\t.substringData(1e100, 1) === "a" &&
+        \\t.substringData(0, 1e100) === "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CharacterData methods coerce string numeric offsets" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var t = document.createTextNode("abcdef");
+        \\var ok1 = t.substringData("1", "3") === "bcd";
+        \\t.deleteData("1", "2");
+        \\var ok2 = t.data === "adef";
+        \\t.insertData("1", "BC");
+        \\var ok3 = t.data === "aBCdef";
+        \\t.replaceData("1", "2", "xx");
+        \\ok1 && ok2 && ok3 && t.data === "axxdef";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CharacterData.appendData coerces DOMString argument" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var t = document.createTextNode("a");
+        \\t.appendData(123);
+        \\t.data === "a123";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CharacterData insertData and replaceData coerce DOMString objects" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var o = { toString: function() { return "X"; } };
+        \\var t = document.createTextNode("ab");
+        \\t.insertData(1, o);
+        \\var ok1 = t.data === "aXb";
+        \\t.replaceData(1, 1, o);
+        \\ok1 && t.data === "aXb";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DOMString setters call object toString" {
+    var ctx = try TestCtx.init("<html><head><title></title></head><body><p id=\"p\"></p></body></html>",
+        \\var o = { toString: function() { return "X"; } };
+        \\document.title = o;
+        \\document.getElementById("p").textContent = o;
+        \\var t = document.createTextNode("");
+        \\t.data = o;
+        \\document.title === "X" &&
+        \\document.getElementById("p").textContent === "X" &&
+        \\t.data === "X";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "reflected DOMString setters coerce non-string values" {
+    var ctx = try TestCtx.init("<html><body><div id=\"p\"></div><input id=\"i\"></body></html>",
+        \\var o = { toString: function() { return "X"; } };
+        \\var p = document.getElementById("p");
+        \\p.id = 123;
+        \\p.title = o;
+        \\document.dir = o;
+        \\var i = document.getElementById("i");
+        \\i.setCustomValidity(o);
+        \\p.id === "123" &&
+        \\p.title === "X" &&
+        \\document.documentElement.getAttribute("dir") === "X" &&
+        \\i.validationMessage === "X";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "reflected numeric setters coerce string values" {
+    var ctx = try TestCtx.init("<html><body><div id=\"p\"></div><canvas id=\"c\"></canvas><input id=\"i\"></body></html>",
+        \\var p = document.getElementById("p");
+        \\var c = document.getElementById("c");
+        \\var i = document.getElementById("i");
+        \\var o = { toString: function() { return "6"; } };
+        \\p.tabIndex = "5";
+        \\c.width = "320";
+        \\i.maxLength = o;
+        \\p.tabIndex === 5 && c.width === 320 && i.maxLength === 6;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DOMString object toString primitive result is stringified" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var o = { toString: function() { return 123; } };
+        \\var t = document.createTextNode("");
+        \\t.appendData(o);
+        \\var ev = new Event(o);
+        \\t.data === "123" && ev.type === "123";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DOMString object falls back to valueOf primitive" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var o = {
+        \\  toString: function() { return {}; },
+        \\  valueOf: function() { return 123; }
+        \\};
+        \\var t = document.createTextNode("");
+        \\t.appendData(o);
+        \\t.data === "123";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "ProcessingInstruction has empty childNodes" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var pi = document.createProcessingInstruction("xml-stylesheet", "href='x'");
+        \\pi.childNodes.length === 0 && pi.firstChild === null && pi.lastChild === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "ProcessingInstruction isEqualNode compares target and data" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var a = document.createProcessingInstruction("xml-stylesheet", "href='x'");
+        \\var b = document.createProcessingInstruction("xml-stylesheet", "href='x'");
+        \\var c = document.createProcessingInstruction("xml-stylesheet", "href='y'");
+        \\var d = document.createProcessingInstruction("xml-model", "href='x'");
+        \\a.isEqualNode(b) && !a.isEqualNode(c) && !a.isEqualNode(d);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DocumentType isEqualNode compares name publicId and systemId" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var p = new DOMParser();
+        \\var a = p.parseFromString('<!DOCTYPE html PUBLIC "p" "s"><html></html>', 'text/html').doctype;
+        \\var b = p.parseFromString('<!DOCTYPE html PUBLIC "p" "s"><html></html>', 'text/html').doctype;
+        \\var c = p.parseFromString('<!DOCTYPE html PUBLIC "q" "s"><html></html>', 'text/html').doctype;
+        \\a.isEqualNode(b) && !a.isEqualNode(c);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "createCDATASection follows HTML vs XML document support" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var htmlThrew = false;
+        \\try { document.createCDATASection("x"); } catch (e) { htmlThrew = e.name === "NotSupportedError"; }
+        \\var xmlDoc = document.implementation.createDocument(null, "root", null);
+        \\var cdata = xmlDoc.createCDATASection("x");
+        \\htmlThrew && cdata.data === "x";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -973,8 +1312,7 @@ test "form.length reflects element count (§4.10.21.1)" {
 // ══════════════════════════════════════════════════════════════════════
 
 test "document.ownerDocument === null (DOM §4.4)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\document.ownerDocument === null;
     );
     defer ctx.deinit();
@@ -983,8 +1321,7 @@ test "document.ownerDocument === null (DOM §4.4)" {
 }
 
 test "createElement().ownerDocument === document (DOM §4.4)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement("div");
         \\el.ownerDocument === document;
     );
@@ -994,8 +1331,7 @@ test "createElement().ownerDocument === document (DOM §4.4)" {
 }
 
 test "parsed element ownerDocument === document (DOM §4.4)" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.ownerDocument === document;
     );
@@ -1005,8 +1341,7 @@ test "parsed element ownerDocument === document (DOM §4.4)" {
 }
 
 test "createTextNode().ownerDocument === document (DOM §4.4)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var t = document.createTextNode("hi");
         \\t.ownerDocument === document;
     );
@@ -1021,8 +1356,7 @@ test "createHTMLDocument() new-doc children ownerDocument !== outer document (DO
     // the outer/original document. This is the regression the
     // `_ownerDoc` slot fixes: before, `ownerDocument` always returned
     // `globalThis.document`, masking cross-doc identity.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var d = document.implementation.createHTMLDocument("T");
         \\var el = d.createElement("div");
         \\// Two contracts in one: the new doc is NOT the outer doc,
@@ -1036,8 +1370,7 @@ test "createHTMLDocument() new-doc children ownerDocument !== outer document (DO
 }
 
 test "cloneNode() preserves ownerDocument (DOM §4.4.1)" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var a = document.getElementById("t");
         \\var b = a.cloneNode(true);
         \\b.ownerDocument === document && b.ownerDocument === a.ownerDocument;
@@ -1053,8 +1386,7 @@ test "cloneNode sets slot from lexbor clone's owner_document (Option A verificat
     // If lxb_dom_node_clone preserves owner_document (which it does for
     // same-document clones), the _ownerDoc slot comes from wrapNode's
     // lexbor read path rather than an explicit write after the fact.
-    var ctx = try TestCtx.init(
-        "<html><body><p id=\"src\"><span>text</span></p></body></html>",
+    var ctx = try TestCtx.init("<html><body><p id=\"src\"><span>text</span></p></body></html>",
         \\var src = document.getElementById("src");
         \\var clone = src.cloneNode(true);
         \\// Both shallow and deep clone must report the same document.
@@ -1074,8 +1406,7 @@ test "importNode sets target as ownerDocument recursively (deep clone) (DOM §4.
     // importNode call) as its ownerDocument — not the source node's
     // owner document. This exercises cloneNodeImpl's owner_doc_override
     // path on both the root and children.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var src = document.implementation.createHTMLDocument("src");
         \\var p = src.createElement("p");
         \\var span = src.createElement("span");
@@ -1098,8 +1429,7 @@ test "cloneNode preserves source ownerDocument (cross-document) (DOM §4.4.1)" {
     // In contrast to importNode, cloneNode keeps the source document as
     // the owner. cloneNodeImpl is called with owner_doc_override=null
     // so wrapNode's lexbor-derived slot wins.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var d = document.implementation.createHTMLDocument("A");
         \\var el = d.createElement("div");
         \\var cl = el.cloneNode(true);
@@ -1115,8 +1445,7 @@ test "cloneNode preserves source ownerDocument (cross-document) (DOM §4.4.1)" {
 test "impl.createHTMLDocument returned doc supports importNode (DOM §4.5)" {
     // Documents returned from implementation.createHTMLDocument must have
     // nativeImportNode registered so that cross-document import works.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var d1 = document.implementation.createHTMLDocument('A');
         \\var d2 = document.implementation.createHTMLDocument('B');
         \\var el = d1.createElement('div');
@@ -1130,8 +1459,7 @@ test "impl.createHTMLDocument returned doc supports importNode (DOM §4.5)" {
 
 test "importNode with zero args throws TypeError (DOM §4.5 step 1)" {
     // DOM §4.5 step 1: calling importNode() with no arguments must throw TypeError.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\(function(){
         \\  try { document.importNode(); return false; }
         \\  catch(e) { return e instanceof TypeError; }
@@ -1150,8 +1478,7 @@ test "el.attributes exposes ALL attributes via indexed access (DOM §4.9.1)" {
     // Regression guard for the one-line bug where iteration walked the
     // generic node.next sibling chain instead of the lexbor attr list,
     // which only ever exposed the first attribute.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -1165,8 +1492,7 @@ test "el.attributes exposes ALL attributes via indexed access (DOM §4.9.1)" {
 }
 
 test "el.attributes[2].name is the third attr (DOM §4.9.1)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -1183,8 +1509,7 @@ test "el.attributes[0] === el.attributes[0] — Attr identity (DOM §4.9.1)" {
     // WebIDL §3.1 object identity: repeated access to the same Attr must
     // return the same JS wrapper. Implemented via g_attr_wrappers keyed on
     // the lexbor attr pointer.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('x', '1');
         \\el.attributes[0] === el.attributes[0];
@@ -1197,8 +1522,7 @@ test "el.attributes[0] === el.attributes[0] — Attr identity (DOM §4.9.1)" {
 test "el.attributes is live: removeAttribute drops entry (DOM §4.9.1)" {
     // NamedNodeMap is live: mutations to the element's attribute list
     // must be reflected immediately by the next .attributes access.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -1214,8 +1538,7 @@ test "el.attributes is live: removeAttribute drops entry (DOM §4.9.1)" {
 }
 
 test "el.attributes is live: setAttribute on new name grows length" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var before = el.attributes.length;
         \\el.setAttribute('a', '1');
@@ -1229,8 +1552,7 @@ test "el.attributes is live: setAttribute on new name grows length" {
 }
 
 test "setAttribute overwrites: cache invalidated, value reflects new" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('x', 'old');
         \\var a1 = el.attributes[0];
@@ -1279,8 +1601,7 @@ test "MathMLElement.prototype chains to Element.prototype" {
 // ══════════════════════════════════════════════════════════════════════
 
 test "createElement('div') has HTMLDivElement prototype" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\[el instanceof HTMLDivElement,
         \\ el instanceof HTMLElement,
@@ -1299,8 +1620,7 @@ test "createElement('div') has HTMLDivElement prototype" {
 }
 
 test "createElement('div') is NOT instance of HTMLAnchorElement (shared-proto bug gone)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el instanceof HTMLAnchorElement
     );
@@ -1311,8 +1631,7 @@ test "createElement('div') is NOT instance of HTMLAnchorElement (shared-proto bu
 }
 
 test "createElementNS(SVG_NS, 'circle') is SVGCircleElement, not HTMLElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         \\[c instanceof SVGCircleElement, c instanceof HTMLElement]
     );
@@ -1328,8 +1647,7 @@ test "createElementNS(SVG_NS, 'circle') is SVGCircleElement, not HTMLElement" {
 }
 
 test "createElementNS with HTML NS and uppercase → HTMLUnknownElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElementNS('http://www.w3.org/1999/xhtml', 'DIV');
         \\el instanceof HTMLUnknownElement
     );
@@ -1345,8 +1663,7 @@ test "createElementNS with HTML NS and uppercase → HTMLUnknownElement" {
 
 // §6.1 item 2 — createElement('DIV') lowercases to HTMLDivElement
 test "createElement('DIV') lowercases: instanceof HTMLDivElement, tagName='DIV'" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('DIV');
         \\[el instanceof HTMLDivElement, el instanceof HTMLElement, el.tagName]
     );
@@ -1368,8 +1685,7 @@ test "createElement('DIV') lowercases: instanceof HTMLDivElement, tagName='DIV'"
 
 // §6.1 item 3 — createElement('input') → HTMLInputElement
 test "createElement('input') instanceof HTMLInputElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('input');
         \\[el instanceof HTMLInputElement, el instanceof HTMLElement, el instanceof Element]
     );
@@ -1387,8 +1703,7 @@ test "createElement('input') instanceof HTMLInputElement" {
 
 // §6.1 item 4 — createElement('xfoo') → HTMLUnknownElement (JS-level)
 test "createElement('xfoo') instanceof HTMLUnknownElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('xfoo');
         \\[el instanceof HTMLUnknownElement, el instanceof HTMLElement]
     );
@@ -1405,8 +1720,7 @@ test "createElement('xfoo') instanceof HTMLUnknownElement" {
 
 // §6.1 item 5 — createElement('foo-bar') → HTMLElement (custom name, JS-level)
 test "createElement('foo-bar') instanceof HTMLElement (custom element name)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('foo-bar');
         \\[el instanceof HTMLElement, el instanceof HTMLUnknownElement]
     );
@@ -1425,8 +1739,7 @@ test "createElement('foo-bar') instanceof HTMLElement (custom element name)" {
 
 // §6.1 item 6 — createElement('123') throws InvalidCharacterError
 test "createElement('123') throws InvalidCharacterError (digit-leading name)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var threw = false;
         \\try { document.createElement('123'); } catch(e) {
         \\  threw = (e.name === 'InvalidCharacterError');
@@ -1441,8 +1754,7 @@ test "createElement('123') throws InvalidCharacterError (digit-leading name)" {
 
 // §6.1 item 7 — createElementNS(null, 'div') → Element only, not HTMLDivElement
 test "createElementNS(null, 'div') gives Element, not HTMLDivElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElementNS(null, 'div');
         \\[el instanceof Element, el instanceof HTMLDivElement]
     );
@@ -1461,8 +1773,7 @@ test "createElementNS(null, 'div') gives Element, not HTMLDivElement" {
 
 // §6.1 item 8 — createElementNS(HTML_NS, 'div') → HTMLDivElement
 test "createElementNS(HTML_NS, 'div') instanceof HTMLDivElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
         \\[el instanceof HTMLDivElement, el instanceof HTMLElement, el instanceof Element]
     );
@@ -1480,8 +1791,7 @@ test "createElementNS(HTML_NS, 'div') instanceof HTMLDivElement" {
 
 // §6.1 item 10 — createElementNS(SVG_NS, 'circle') is SVGCircleElement AND SVGElement AND Element
 test "createElementNS(SVG_NS,'circle') instanceof SVGCircleElement, SVGElement, Element" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         \\[c instanceof SVGCircleElement, c instanceof SVGElement, c instanceof Element]
     );
@@ -1499,8 +1809,7 @@ test "createElementNS(SVG_NS,'circle') instanceof SVGCircleElement, SVGElement, 
 
 // §6.1 item 11 — createElementNS(SVG_NS, 'foo') → SVGElement only (unknown SVG fallback)
 test "createElementNS(SVG_NS,'foo') instanceof SVGElement, not SVGCircleElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElementNS('http://www.w3.org/2000/svg', 'foo');
         \\[el instanceof SVGElement, el instanceof SVGCircleElement, el instanceof HTMLElement]
     );
@@ -1521,8 +1830,7 @@ test "createElementNS(SVG_NS,'foo') instanceof SVGElement, not SVGCircleElement"
 
 // §6.1 item 12 — createElementNS(MATH_NS, 'mi') → MathMLElement (JS-level)
 test "createElementNS(MATH_NS,'mi') instanceof MathMLElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'mi');
         \\[el instanceof MathMLElement, el instanceof Element, el instanceof HTMLElement]
     );
@@ -1543,8 +1851,7 @@ test "createElementNS(MATH_NS,'mi') instanceof MathMLElement" {
 
 // §6.1 item 18 — XMLDocument.createElement('foo').ownerDocument === that XML doc
 test "XMLDocument createElement('foo').ownerDocument === the XML doc (DOM §4.4)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var xmlDoc = document.implementation.createDocument(null, '', null);
         \\var el = xmlDoc.createElement('foo');
         \\(el.ownerDocument === xmlDoc) && (el.ownerDocument !== document)
@@ -1561,8 +1868,7 @@ test "XMLDocument createElement('foo').ownerDocument === the XML doc (DOM §4.4)
 
 // Task 1: prototype + constructor registration.
 test "NamedNodeMap constructor + prototype installed (Layer 1D Task 1)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\typeof NamedNodeMap === 'function' &&
         \\typeof NamedNodeMap.prototype === 'object' &&
         \\NamedNodeMap.prototype.constructor === NamedNodeMap;
@@ -1574,8 +1880,7 @@ test "NamedNodeMap constructor + prototype installed (Layer 1D Task 1)" {
 }
 
 test "new NamedNodeMap() throws (WebIDL §3.6.1)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var threw = false;
         \\try { new NamedNodeMap(); } catch (e) { threw = true; }
         \\threw;
@@ -1588,8 +1893,7 @@ test "new NamedNodeMap() throws (WebIDL §3.6.1)" {
 
 // Task 2: el.attributes links to NamedNodeMap.prototype.
 test "el.attributes __proto__ === NamedNodeMap.prototype (Layer 1D Task 2)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\Object.getPrototypeOf(el.attributes) === NamedNodeMap.prototype;
@@ -1601,8 +1905,7 @@ test "el.attributes __proto__ === NamedNodeMap.prototype (Layer 1D Task 2)" {
 }
 
 test "el.attributes[0] and el.attributes['id'] still resolve after Task 2" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.attributes[0].value === 'x' && el.attributes['id'].value === 'x' &&
@@ -1616,8 +1919,7 @@ test "el.attributes[0] and el.attributes['id'] still resolve after Task 2" {
 
 // Task 3: el.attributes === el.attributes identity invariant.
 test "el.attributes === el.attributes (identity cache, Layer 1D Task 3)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.attributes === el.attributes;
@@ -1630,8 +1932,7 @@ test "el.attributes === el.attributes (identity cache, Layer 1D Task 3)" {
 
 // Task 4: liveness — cached map reflects mutations on next read.
 test "NamedNodeMap liveness: length + named access update after setAttribute (Layer 1D Task 4)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var m = el.attributes;
         \\var before = m.length;
@@ -1645,8 +1946,7 @@ test "NamedNodeMap liveness: length + named access update after setAttribute (La
 }
 
 test "NamedNodeMap liveness: length drops after removeAttribute (Layer 1D Task 4)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var m = el.attributes;
@@ -1662,11 +1962,14 @@ test "NamedNodeMap liveness: length drops after removeAttribute (Layer 1D Task 4
 
 // Task 5: item + getNamedItem + getNamedItemNS.
 test "NamedNodeMap.item: in-range / out-of-range / negative (Layer 1D Task 5)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
+        \\el.setAttribute('data-y', 'y');
         \\el.attributes.item(0).value === 'x' &&
+        \\el.attributes.item(4294967296) === el.attributes.item(0) &&
+        \\el.attributes.item(NaN) === el.attributes.item(0) &&
+        \\el.attributes.item("1").value === 'y' &&
         \\el.attributes.item(999) === null &&
         \\el.attributes.item(-1) === null;
     );
@@ -1677,8 +1980,7 @@ test "NamedNodeMap.item: in-range / out-of-range / negative (Layer 1D Task 5)" {
 }
 
 test "NamedNodeMap.getNamedItem: HTML case-insensitive + missing returns null" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('data-x', '1');
         \\el.attributes.getNamedItem('DATA-X').value === '1' &&
@@ -1691,8 +1993,7 @@ test "NamedNodeMap.getNamedItem: HTML case-insensitive + missing returns null" {
 }
 
 test "NamedNodeMap.getNamedItemNS: empty ns coerces to null" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.attributes.getNamedItemNS('', 'id').value === 'x' &&
@@ -1707,8 +2008,7 @@ test "NamedNodeMap.getNamedItemNS: empty ns coerces to null" {
 
 // Task 6: removeNamedItem + removeNamedItemNS.
 test "NamedNodeMap.removeNamedItem returns removed Attr (Layer 1D Task 6)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var a = el.attributes.removeNamedItem('id');
@@ -1721,8 +2021,7 @@ test "NamedNodeMap.removeNamedItem returns removed Attr (Layer 1D Task 6)" {
 }
 
 test "NamedNodeMap.removeNamedItem throws NotFoundError when absent" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var threw = false;
         \\try { el.attributes.removeNamedItem('missing'); }
@@ -1736,8 +2035,7 @@ test "NamedNodeMap.removeNamedItem throws NotFoundError when absent" {
 }
 
 test "NamedNodeMap.removeNamedItemNS throws NotFoundError when absent" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var threw = false;
         \\try { el.attributes.removeNamedItemNS(null, 'missing'); }
@@ -1752,8 +2050,7 @@ test "NamedNodeMap.removeNamedItemNS throws NotFoundError when absent" {
 
 // Task 7: setNamedItem + setNamedItemNS.
 test "NamedNodeMap.setNamedItem: append returns null (Layer 1D Task 7)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var a = document.createAttribute('id'); a.value = 'x';
         \\var prev = el.attributes.setNamedItem(a);
@@ -1766,8 +2063,7 @@ test "NamedNodeMap.setNamedItem: append returns null (Layer 1D Task 7)" {
 }
 
 test "NamedNodeMap.setNamedItem: replace returns old Attr, clears its ownerElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'old');
         \\var oldNode = el.attributes.getNamedItem('id');
@@ -1784,8 +2080,7 @@ test "NamedNodeMap.setNamedItem: replace returns old Attr, clears its ownerEleme
 }
 
 test "NamedNodeMap.setNamedItem: idempotent when same Attr on same element" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var a = el.attributes.getNamedItem('id');
@@ -1798,8 +2093,7 @@ test "NamedNodeMap.setNamedItem: idempotent when same Attr on same element" {
 }
 
 test "NamedNodeMap.setNamedItem: InUseAttributeError for different element's Attr" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var a = document.createElement('div');
         \\var b = document.createElement('div');
         \\a.setAttribute('id', 'x');
@@ -1817,8 +2111,7 @@ test "NamedNodeMap.setNamedItem: InUseAttributeError for different element's Att
 
 // Task 8: @@iterator on NamedNodeMap.prototype.
 test "for..of el.attributes yields Attr nodes in index order (Layer 1D Task 8)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -1833,8 +2126,7 @@ test "for..of el.attributes yields Attr nodes in index order (Layer 1D Task 8)" 
 }
 
 test "[...el.attributes] has correct length (Layer 1D Task 8)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -1848,8 +2140,7 @@ test "[...el.attributes] has correct length (Layer 1D Task 8)" {
 }
 
 test "el.attributes[Symbol.iterator] is callable (Layer 1D Task 8)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\typeof el.attributes[Symbol.iterator] === 'function';
     );
@@ -1861,8 +2152,7 @@ test "el.attributes[Symbol.iterator] is callable (Layer 1D Task 8)" {
 
 // Task 10: Attr.ownerElement end-to-end tracking.
 test "Attr wrapper from el.attributes[0] has correct ownerElement (Layer 1D Task 10)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.attributes[0].ownerElement === el;
@@ -1874,8 +2164,7 @@ test "Attr wrapper from el.attributes[0] has correct ownerElement (Layer 1D Task
 }
 
 test "Attr.ownerElement becomes null after removeAttribute (Layer 1D Task 10)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var a = el.attributes[0];
@@ -1889,8 +2178,7 @@ test "Attr.ownerElement becomes null after removeAttribute (Layer 1D Task 10)" {
 }
 
 test "Attr.ownerElement becomes null after toggleAttribute removal (Layer 1D Task 10)" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('hidden', '');
         \\var a = el.attributes[0];
@@ -1905,8 +2193,7 @@ test "Attr.ownerElement becomes null after toggleAttribute removal (Layer 1D Tas
 
 // ── Layer 1D.1 Task 1: getAttributeNode / getAttributeNodeNS ────────
 test "getAttributeNode returns same object as attributes[0]" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.attributes[0] === el.getAttributeNode('id');
@@ -1918,8 +2205,7 @@ test "getAttributeNode returns same object as attributes[0]" {
 }
 
 test "getAttributeNode returns null on miss" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\document.createElement('div').getAttributeNode('missing') === null;
     );
     defer ctx.deinit();
@@ -1929,8 +2215,7 @@ test "getAttributeNode returns null on miss" {
 }
 
 test "getAttributeNodeNS coerces empty string ns to null" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.getAttributeNodeNS('', 'id') !== null;
@@ -1943,8 +2228,7 @@ test "getAttributeNodeNS coerces empty string ns to null" {
 
 // ── Layer 1D.1 Task 2: hasAttributeNS / getAttributeNS ──────────────
 test "hasAttributeNS returns true for matching null-ns attribute" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttributeNS(null, 'id', 'x');
         \\el.hasAttributeNS(null, 'id') && !el.hasAttributeNS(null, 'missing');
@@ -1956,8 +2240,7 @@ test "hasAttributeNS returns true for matching null-ns attribute" {
 }
 
 test "getAttributeNS returns value string, null when absent" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttributeNS(null, 'id', 'x');
         \\el.getAttributeNS(null, 'id') === 'x' &&
@@ -1970,8 +2253,7 @@ test "getAttributeNS returns value string, null when absent" {
 }
 
 test "hasAttributeNS and getAttributeNS coerce empty-string ns to null" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\el.hasAttributeNS('', 'id') && el.getAttributeNS('', 'id') === 'x';
@@ -1984,8 +2266,7 @@ test "hasAttributeNS and getAttributeNS coerce empty-string ns to null" {
 
 // ── Layer 1D.1 Task 3: removeAttributeNS ─────────────────────────────
 test "removeAttributeNS silent no-op when absent" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.removeAttributeNS(null, 'missing');
         \\el.attributes.length === 0;
@@ -1997,8 +2278,7 @@ test "removeAttributeNS silent no-op when absent" {
 }
 
 test "removeAttributeNS removes matching attr and clears ownerElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttributeNS(null, 'id', 'x');
         \\var a = el.getAttributeNodeNS(null, 'id');
@@ -2013,8 +2293,7 @@ test "removeAttributeNS removes matching attr and clears ownerElement" {
 
 // ── Layer 1D.1 Task 4: Attr wrapper identity + backing-ptr slot ──────
 test "Attr wrapper preserves identity across multiple getAttributeNode calls" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var a1 = el.getAttributeNode('id');
@@ -2029,8 +2308,7 @@ test "Attr wrapper preserves identity across multiple getAttributeNode calls" {
 
 // ── Layer 1D.1 Task 5: setAttributeNode / setAttributeNodeNS ─────────
 test "setAttributeNode returns null when appending new attr" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var a = document.createAttribute('id'); a.value = 'x';
         \\var prev = el.setAttributeNode(a);
@@ -2043,8 +2321,7 @@ test "setAttributeNode returns null when appending new attr" {
 }
 
 test "setAttributeNode returns old Attr when replacing" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'old');
         \\var oldNode = el.getAttributeNode('id');
@@ -2060,8 +2337,7 @@ test "setAttributeNode returns old Attr when replacing" {
 }
 
 test "setAttributeNode throws InUseAttributeError" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var a = document.createElement('div');
         \\var b = document.createElement('div');
         \\a.setAttribute('id', 'x');
@@ -2079,8 +2355,7 @@ test "setAttributeNode throws InUseAttributeError" {
 
 // ── Layer 1D.1 Task 6: removeAttributeNode ──────────────────────────
 test "removeAttributeNode returns the Attr and clears ownerElement" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var a = el.getAttributeNode('id');
@@ -2094,8 +2369,7 @@ test "removeAttributeNode returns the Attr and clears ownerElement" {
 }
 
 test "removeAttributeNode throws NotFoundError when Attr is not in list" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var orphan = document.createAttribute('id');
         \\var caught = false;
@@ -2110,8 +2384,7 @@ test "removeAttributeNode throws NotFoundError when Attr is not in list" {
 }
 
 test "removeAttributeNode throws TypeError for non-Attr" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var caught = false;
         \\try { el.removeAttributeNode({}); }
@@ -2126,8 +2399,7 @@ test "removeAttributeNode throws TypeError for non-Attr" {
 
 // ── Layer 1D.1 Task 7: toggleAttribute QName validation ─────────────
 test "toggleAttribute throws InvalidCharacterError on invalid qname" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var caught = false;
         \\try { el.toggleAttribute('foo bar'); }
@@ -2141,8 +2413,7 @@ test "toggleAttribute throws InvalidCharacterError on invalid qname" {
 }
 
 test "toggleAttribute still throws on empty name" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\var caught = false;
         \\try { el.toggleAttribute(''); }
@@ -2157,8 +2428,7 @@ test "toggleAttribute still throws on empty name" {
 
 // ── Layer 1D.1 Task 8: refreshAttributesMap stale-key sweep ─────────
 test "attributes map index properties shrink correctly after removeAttribute" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -2175,8 +2445,7 @@ test "attributes map index properties shrink correctly after removeAttribute" {
 }
 
 test "attributes map named properties sweep removed qnames" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('id', 'x');
         \\var m = el.attributes;
@@ -2217,8 +2486,7 @@ fn uninstallPhase62Validator() void {
 test "Phase 6.2: bracket SET rejects clamp(none, 1px, 1px)" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style["width"] = "clamp(none, 1px, 1px)";
         \\el.style.getPropertyValue("width");
@@ -2232,8 +2500,7 @@ test "Phase 6.2: bracket SET rejects clamp(none, 1px, 1px)" {
 test "Phase 6.2: bracket SET rejects linear-gradient(calc(sign(%)...))" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style["background-image"] = "linear-gradient(calc(sign(50%) * 1turn), red, blue)";
         \\el.style.getPropertyValue("background-image");
@@ -2247,8 +2514,7 @@ test "Phase 6.2: bracket SET rejects linear-gradient(calc(sign(%)...))" {
 test "Phase 6.2: bracket SET accepts clamp(10px, 20px, 30px)" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style["width"] = "clamp(10px, 20px, 30px)";
         \\el.style.getPropertyValue("width");
@@ -2262,8 +2528,7 @@ test "Phase 6.2: bracket SET accepts clamp(10px, 20px, 30px)" {
 test "Phase 6.2: bracket GET returns inline style value" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\" style=\"color: blue;\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: blue;\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style["color"];
     );
@@ -2276,8 +2541,7 @@ test "Phase 6.2: bracket GET returns inline style value" {
 test "Phase 6.2: calc-size basis in second arg rejected" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style["width"] = "calc-size(100px, auto)";
         \\el.style.getPropertyValue("width");
@@ -2291,8 +2555,7 @@ test "Phase 6.2: calc-size basis in second arg rejected" {
 test "Phase 6.2: calc-size basis in first arg accepted" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style["width"] = "calc-size(auto, 100px + 10%)";
         \\el.style.getPropertyValue("width");
@@ -2306,8 +2569,7 @@ test "Phase 6.2: calc-size basis in first arg accepted" {
 // ── MutationObserver Layer 1B tests ─────────────────────────────────
 
 test "MO subtree:true records childList mutation on descendant" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"parent\"><span id=\"child\"></span></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"parent\"><span id=\"child\"></span></div></body></html>",
         \\var records = [];
         \\var obs = new MutationObserver(function(recs) {
         \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
@@ -2325,9 +2587,66 @@ test "MO subtree:true records childList mutation on descendant" {
     try std.testing.expect(result.isNumber() and result.toNumber() == 1.0);
 }
 
+test "MO observe options read dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var calls = [];
+        \\var records = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
+        \\});
+        \\var el = document.getElementById("t");
+        \\obs.observe(el, {
+        \\  get childList() { calls.push("childList"); return true; },
+        \\  get subtree() { calls.push("subtree"); return false; },
+        \\  get attributeFilter() { calls.push("attributeFilter"); return ["data-x"]; }
+        \\});
+        \\el.appendChild(document.createElement("span"));
+        \\calls.join(",") + ":" + records.length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("childList,subtree,attributeFilter:1", v);
+}
+
+test "MO observe boolean options use ToBoolean" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"><span></span></div></body></html>",
+        \\var records = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
+        \\});
+        \\var el = document.getElementById("t");
+        \\obs.observe(el, { childList: 1, subtree: "", attributeOldValue: "yes" });
+        \\el.appendChild(document.createElement("em"));
+        \\el.setAttribute("data-x", "1");
+        \\records.length + ":" + records[1].oldValue;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("2:null", v);
+}
+
+test "MO observe attributeFilter entries coerce to DOMString" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var names = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) names.push(recs[i].attributeName);
+        \\});
+        \\var el = document.getElementById("t");
+        \\obs.observe(el, { attributeFilter: [{ toString: function(){ return "data-x"; } }] });
+        \\el.setAttribute("data-x", "1");
+        \\el.setAttribute("data-y", "2");
+        \\names.join(",");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("data-x", v);
+}
+
 test "MO subtree:false does NOT record childList mutation on descendant" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"parent\"><span id=\"child\"></span></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"parent\"><span id=\"child\"></span></div></body></html>",
         \\var records = [];
         \\var obs = new MutationObserver(function(recs) {
         \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
@@ -2346,8 +2665,7 @@ test "MO subtree:false does NOT record childList mutation on descendant" {
 }
 
 test "MO characterData records data setter mutation" {
-    var ctx = try TestCtx.init(
-        "<html><body><p id=\"p\">hello</p></body></html>",
+    var ctx = try TestCtx.init("<html><body><p id=\"p\">hello</p></body></html>",
         \\var records = [];
         \\var obs = new MutationObserver(function(recs) {
         \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
@@ -2364,8 +2682,7 @@ test "MO characterData records data setter mutation" {
 }
 
 test "MO characterDataOldValue captured in data setter" {
-    var ctx = try TestCtx.init(
-        "<html><body><p id=\"p\">hello</p></body></html>",
+    var ctx = try TestCtx.init("<html><body><p id=\"p\">hello</p></body></html>",
         \\var oldVals = [];
         \\var obs = new MutationObserver(function(recs) {
         \\  for (var i = 0; i < recs.length; i++) oldVals.push(recs[i].oldValue);
@@ -2383,8 +2700,7 @@ test "MO characterDataOldValue captured in data setter" {
 }
 
 test "MO characterData records textContent setter on Text node" {
-    var ctx = try TestCtx.init(
-        "<html><body><p id=\"p\">hello</p></body></html>",
+    var ctx = try TestCtx.init("<html><body><p id=\"p\">hello</p></body></html>",
         \\var records = [];
         \\var obs = new MutationObserver(function(recs) {
         \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
@@ -2400,8 +2716,7 @@ test "MO characterData records textContent setter on Text node" {
 }
 
 test "MO attributeOldValue captured in removeAttribute" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\" data-x=\"42\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" data-x=\"42\"></div></body></html>",
         \\var oldVals = [];
         \\var obs = new MutationObserver(function(recs) {
         \\  for (var i = 0; i < recs.length; i++) oldVals.push(recs[i].oldValue);
@@ -2417,6 +2732,17 @@ test "MO attributeOldValue captured in removeAttribute" {
     try std.testing.expectEqualStrings("42", v);
 }
 
+test "MutationObserver methods ignore corrupted internal index" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var obs = new MutationObserver(function(){});
+        \\obs._moIdx = NaN;
+        \\obs.takeRecords().length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isNumber() and result.toNumber() == 0.0);
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Native bug regressions (DOM §4.4, §4.9)
 // ══════════════════════════════════════════════════════════════════════
@@ -2425,8 +2751,7 @@ test "createDocument ownerDocument slot — el.ownerDocument === doc2 not global
     // Regression: ownerDocument getter must read the per-node _ownerDoc slot,
     // not return globalThis.document. For elements created in an XML document
     // returned by createDocument(), ownerDocument must be that XML doc.
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var doc2 = document.implementation.createDocument(null, 'root', null);
         \\var el = doc2.createElement('foo');
         \\(el.ownerDocument === doc2) && (el.ownerDocument !== document);
@@ -2439,8 +2764,7 @@ test "createDocument ownerDocument slot — el.ownerDocument === doc2 not global
 test "buildAttributesMap lexbor iteration — all 3 attrs accessible by index (DOM §4.9)" {
     // Regression: attribute iteration must use lxb_dom_element_next_attribute_noi,
     // not at.node.next which only exposes the first attribute (walks sibling chain).
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var el = document.createElement('div');
         \\el.setAttribute('a', '1');
         \\el.setAttribute('b', '2');
@@ -2466,8 +2790,7 @@ test "buildAttributesMap lexbor iteration — all 3 attrs accessible by index (D
 // dom/nodes/attributes.html). TouchEvent IS legacy-createable per the spec.
 
 test "MutationEvent global exists with MODIFICATION/ADDITION/REMOVAL constants" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\// MutationEvent global + constants required by dom/nodes/attributes.html
         \\var ok = (typeof MutationEvent === "function");
         \\ok = ok && (MutationEvent.MODIFICATION === 1);
@@ -2484,9 +2807,44 @@ test "MutationEvent global exists with MODIFICATION/ADDITION/REMOVAL constants" 
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+test "MutationEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var related = document.createElement("div");
+        \\var ev = new MutationEvent("DOMAttrModified", {
+        \\  get relatedNode() { calls.push("relatedNode"); return related; },
+        \\  get prevValue() { calls.push("prevValue"); return 1; },
+        \\  get newValue() { calls.push("newValue"); return true; },
+        \\  get attrName() { calls.push("attrName"); return "data-x"; },
+        \\  get attrChange() { calls.push("attrChange"); return "2"; }
+        \\});
+        \\calls.join(",") === "relatedNode,prevValue,newValue,attrName,attrChange" &&
+        \\  ev.relatedNode === related && ev.prevValue === "1" &&
+        \\  ev.newValue === "true" && ev.attrName === "data-x" &&
+        \\  ev.attrChange === 2;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "MutationEvent initMutationEvent initializes legacy fields" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var related = document.createElement("div");
+        \\var ev = new MutationEvent("x");
+        \\ev.initMutationEvent("DOMAttrModified", true, true, related, 1, true, "data-x", "3");
+        \\ev.type === "DOMAttrModified" && ev.bubbles === true &&
+        \\  ev.cancelable === true && ev.relatedNode === related &&
+        \\  ev.prevValue === "1" && ev.newValue === "true" &&
+        \\  ev.attrName === "data-x" && ev.attrChange === 3;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
 test "ProgressEvent global exists but createEvent throws NotSupportedError" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var ok = (typeof ProgressEvent === "function");
         \\// createEvent("ProgressEvent") must throw NotSupportedError (DOM §4.5)
         \\var threw = false;
@@ -2499,9 +2857,128 @@ test "ProgressEvent global exists but createEvent throws NotSupportedError" {
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+test "ProgressEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new ProgressEvent("load", {
+        \\  get lengthComputable() { calls.push("lengthComputable"); return true; },
+        \\  get loaded() { calls.push("loaded"); return " 12 "; },
+        \\  get total() { calls.push("total"); return true; }
+        \\});
+        \\calls.join(",") === "lengthComputable,loaded,total" &&
+        \\  ev.lengthComputable === true && ev.loaded === 12 && ev.total === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "HashChangeEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new HashChangeEvent("hashchange", {
+        \\  get oldURL() { calls.push("oldURL"); return 1; },
+        \\  get newURL() { calls.push("newURL"); return true; }
+        \\});
+        \\calls.join(",") === "oldURL,newURL" &&
+        \\  ev.oldURL === "1" && ev.newURL === "true";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "MessageEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var data = { ok: true };
+        \\var source = { source: true };
+        \\var ports = [{ port: 1 }];
+        \\var ev = new MessageEvent("message", {
+        \\  get data() { calls.push("data"); return data; },
+        \\  get origin() { calls.push("origin"); return 12; },
+        \\  get lastEventId() { calls.push("lastEventId"); return true; },
+        \\  get source() { calls.push("source"); return source; },
+        \\  get ports() { calls.push("ports"); return ports; }
+        \\});
+        \\calls.join(",") === "data,origin,lastEventId,source,ports" &&
+        \\  ev.data === data && ev.origin === "12" &&
+        \\  ev.lastEventId === "true" && ev.source === source &&
+        \\  ev.ports === ports;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "StorageEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var storageArea = { storage: true };
+        \\var ev = new StorageEvent("storage", {
+        \\  get key() { calls.push("key"); return 9; },
+        \\  get oldValue() { calls.push("oldValue"); return null; },
+        \\  get newValue() { calls.push("newValue"); return true; },
+        \\  get url() { calls.push("url"); return 12; },
+        \\  get storageArea() { calls.push("storageArea"); return storageArea; }
+        \\});
+        \\calls.join(",") === "key,oldValue,newValue,url,storageArea" &&
+        \\  ev.key === "9" && ev.oldValue === null &&
+        \\  ev.newValue === "true" && ev.url === "12" &&
+        \\  ev.storageArea === storageArea;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "BeforeUnloadEvent constructor initializes string returnValue" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new BeforeUnloadEvent("beforeunload");
+        \\var before = ev.returnValue;
+        \\ev.returnValue = "leave?";
+        \\before === "" && ev.returnValue === "leave?";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CompositionEvent and TextEvent constructors read data accessor" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var comp = new CompositionEvent("compositionstart", {
+        \\  get data() { calls.push("composition"); return 34; }
+        \\});
+        \\var text = new TextEvent("textInput", {
+        \\  get data() { calls.push("text"); return true; }
+        \\});
+        \\calls.join(",") === "composition,text" &&
+        \\  comp.data === "34" && text.data === "true";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DragEvent constructor reads dataTransfer accessor" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var dt = { data: true };
+        \\var ev = new DragEvent("dragstart", {
+        \\  get clientX() { calls.push("clientX"); return 5; },
+        \\  get dataTransfer() { calls.push("dataTransfer"); return dt; }
+        \\});
+        \\calls.join(",") === "clientX,dataTransfer" &&
+        \\  ev.clientX === 5 && ev.dataTransfer === dt;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
 test "createEvent TouchEvent alias produces instance inheriting from UIEvent" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var ev = document.createEvent("TouchEvent");
         \\// TouchEvent.prototype → UIEvent.prototype → Event.prototype
         \\var ok = (ev instanceof TouchEvent) && (ev instanceof UIEvent) && (ev instanceof Event);
@@ -2516,12 +2993,304 @@ test "createEvent TouchEvent alias produces instance inheriting from UIEvent" {
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+test "TouchEvent constructor reads touch init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var touches = [{ identifier: 1 }];
+        \\var targetTouches = [{ identifier: 2 }];
+        \\var changedTouches = [{ identifier: 3 }];
+        \\var ev = new TouchEvent("touchstart", {
+        \\  get touches() { calls.push("touches"); return touches; },
+        \\  get targetTouches() { calls.push("targetTouches"); return targetTouches; },
+        \\  get changedTouches() { calls.push("changedTouches"); return changedTouches; },
+        \\  get ctrlKey() { calls.push("ctrlKey"); return true; }
+        \\});
+        \\calls.join(",") === "touches,targetTouches,changedTouches,ctrlKey" &&
+        \\  ev.touches === touches && ev.targetTouches === targetTouches &&
+        \\  ev.changedTouches === changedTouches && ev.ctrlKey === true;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DeviceOrientationEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new DeviceOrientationEvent("deviceorientation", {
+        \\  get alpha() { calls.push("alpha"); return "1.5"; },
+        \\  get beta() { calls.push("beta"); return null; },
+        \\  get gamma() { calls.push("gamma"); return true; },
+        \\  get absolute() { calls.push("absolute"); return 1; }
+        \\});
+        \\calls.join(",") === "alpha,beta,gamma,absolute" &&
+        \\  ev.alpha === 1.5 && ev.beta === null &&
+        \\  ev.gamma === 1 && ev.absolute === true;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "DeviceMotionEvent constructor reads init dictionary accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new DeviceMotionEvent("devicemotion", {
+        \\  get acceleration() {
+        \\    calls.push("acceleration");
+        \\    return { get x() { calls.push("x"); return "1"; }, y: null, z: true };
+        \\  },
+        \\  get accelerationIncludingGravity() {
+        \\    calls.push("gravity");
+        \\    return { x: 2, y: 3, z: 4 };
+        \\  },
+        \\  get rotationRate() {
+        \\    calls.push("rotationRate");
+        \\    return { alpha: "5", beta: null, gamma: true };
+        \\  },
+        \\  get interval() { calls.push("interval"); return "16.5"; }
+        \\});
+        \\calls.join(",") === "acceleration,x,gravity,rotationRate,interval" &&
+        \\  ev.acceleration.x === 1 && ev.acceleration.y === null &&
+        \\  ev.acceleration.z === 1 &&
+        \\  ev.accelerationIncludingGravity.y === 3 &&
+        \\  ev.rotationRate.alpha === 5 && ev.rotationRate.beta === null &&
+        \\  ev.rotationRate.gamma === 1 && ev.interval === 16.5;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
 test "createEvent case-insensitive TouchEvent aliases" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\var lower = document.createEvent("touchevent");
         \\var upper = document.createEvent("TOUCHEVENT");
         \\(lower instanceof TouchEvent) && (upper instanceof TouchEvent);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "Event type arguments coerce with DOMString semantics" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var o = { toString: function() { return "x"; } };
+        \\var ev = new Event(123);
+        \\var ce = new CustomEvent(true);
+        \\var old = document.createEvent("Event");
+        \\old.initEvent(o, false, false);
+        \\ev.type === "123" && ce.type === "true" && old.type === "x";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "legacy event init methods coerce numeric and DOMString arguments" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ui = new UIEvent("x");
+        \\ui.initUIEvent("ui", false, false, null, " 6 ");
+        \\var mouse = new MouseEvent("x");
+        \\mouse.initMouseEvent("mouse", false, false, null, 0, 0, 0, " 7 ", 0, false, false, false, false, true, null);
+        \\var key = new KeyboardEvent("x");
+        \\key.initKeyboardEvent("key", false, false, null, 5, " 9 ");
+        \\ui.detail === 6 && mouse.clientX === 7 && mouse.button === 1 &&
+        \\  key.key === "5" && key.location === 9;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "legacy data UIEvent init methods coerce data argument" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var comp = new CompositionEvent("x");
+        \\comp.initCompositionEvent("compositionupdate", true, false, null, 12);
+        \\var text = new TextEvent("x");
+        \\text.initTextEvent("textInput", false, true, null, true);
+        \\comp.type === "compositionupdate" && comp.bubbles === true &&
+        \\  comp.data === "12" &&
+        \\  text.type === "textInput" && text.cancelable === true &&
+        \\  text.data === "true";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CustomEvent detail reads dictionary accessor" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = 0;
+        \\var ev = new CustomEvent("x", {
+        \\  get detail() { calls++; return 42; }
+        \\});
+        \\calls === 1 && ev.detail === 42;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "UIEvent init dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var view = { ok: true };
+        \\var ev = new UIEvent("x", {
+        \\  get view() { calls.push("view"); return view; },
+        \\  get detail() { calls.push("detail"); return 7; }
+        \\});
+        \\calls.join(",") === "view,detail" && ev.view === view && ev.detail === 7;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "UIEvent numeric dictionary members coerce values" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new UIEvent("x", { detail: " 8 " });
+        \\ev.detail === 8;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "MouseEvent init dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var rel = document.createElement("span");
+        \\var ev = new MouseEvent("click", {
+        \\  get clientX() { calls.push("clientX"); return 12; },
+        \\  get ctrlKey() { calls.push("ctrlKey"); return true; },
+        \\  get relatedTarget() { calls.push("relatedTarget"); return rel; }
+        \\});
+        \\calls.join(",") === "clientX,ctrlKey,relatedTarget" &&
+        \\ev.clientX === 12 && ev.ctrlKey === true && ev.relatedTarget === rel;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "MouseEvent numeric dictionary members coerce values" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new MouseEvent("click", { clientX: " 9 ", buttons: true });
+        \\ev.clientX === 9 && ev.buttons === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "WheelEvent init dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new WheelEvent("wheel", {
+        \\  get deltaX() { calls.push("deltaX"); return 1; },
+        \\  get deltaMode() { calls.push("deltaMode"); return 2; }
+        \\});
+        \\calls.join(",") === "deltaX,deltaMode" &&
+        \\ev.deltaX === 1 && ev.deltaMode === 2;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "WheelEvent numeric dictionary members coerce values" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new WheelEvent("wheel", { deltaX: "2.5", deltaMode: true });
+        \\ev.deltaX === 2.5 && ev.deltaMode === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "KeyboardEvent init dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new KeyboardEvent("keydown", {
+        \\  get key() { calls.push("key"); return "A"; },
+        \\  get location() { calls.push("location"); return 3; },
+        \\  get repeat() { calls.push("repeat"); return true; }
+        \\});
+        \\calls.join(",") === "key,location,repeat" &&
+        \\ev.key === "A" && ev.location === 3 && ev.repeat === true;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "KeyboardEvent numeric dictionary members coerce values" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new KeyboardEvent("keydown", { location: "4" });
+        \\ev.location === 4;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "KeyboardEvent DOMString dictionary members coerce values" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new KeyboardEvent("keydown", { key: 7, code: true });
+        \\ev.key === "7" && ev.code === "true";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "FocusEvent init dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var rel = document.createElement("button");
+        \\var ev = new FocusEvent("focus", {
+        \\  get relatedTarget() { calls.push("relatedTarget"); return rel; }
+        \\});
+        \\calls.join(",") === "relatedTarget" && ev.relatedTarget === rel;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "InputEvent init dictionary reads accessors" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var calls = [];
+        \\var ev = new InputEvent("input", {
+        \\  get data() { calls.push("data"); return "x"; },
+        \\  get isComposing() { calls.push("isComposing"); return true; },
+        \\  get inputType() { calls.push("inputType"); return "insertText"; }
+        \\});
+        \\calls.join(",") === "data,isComposing,inputType" &&
+        \\ev.data === "x" && ev.isComposing === true && ev.inputType === "insertText";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "InputEvent inputType dictionary member coerces DOMString" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var ev = new InputEvent("input", { inputType: 123 });
+        \\ev.inputType === "123";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "InputEvent data dictionary member is nullable DOMString" {
+    var ctx = try TestCtx.init("<html><body></body></html>",
+        \\var a = new InputEvent("input");
+        \\var b = new InputEvent("input", { data: 123 });
+        \\var c = new InputEvent("input", { data: null });
+        \\a.data === null && b.data === "123" && c.data === null;
     );
     defer ctx.deinit();
     const result = try ctx.run();
@@ -2540,11 +3309,13 @@ test "createEvent case-insensitive TouchEvent aliases" {
 test "getComputedStyle().supports returns true for valid property/value" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var cs = getComputedStyle(el);
-        \\typeof cs.supports === "function" && cs.supports("color", "red");
+        \\typeof cs.supports === "function" &&
+        \\cs.supports("color", "red") &&
+        \\cs.supports("COLOR", "red") &&
+        \\cs.supports("backgroundColor", "red");
     );
     defer ctx.deinit();
     const result = try ctx.run();
@@ -2554,8 +3325,7 @@ test "getComputedStyle().supports returns true for valid property/value" {
 test "getComputedStyle().supports returns false for invalid value" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var cs = getComputedStyle(el);
         \\cs.supports("color", "not-a-color-xyzzy");
@@ -2568,8 +3338,7 @@ test "getComputedStyle().supports returns false for invalid value" {
 test "getComputedStyle().supports accepts condition-string form" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var cs = getComputedStyle(el);
         \\cs.supports("color: red") && cs.supports("(color: red)");
@@ -2579,9 +3348,18 @@ test "getComputedStyle().supports accepts condition-string form" {
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+test "getComputedStyle().getPropertyPriority returns empty string" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red !important;\"></div></body></html>",
+        \\var cs = getComputedStyle(document.getElementById("t"));
+        \\cs.getPropertyPriority("color") === "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
 test "getComputedStyle().setProperty throws NoModificationAllowedError" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var cs = getComputedStyle(el);
         \\var name = null;
@@ -2596,8 +3374,7 @@ test "getComputedStyle().setProperty throws NoModificationAllowedError" {
 }
 
 test "getComputedStyle().removeProperty throws NoModificationAllowedError" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\" style=\"color: red;\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red;\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var cs = getComputedStyle(el);
         \\var name = null;
@@ -2612,21 +3389,110 @@ test "getComputedStyle().removeProperty throws NoModificationAllowedError" {
 }
 
 test "getComputedStyle() exposes item method and numeric length" {
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\" style=\"color: red; background-color: blue;\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red; background-color: blue;\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\var cs = getComputedStyle(el);
         \\// CSSOM §6.7.3: item() is a method, length is a numeric attribute.
-        \\typeof cs.item === "function" && typeof cs.length === "number" && cs.length === 2;
+        \\typeof cs.item === "function" &&
+        \\typeof cs.length === "number" &&
+        \\cs.length === 0 &&
+        \\cs.item(0) === "";
     );
     defer ctx.deinit();
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+test "CSSStyleDeclaration.item index converts with ToUint32" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\": bad; COLOR: red; --Token: 1;\"></div></body></html>",
+        \\var s = document.getElementById("t").style;
+        \\s.item(4294967296) === "color" &&
+        \\s.item(NaN) === "color" &&
+        \\s.item("1") === "--Token" &&
+        \\s.item(-1) === "" &&
+        \\s.length === 2 &&
+        \\s.item(0) === "color" &&
+        \\s.item(1) === "--Token";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "KotoriRuntime CSSOM item index converts with ToUint32" {
+    const html = "<html><body></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+
+    const result = rt.eval(
+        \\var sheet = new CSSStyleSheet({ media: "screen, print" });
+        \\sheet.replaceSync("p { color: red; }");
+        \\var style = document.createElement("style");
+        \\style.textContent = "p { color: red; }";
+        \\document.body.appendChild(style);
+        \\var sheets = document.styleSheets;
+        \\sheet.media.item(4294967296) === "screen" &&
+        \\sheet.media.item(NaN) === "screen" &&
+        \\sheet.media.item("1") === "print" &&
+        \\sheet.cssRules.item(4294967296) === sheet.cssRules.item(0) &&
+        \\sheet.cssRules.item(NaN) === sheet.cssRules.item(0) &&
+        \\sheets.item(4294967296) === sheets.item(0) &&
+        \\sheets.item(NaN) === sheets.item(0) ? "ok" : "bad";
+    );
+    try std.testing.expect(result.isOk());
+    try std.testing.expectEqualStrings("ok", result.ok.?);
+}
+
+test "KotoriRuntime FileList item index converts with ToUint32" {
+    const html = "<html><body></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+
+    const result = rt.eval(
+        \\var input = document.createElement("input");
+        \\input.type = "file";
+        \\input.files._items.push(new File(["x"], "x.txt", { lastModified: 1 }));
+        \\input.files.item(-1) === null &&
+        \\input.files.item(4294967296) === input.files.item(0) &&
+        \\input.files.item(NaN) === input.files.item(0) ? "ok" : "bad";
+    );
+    try std.testing.expect(result.isOk());
+    try std.testing.expectEqualStrings("ok", result.ok.?);
+}
+
+test "KotoriRuntime DOMTokenList item index converts with ToUint32" {
+    const html = "<html><body><p id=\"p\" class=\"one two\"></p><link id=\"l\" rel=\"stylesheet preload\"></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+
+    const result = rt.eval(
+        \\var p = document.getElementById("p");
+        \\var l = document.getElementById("l");
+        \\p.classList.item(4294967296) === "one" &&
+        \\p.classList.item(NaN) === "one" &&
+        \\p.classList.item(-1) === null &&
+        \\l.relList.item(4294967296) === "stylesheet" &&
+        \\l.relList.item(NaN) === "stylesheet" &&
+        \\l.relList.item(-1) === null ? "ok" : "bad";
+    );
+    try std.testing.expect(result.isOk());
+    try std.testing.expectEqualStrings("ok", result.ok.?);
+}
+
 test "getComputedStyle() on detached element: length == 0 coerces correctly" {
-    var ctx = try TestCtx.init(
-        "<html><body></body></html>",
+    var ctx = try TestCtx.init("<html><body></body></html>",
         \\// Regression test for css/cssom/getComputedStyle-detached-subtree.html —
         \\// when `length` was registered as a method, `style.length == 0` evaluated
         \\// `function == 0` → false. The attribute form returns a Number, so the
@@ -2643,10 +3509,155 @@ test "getComputedStyle() on detached element: length == 0 coerces correctly" {
 test "inline style.supports delegates to validator" {
     installPhase62Validator();
     defer uninstallPhase62Validator();
-    var ctx = try TestCtx.init(
-        "<html><body><div id=\"t\"></div></body></html>",
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
         \\var el = document.getElementById("t");
         \\el.style.supports("color", "red") && !el.style.supports("color", "not-a-color-xyzzy");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration methods coerce DOMString arguments" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var prop = { toString: function() { return "color"; } };
+        \\var value = { toString: function() { return "red"; } };
+        \\var style = document.getElementById("t").style;
+        \\style.setProperty(prop, value);
+        \\var before = style.getPropertyValue(prop);
+        \\var removed = style.removeProperty(prop);
+        \\before === "red" && removed === "red" && style.getPropertyValue("color") === "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration methods lowercase CSS property names" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"COLOR: red !IMPORTANT;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\var inline = style.getPropertyValue("color") === "red" &&
+        \\    style.getPropertyPriority("color") === "important";
+        \\style.setProperty("COLOR", "green");
+        \\style.setProperty("Background-Color", "blue");
+        \\style.setProperty("--Token", "1");
+        \\inline &&
+        \\style.getPropertyValue("color") === "green" &&
+        \\style.getPropertyValue("COLOR") === "green" &&
+        \\style.getPropertyValue("background-color") === "blue" &&
+        \\style.getPropertyValue("Background-Color") === "blue" &&
+        \\style.getPropertyValue("--Token") === "1" &&
+        \\style.getPropertyValue("--token") === "" &&
+        \\style.removeProperty("COLOR") === "green" &&
+        \\style.getPropertyValue("color") === "" &&
+        \\style.removeProperty("Background-Color") === "blue";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration.getPropertyPriority reads inline important" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red !important; width: 1px;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\var priority = style.getPropertyPriority("color");
+        \\var value = style.getPropertyValue("color");
+        \\var removed = style.removeProperty("color");
+        \\priority === "important" &&
+        \\value === "red" &&
+        \\removed === "red" &&
+        \\style.getPropertyPriority("width") === "" &&
+        \\style.getPropertyPriority("missing") === "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration.setProperty writes important priority" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.setProperty("color", "blue", "important");
+        \\style.setProperty("color", "green", "bogus");
+        \\var ignored = style.getPropertyValue("color") === "blue" &&
+        \\    style.getPropertyPriority("color") === "important";
+        \\style.setProperty("color", "", "bogus");
+        \\var removed = style.getPropertyValue("color") === "" &&
+        \\    style.getPropertyPriority("color") === "";
+        \\ignored && removed;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration.setProperty rejects important in value" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.setProperty("color", "blue !important");
+        \\style.color = "green !important";
+        \\style.getPropertyValue("color") === "red" &&
+        \\style.getPropertyPriority("color") === "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration ignores empty property name writes" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.setProperty("", "blue");
+        \\style[""] = "green";
+        \\style.cssText === "color: red;" &&
+        \\style.length === 1 &&
+        \\style.getPropertyValue("") === "" &&
+        \\style.getPropertyPriority("") === "" &&
+        \\style.removeProperty("") === "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration.setProperty defaults missing value to empty string" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red; width: 1px;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.setProperty("color");
+        \\style.setProperty("height", undefined);
+        \\style.getPropertyValue("color") === "" &&
+        \\style.getPropertyValue("width") === "1px" &&
+        \\style.getPropertyValue("height") === "undefined" &&
+        \\style.length === 2;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration.setProperty collapses duplicate target property" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"color: red; color: blue;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.setProperty("color", "green");
+        \\style.getPropertyValue("color") === "green" &&
+        \\style.length === 1 &&
+        \\style.item(0) === "color";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "CSSStyleDeclaration length and item skip duplicate declarations" {
+    var ctx = try TestCtx.init("<html><body><div id=\"t\" style=\"bad; color: red; width: 1px; COLOR: blue; --Token: 1; --Token: 2;\"></div></body></html>",
+        \\var style = document.getElementById("t").style;
+        \\style.getPropertyValue("color") === "blue" &&
+        \\style.getPropertyValue("--Token") === "2" &&
+        \\style.length === 3 &&
+        \\style.item(0) === "color" &&
+        \\style.item(1) === "width" &&
+        \\style.item(2) === "--Token" &&
+        \\style.item(3) === "";
     );
     defer ctx.deinit();
     const result = try ctx.run();

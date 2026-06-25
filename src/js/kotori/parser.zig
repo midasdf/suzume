@@ -345,7 +345,9 @@ pub const Parser = struct {
         self.advance();
         // Strip quotes
         const raw = if (text.len >= 2) text[1 .. text.len - 1] else "";
+        const content_needs_free = std.mem.indexOfScalar(u8, raw, '\\') != null;
         const content = self.processEscapes(raw) catch return error.OutOfMemory;
+        defer if (content_needs_free) self.allocator.free(content);
         const sid = self.pool.intern(content) catch return error.OutOfMemory;
         return self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
     }
@@ -463,7 +465,7 @@ pub const Parser = struct {
                 i += 1;
             }
         }
-        return buf.items;
+        return try buf.toOwnedSlice(self.allocator);
     }
 
     fn parseTemplateLiteral(self: *Parser) ParseError!NodeIndex {

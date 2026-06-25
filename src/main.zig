@@ -52,6 +52,7 @@ const dom_api = @import("js/dom_api.zig");
 const kotori = @import("kotori");
 const kotori_dom = @import("kotori_dom");
 const kotori_runtime = @import("kotori_runtime");
+const dom_selector = @import("js/dom_selector.zig");
 const events = @import("js/events.zig");
 const WebDriverServer = @import("net/webdriver.zig").WebDriverServer;
 const CommandSlot = @import("net/webdriver.zig").CommandSlot;
@@ -108,6 +109,11 @@ fn kotoriMarkDomDirty() void {
 fn kotoriValidateCssValue(prop: []const u8, val: []const u8) bool {
     const dom_style_mod = @import("js/dom_style.zig");
     return dom_style_mod.isValidCssValue(prop, val);
+}
+
+fn kotoriElementMatches(node_opaque: *anyopaque, selector: []const u8) bool {
+    const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_opaque));
+    return dom_selector.elementMatchesSelector(node, selector);
 }
 
 /// Bridge: kotori.getComputedStyle → resolve the CSSOM §6.5 resolved value
@@ -321,10 +327,16 @@ fn fontPathSlice(path: [*:0]const u8) []const u8 {
     return path[0..len];
 }
 
-// Integration test stub (actual tests in tests/test_integration.zig, run via `zig build test`)
-fn testHttp(_: std.mem.Allocator) noreturn {
-    std.debug.print("HTTP integration tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
-    std.process.exit(1);
+fn testHttp(allocator: std.mem.Allocator) !void {
+    var client = try HttpClient.init();
+    defer client.deinit();
+
+    var response = try client.get(allocator, "http://example.com");
+    defer response.deinit();
+    if (response.status_code < 200 or response.status_code >= 400 or response.body.len == 0) {
+        return error.HttpSmokeFailed;
+    }
+    std.debug.print("HTTP smoke PASS ({d}, {d} bytes)\n", .{ response.status_code, response.body.len });
 }
 
 /// Timestamp of last restyle (ms), used to throttle to ~60fps.
@@ -333,6 +345,54 @@ const min_restyle_interval_ms: i64 = 16; // ~60fps
 
 /// Re-style and re-layout a page after JS DOM mutation.
 /// Rebuilds the style cascade, box tree, and layout from the current DOM state.
+/// Walk the box tree and clamp any non-finite or absurdly large geometry to
+/// safe values. The layout engine can emit `inf` / `NaN` / f32-max for
+/// boxes whose computed style references a value that overflows during
+/// layout (e.g. Google's flex layout with `height: calc(100% - 560px)` on a
+/// parent whose own height is itself derived from a percentage). Downstream
+/// paint and scroll code does `@intFromFloat` which panics on infinity, so
+/// we sanitize once at the source.
+fn sanitizeBoxGeometry(box: *Box) void {
+    const max_dim: f32 = 16384.0;
+    const safe = struct {
+        fn f(v: f32) f32 {
+            if (!std.math.isFinite(v)) return 0;
+            return @max(@min(v, max_dim), -max_dim);
+        }
+    }.f;
+    box.content.x = safe(box.content.x);
+    box.content.y = safe(box.content.y);
+    box.content.width = @max(safe(box.content.width), 0);
+    box.content.height = @max(safe(box.content.height), 0);
+    box.margin.left = safe(box.margin.left);
+    box.margin.right = safe(box.margin.right);
+    box.margin.top = safe(box.margin.top);
+    box.margin.bottom = safe(box.margin.bottom);
+    box.padding.left = @max(safe(box.padding.left), 0);
+    box.padding.right = @max(safe(box.padding.right), 0);
+    box.padding.top = @max(safe(box.padding.top), 0);
+    box.padding.bottom = @max(safe(box.padding.bottom), 0);
+    box.border.left = @max(safe(box.border.left), 0);
+    box.border.right = @max(safe(box.border.right), 0);
+    box.border.top = @max(safe(box.border.top), 0);
+    box.border.bottom = @max(safe(box.border.bottom), 0);
+    // Sanitize computed style dimensions that paint code reads directly.
+    box.style.border_top_width = @max(safe(box.style.border_top_width), 0);
+    box.style.border_right_width = @max(safe(box.style.border_right_width), 0);
+    box.style.border_bottom_width = @max(safe(box.style.border_bottom_width), 0);
+    box.style.border_left_width = @max(safe(box.style.border_left_width), 0);
+    box.style.border_radius_tl = @max(safe(box.style.border_radius_tl), 0);
+    box.style.border_radius_tr = @max(safe(box.style.border_radius_tr), 0);
+    box.style.border_radius_bl = @max(safe(box.style.border_radius_bl), 0);
+    box.style.border_radius_br = @max(safe(box.style.border_radius_br), 0);
+    box.style.outline_width = @max(safe(box.style.outline_width), 0);
+    box.style.box_shadow_x = safe(box.style.box_shadow_x);
+    box.style.box_shadow_y = safe(box.style.box_shadow_y);
+    box.style.box_shadow_blur = @max(safe(box.style.box_shadow_blur), 0);
+    box.style.font_size_px = @max(safe(box.style.font_size_px), 1);
+    for (box.children.items) |child| sanitizeBoxGeometry(child);
+}
+
 fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32, layout_height: i32) void {
     const doc = &(page.doc orelse return);
 
@@ -353,6 +413,14 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     // Layout with full viewport width
     const content_w: f32 = @floatFromInt(layout_width);
     block_layout.layoutBlockVp(new_root_box, content_w, 0, fonts, @floatFromInt(layout_height));
+
+    // Sanitize box geometry: clamp any non-finite or absurdly large values
+    // that the layout engine can emit when fed a JS-built DOM with extreme
+    // computed styles. Without this, downstream paint/scroll code can
+    // @intFromFloat an infinity and panic. The clamp is large (16384px = ~
+    // 17 screens at 1280 wide) so it never affects legitimate layout but
+    // caps pathological cases.
+    sanitizeBoxGeometry(new_root_box);
 
     // Replace old styles and box tree (order matters: box tree refs styles)
     // Note: old root_box is arena-allocated by buildBoxTree and not individually freed.
@@ -737,7 +805,7 @@ fn applyAnimationsToBoxTree(
                     anim_state.pending_events.append(anim_state.allocator, .{
                         .node_ptr = node_ptr,
                         .event_type = .transition_end,
-                        .name = "all", // TODO: use actual property name
+                        .name = anim_mod.transitionPropertyName(tr.property),
                         .elapsed_time = tr.duration_s,
                     }) catch {};
                 }
@@ -835,6 +903,7 @@ fn navigateTo(
 
         const content_w: f32 = @floatFromInt(layout_width);
         block_layout.layoutBlockVp(root_box, content_w, 0, fonts, @floatFromInt(layout_height));
+        sanitizeBoxGeometry(root_box);
 
         const total_h = painter_mod.contentHeight(root_box);
         const total_w = painter_mod.contentWidth(root_box);
@@ -902,6 +971,7 @@ fn navigateTo(
     // Layout with full viewport width
     const content_w: f32 = @floatFromInt(layout_width);
     block_layout.layoutBlockVp(root_box, content_w, 0, fonts, @floatFromInt(layout_height));
+    sanitizeBoxGeometry(root_box);
 
     // Collect image URLs for incremental loading
     const img_cache = ImageCache.init(allocator);
@@ -965,6 +1035,7 @@ fn navigateTo(
     kotori_dom.setResolveCallback(&kotoriResolveComputedValue);
     kotori_dom.setValidateCallback(&kotoriValidateCssValue);
     kotori_dom.setMarkDirtyCallback(&kotoriMarkDomDirty);
+    kotori_dom.setElementMatchesCallback(&kotoriElementMatches);
 
     // Defer JavaScript execution until after first paint for faster initial render.
     page.pending_js_init = true;
@@ -972,14 +1043,669 @@ fn navigateTo(
     return true;
 }
 
-// Test stubs (actual tests in tests/test_integration.zig, run via `zig build test`)
-fn testJs() noreturn {
-    std.debug.print("JS tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
-    std.process.exit(1);
+fn testJs() !void {
+    var js_rt = try JsRuntime.init();
+    defer js_rt.deinit();
+
+    const result = js_rt.eval("1 + 2");
+    defer result.deinit();
+    if (!result.isOk() or !std.mem.eql(u8, result.value(), "3")) return error.JsSmokeFailed;
+    const storage_key_result = js_rt.eval(
+        \\sessionStorage.clear();
+        \\sessionStorage.setItem("a", "1");
+        \\sessionStorage.key(4294967296) === "a" &&
+        \\sessionStorage.key(NaN) === "a" &&
+        \\sessionStorage.key(-1) === null ? "ok" : "bad";
+    );
+    defer storage_key_result.deinit();
+    if (!storage_key_result.isOk() or !std.mem.eql(u8, storage_key_result.value(), "ok")) return error.JsSmokeFailed;
+    std.debug.print("JS smoke PASS\n", .{});
 }
-fn testDomJs() noreturn {
-    std.debug.print("DOM JS tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
-    std.process.exit(1);
+fn testDomJs() !void {
+    const html =
+        \\<html><body>
+        \\<p id="out" class="one two one">before</p>
+        \\<script>
+        \\var out = document.getElementById("out");
+        \\var tokens = Array.prototype.join.call(out.classList, ",");
+        \\var iter = [...out.classList].join(",");
+        \\var keys = Array.from(out.classList.keys()).join(",");
+        \\var values = Array.from(out.classList.values()).join(",");
+        \\var entries = Array.from(out.classList.entries()).map(function(e){ return e[0] + "=" + e[1]; }).join(",");
+        \\var ctorThrows = false;
+        \\try { new DOMTokenList(); } catch (e) { ctorThrows = e instanceof TypeError; }
+        \\var classSame = out.classList === out.classList;
+        \\var classCacheHidden = Object.keys(out).indexOf("__classList") === -1;
+        \\var classIsTokenList = out.classList instanceof DOMTokenList && Object.prototype.toString.call(out.classList) === "[object DOMTokenList]";
+        \\var classContainsNoThrow = out.classList.contains("bad token") === false;
+        \\out.setAttribute("class", "one\ttwo one");
+        \\out.classList.add();
+        \\out.classList.remove();
+        \\var classNoArg = out.getAttribute("class") === "one two";
+        \\var bare = document.createElement("p");
+        \\bare.classList.add();
+        \\var classNoAttr = bare.getAttribute("class") === null;
+        \\var many = document.createElement("p");
+        \\var manyTokens = [], manyArgs = [];
+        \\for (var i = 0; i < 33; i++) { manyTokens.push("c" + i); manyArgs.push("c" + i); }
+        \\many.className = manyTokens.join(" ");
+        \\many.classList.remove.apply(many.classList, manyArgs);
+        \\var classRemoveMany = many.className === "";
+        \\var manyDup = document.createElement("p");
+        \\manyTokens = [];
+        \\for (var j = 0; j < 130; j++) manyTokens.push("d" + j);
+        \\manyTokens.push("d129");
+        \\manyDup.className = manyTokens.join(" ");
+        \\manyDup.classList.add();
+        \\var classDedupMany = manyDup.classList.length === 130 && manyDup.classList.item(129) === "d129" && manyDup.className.split("d129").length === 2;
+        \\globalThis.__classListItemIndexConverts =
+        \\  out.classList.item(4294967296) === "one" &&
+        \\  out.classList.item(NaN) === "one" &&
+        \\  out.classList.item(-1) === null;
+        \\var longClass = document.createElement("p");
+        \\document.body.appendChild(longClass);
+        \\var longToken = Array(5002).join("x");
+        \\globalThis.__longToken = longToken;
+        \\longClass.classList.add(longToken);
+        \\var classLongToken = longClass.className.length === longToken.length && longClass.classList.contains(longToken);
+        \\globalThis.__classLongOldValue = false;
+        \\var longOldValueRecords = [];
+        \\new MutationObserver(function(recs) {
+        \\  for (var r = 0; r < recs.length; r++) longOldValueRecords.push(recs[r].oldValue);
+        \\  globalThis.__classLongOldValue = longOldValueRecords[0] === globalThis.__longToken && longOldValueRecords[1] === globalThis.__longOldToken;
+        \\}).observe(longClass, { attributes: true, attributeOldValue: true });
+        \\longClass.className = Array(5002).join("y");
+        \\globalThis.__longOldToken = longClass.className;
+        \\longClass.classList.remove(globalThis.__longOldToken);
+        \\var longAttr = document.createElement("div");
+        \\document.body.appendChild(longAttr);
+        \\var longAttrName = "DATA-" + Array(1100).join("A");
+        \\var lowerLongAttrName = "data-" + Array(1100).join("a");
+        \\longAttr.setAttribute(longAttrName, "v");
+        \\globalThis.__attrLongName = longAttr.getAttribute(lowerLongAttrName) === "v" && longAttr.hasAttribute(lowerLongAttrName);
+        \\longAttr.toggleAttribute(longAttrName, false);
+        \\globalThis.__attrLongName = globalThis.__attrLongName && !longAttr.hasAttribute(lowerLongAttrName);
+        \\globalThis.__attrLongOldValue = false;
+        \\var longAttrValue = Array(5002).join("z");
+        \\var longAttrOldRecords = [];
+        \\longAttr.setAttribute("data-long-old", longAttrValue);
+        \\new MutationObserver(function(recs) {
+        \\  for (var ar = 0; ar < recs.length; ar++) longAttrOldRecords.push(recs[ar].oldValue);
+        \\  globalThis.__attrLongOldValue = longAttrOldRecords[0] === longAttrValue && longAttrOldRecords[2] === longAttrValue && longAttrOldRecords[4] === longAttrValue;
+        \\}).observe(longAttr, { attributes: true, attributeOldValue: true, attributeFilter: ["data-long-old"] });
+        \\longAttr.setAttribute("data-long-old", "new");
+        \\longAttr.setAttribute("data-long-old", longAttrValue);
+        \\longAttr.removeAttribute("data-long-old");
+        \\longAttr.setAttribute("data-long-old", longAttrValue);
+        \\longAttr.toggleAttribute("data-long-old", false);
+        \\globalThis.__nsAttrLongOldValue = false;
+        \\var nsAttrOldRecords = [];
+        \\longAttr.setAttributeNS("urn:test", "p:long", longAttrValue);
+        \\new MutationObserver(function(recs) {
+        \\  for (var nsr = 0; nsr < recs.length; nsr++) {
+        \\    if (recs[nsr].attributeNamespace === "urn:test" && recs[nsr].attributeName === "long") nsAttrOldRecords.push(recs[nsr].oldValue);
+        \\  }
+        \\  globalThis.__nsAttrLongOldValue = nsAttrOldRecords[0] === longAttrValue && nsAttrOldRecords[2] === longAttrValue;
+        \\}).observe(longAttr, { attributes: true, attributeOldValue: true });
+        \\longAttr.setAttributeNS("urn:test", "q:long", "new");
+        \\longAttr.setAttributeNS("urn:test", "p:long", longAttrValue);
+        \\longAttr.removeAttributeNS("urn:test", "long");
+        \\globalThis.__textLongOldValue = false;
+        \\var longTextValue = Array(5002).join("t");
+        \\var textNode = document.createTextNode(longTextValue);
+        \\document.body.appendChild(textNode);
+        \\var textOldRecords = [];
+        \\new MutationObserver(function(recs) {
+        \\  for (var tr = 0; tr < recs.length; tr++) textOldRecords.push(recs[tr].oldValue);
+        \\  globalThis.__textLongOldValue = textOldRecords[0] === longTextValue && textOldRecords[2] === longTextValue;
+        \\}).observe(textNode, { characterData: true, characterDataOldValue: true });
+        \\textNode.data = "new";
+        \\textNode.data = longTextValue;
+        \\textNode.textContent = "newer";
+        \\globalThis.__normalizeLongOldValue = false;
+        \\var normalizeHost = document.createElement("div");
+        \\var normalizeHugeTextValue = Array(17002).join("n");
+        \\var normalizeLongText = document.createTextNode(normalizeHugeTextValue);
+        \\normalizeHost.appendChild(normalizeLongText);
+        \\normalizeHost.appendChild(document.createTextNode("tail"));
+        \\document.body.appendChild(normalizeHost);
+        \\var normalizeOldRecords = [];
+        \\new MutationObserver(function(recs) {
+        \\  for (var nr = 0; nr < recs.length; nr++) normalizeOldRecords.push(recs[nr].oldValue);
+        \\  globalThis.__normalizeLongOldValue =
+        \\    normalizeOldRecords[0] === normalizeHugeTextValue &&
+        \\    normalizeLongText.data === normalizeHugeTextValue + "tail";
+        \\}).observe(normalizeLongText, { characterData: true, characterDataOldValue: true });
+        \\normalizeHost.normalize();
+        \\globalThis.__liveChildNodesItemIndexConverts =
+        \\  normalizeHost.childNodes.item(4294967296) === normalizeHost.childNodes.item(0) &&
+        \\  normalizeHost.childNodes.item(NaN) === normalizeHost.childNodes.item(0);
+        \\globalThis.__documentChildNodesItemIndexConverts =
+        \\  document.childNodes.length > 0 &&
+        \\  typeof document.childNodes.item === "function" &&
+        \\  document.childNodes.item(4294967296) === document.childNodes.item(0) &&
+        \\  document.childNodes.item(NaN) === document.childNodes.item(0);
+        \\globalThis.__documentChildrenItemIndexConverts =
+        \\  document.children.length > 0 &&
+        \\  typeof document.children.item === "function" &&
+        \\  document.children.item(4294967296) === document.children.item(0) &&
+        \\  document.children.item(NaN) === document.children.item(0);
+        \\var standaloneDoc = new Document();
+        \\var standaloneDocEl = document.createElement("standalone-doc-item");
+        \\standaloneDoc.appendChild(standaloneDocEl);
+        \\globalThis.__newDocumentItemIndexConverts =
+        \\  standaloneDoc.childNodes.item(4294967296) === standaloneDocEl &&
+        \\  standaloneDoc.childNodes.item(NaN) === standaloneDocEl &&
+        \\  standaloneDoc.children.item(4294967296) === standaloneDocEl &&
+        \\  standaloneDoc.children.item(NaN) === standaloneDocEl;
+        \\var jsOnlyTextHost = document.createElement("div");
+        \\var jsOnlyTextValue = Array(33002).join("j");
+        \\jsOnlyTextHost.appendChild({ nodeType: 3, data: jsOnlyTextValue, parentNode: null });
+        \\jsOnlyTextHost.appendChild(document.createTextNode("tail"));
+        \\globalThis.__jsOnlyTextContentLong = jsOnlyTextHost.textContent === jsOnlyTextValue + "tail";
+        \\var longTitle = Array(5002).join("q");
+        \\document.title = " \n" + longTitle + "\t tail ";
+        \\globalThis.__titleLong = document.title === longTitle + " tail";
+        \\var longSelectorValue = Array(1502).join("M") + "tail";
+        \\var longSelectorExpected = Array(1502).join("m") + "TAIL";
+        \\var longSelectorEscapedExpected = Array(1502).join("m") + "\\54 AIL";
+        \\var selectorHost = document.createElement("div");
+        \\selectorHost.setAttribute("data-long-selector", longSelectorValue);
+        \\document.body.appendChild(selectorHost);
+        \\globalThis.__selectorLongCI =
+        \\  document.querySelector('[data-long-selector="' + longSelectorExpected + '" i]') === selectorHost &&
+        \\  document.querySelector('[data-long-selector$="TAIL" i]') === selectorHost &&
+        \\  document.querySelector('[data-long-selector*="mTAIL" i]') === selectorHost &&
+        \\  document.querySelector('[data-long-selector="' + longSelectorEscapedExpected + '" i]') === selectorHost;
+        \\var longEscapedClassToken = "sel" + Array(1502).join("x") + "tail";
+        \\var longEscapedClassSelector = ".sel" + Array(1502).join("x") + "\\74 ail";
+        \\var classSelectorHost = document.createElement("p");
+        \\classSelectorHost.className = longEscapedClassToken;
+        \\document.body.appendChild(classSelectorHost);
+        \\var longEscapedIdValue = "id" + Array(1502).join("u") + "tail";
+        \\var longEscapedIdSelector = "#id" + Array(1502).join("u") + "\\74 ail";
+        \\var idSelectorHost = document.createElement("p");
+        \\idSelectorHost.id = longEscapedIdValue;
+        \\document.body.appendChild(idSelectorHost);
+        \\globalThis.__selectorLongEscapedSimple =
+        \\  document.querySelector(longEscapedClassSelector) === classSelectorHost &&
+        \\  document.querySelector(longEscapedIdSelector) === idSelectorHost;
+        \\var classCollectionHost = document.createElement("section");
+        \\var classCollectionChild = document.createElement("span");
+        \\classCollectionChild.className = longEscapedClassToken;
+        \\classCollectionHost.appendChild(classCollectionChild);
+        \\document.body.appendChild(classCollectionHost);
+        \\globalThis.__classNameLongCollection =
+        \\  document.getElementsByClassName(longEscapedClassToken).length >= 2 &&
+        \\  classCollectionHost.getElementsByClassName(longEscapedClassToken).item(0) === classCollectionChild;
+        \\globalThis.__liveHTMLCollectionItemIndexConverts =
+        \\  classCollectionHost.getElementsByClassName(longEscapedClassToken).item(4294967296) === classCollectionChild &&
+        \\  classCollectionHost.getElementsByClassName(longEscapedClassToken).item(NaN) === classCollectionChild;
+        \\var longUpperAttrName = "DATA-" + Array(1502).join("A");
+        \\var upperAttrSelectorHost = document.createElement("div");
+        \\upperAttrSelectorHost.setAttribute(longUpperAttrName, "VALUE");
+        \\document.body.appendChild(upperAttrSelectorHost);
+        \\globalThis.__selectorLongAttrName =
+        \\  document.querySelector("[" + longUpperAttrName + "]") === upperAttrSelectorHost &&
+        \\  document.querySelector("[" + longUpperAttrName + "='VALUE']") === upperAttrSelectorHost;
+        \\globalThis.__namedNodeMapItemIndexConverts =
+        \\  upperAttrSelectorHost.attributes.item(4294967296) === upperAttrSelectorHost.attributes.item(0) &&
+        \\  upperAttrSelectorHost.attributes.item(NaN) === upperAttrSelectorHost.attributes.item(0);
+        \\var longNameValue = "n" + Array(1502).join("a") + "'tail";
+        \\var longNameHost = document.createElement("input");
+        \\longNameHost.setAttribute("name", longNameValue);
+        \\document.body.appendChild(longNameHost);
+        \\globalThis.__getElementsByNameLong =
+        \\  document.getElementsByName(longNameValue).length === 1 &&
+        \\  document.getElementsByName(longNameValue).item(0) === longNameHost &&
+        \\  document.getElementsByName(longNameValue + "x").length === 0;
+        \\globalThis.__liveNodeListItemIndexConverts =
+        \\  document.getElementsByName(longNameValue).item(4294967296) === longNameHost &&
+        \\  document.getElementsByName(longNameValue).item(NaN) === longNameHost;
+        \\var longStyleHost = document.createElement("div");
+        \\var longStyleValue = Array(5002).join("s");
+        \\longStyleHost.style.setProperty("--long-style-value", longStyleValue);
+        \\var removedLongStyle = longStyleHost.style.removeProperty("--long-style-value");
+        \\globalThis.__styleLongSetProperty =
+        \\  removedLongStyle === longStyleValue &&
+        \\  longStyleHost.style.getPropertyValue("--long-style-value") === "" &&
+        \\  longStyleHost.getAttribute("style").indexOf(longStyleValue) === -1;
+        \\var invalidPriorityEmptyHost = document.createElement("div");
+        \\invalidPriorityEmptyHost.style.setProperty("color", "red");
+        \\invalidPriorityEmptyHost.style.setProperty("color", "", "definitely-not-important");
+        \\invalidPriorityEmptyHost.style.setProperty("color", "blue", 0);
+        \\invalidPriorityEmptyHost.style.setProperty("background-color", "red");
+        \\invalidPriorityEmptyHost.style.setProperty("background-color");
+        \\invalidPriorityEmptyHost.style.setProperty("--Inline-Mixed", "kept");
+        \\invalidPriorityEmptyHost.style.setProperty("--Priority-Mixed", "kept", "important");
+        \\var inlineMixedRemove = invalidPriorityEmptyHost.style.removeProperty("--inline-mixed");
+        \\var emptyCustomInlineHost = document.createElement("div");
+        \\emptyCustomInlineHost.style.cssText = "color: ; --Inline-Empty: ; background-color: red";
+        \\var emptyCustomInlineItem = "";
+        \\var emptyNormalInlineItem = "";
+        \\for (var ec = 0; ec < emptyCustomInlineHost.style.length; ec++) {
+        \\  if (emptyCustomInlineHost.style.item(ec) === "--Inline-Empty") emptyCustomInlineItem = "--Inline-Empty";
+        \\  if (emptyCustomInlineHost.style.item(ec) === "color") emptyNormalInlineItem = "color";
+        \\}
+        \\globalThis.__styleEmptySetInvalidPriority =
+        \\  invalidPriorityEmptyHost.style.getPropertyValue("color") === "" &&
+        \\  invalidPriorityEmptyHost.style.getPropertyValue("background-color") === "" &&
+        \\  invalidPriorityEmptyHost.style.getPropertyValue("--Inline-Mixed") === "kept" &&
+        \\  invalidPriorityEmptyHost.style.getPropertyValue("--inline-mixed") === "" &&
+        \\  invalidPriorityEmptyHost.style.getPropertyPriority("--Priority-Mixed") === "important" &&
+        \\  invalidPriorityEmptyHost.style.getPropertyPriority("--priority-mixed") === "" &&
+        \\  inlineMixedRemove === "" &&
+        \\  emptyCustomInlineItem === "--Inline-Empty" &&
+        \\  emptyNormalInlineItem === "" &&
+        \\  emptyCustomInlineHost.style.getPropertyValue("background-color") === "red";
+        \\var ruleStyleHost = document.createElement("style");
+        \\ruleStyleHost.textContent = "p { color: red; --Parsed-Mixed: kept; --Parsed-Empty: ; --Parsed-String: \"a;b\"; --Parsed-Brace: \"}\"; --Parsed-After-Brace: after; }";
+        \\document.body.appendChild(ruleStyleHost);
+        \\globalThis.__styleSheetListItemIndexConverts =
+        \\  document.styleSheets.item(4294967296) === document.styleSheets.item(0) &&
+        \\  document.styleSheets.item(NaN) === document.styleSheets.item(0);
+        \\var attrBraceSheet = new CSSStyleSheet();
+        \\attrBraceSheet.replaceSync("a[data-x=\"{\"] { --Attr-Brace: ok; }");
+        \\globalThis.__cssRuleOpenBraceInString =
+        \\  attrBraceSheet.cssRules.length === 1 &&
+        \\  attrBraceSheet.cssRules[0].selectorText === "a[data-x=\"{\"]" &&
+        \\  attrBraceSheet.cssRules[0].style.getPropertyValue("--Attr-Brace") === "ok";
+        \\var insertBraceSheet = new CSSStyleSheet();
+        \\var insertBraceIndex = insertBraceSheet.insertRule("a[data-y=\"{\"] { --Insert-Brace: ok; }", 0);
+        \\globalThis.__cssInsertRuleOpenBraceInString =
+        \\  insertBraceIndex === 0 &&
+        \\  insertBraceSheet.cssRules.length === 1 &&
+        \\  insertBraceSheet.cssRules[0].selectorText === "a[data-y=\"{\"]" &&
+        \\  insertBraceSheet.cssRules[0].style.getPropertyValue("--Insert-Brace") === "ok";
+        \\var insertTrailingCommentSheet = new CSSStyleSheet();
+        \\insertTrailingCommentSheet.insertRule("p { --Insert-Trailing-Comment: ok; } /* } */", 0);
+        \\globalThis.__cssInsertRuleTrailingCommentBrace =
+        \\  insertTrailingCommentSheet.cssRules.length === 1 &&
+        \\  insertTrailingCommentSheet.cssRules[0].style.getPropertyValue("--Insert-Trailing-Comment") === "ok" &&
+        \\  insertTrailingCommentSheet.cssRules[0].cssText === "p { --Insert-Trailing-Comment: ok; }";
+        \\var insertRuleTrailingRuleThrows = false;
+        \\try { new CSSStyleSheet().insertRule("p { color: red; } a { color: blue; }", 0); } catch (e) { insertRuleTrailingRuleThrows = e.name === "SyntaxError"; }
+        \\globalThis.__cssInsertRuleTrailingRuleThrows = insertRuleTrailingRuleThrows;
+        \\var insertRuleMissingCloseThrows = false;
+        \\try { new CSSStyleSheet().insertRule("p { color: red", 0); } catch (e) { insertRuleMissingCloseThrows = e.name === "SyntaxError"; }
+        \\globalThis.__cssInsertRuleMissingCloseThrows = insertRuleMissingCloseThrows;
+        \\var insertRuleStringIndexSheet = new CSSStyleSheet();
+        \\insertRuleStringIndexSheet.insertRule("p { --Insert-String-Index-Old: old; }", 0);
+        \\var insertRuleStringIndex = insertRuleStringIndexSheet.insertRule("a { --Insert-String-Index: ok; }", "0");
+        \\globalThis.__cssInsertRuleStringIndexConverts =
+        \\  insertRuleStringIndex === 0 &&
+        \\  insertRuleStringIndexSheet.cssRules[0].selectorText === "a";
+        \\var groupingBraceSheet = new CSSStyleSheet();
+        \\groupingBraceSheet.replaceSync("@media screen { }");
+        \\var groupingInsertIndex = groupingBraceSheet.cssRules[0].insertRule("a[data-z=\"{\"] { --Grouping-Insert-Brace: ok; }", 0);
+        \\globalThis.__cssGroupingInsertRuleOpenBraceInString =
+        \\  groupingInsertIndex === 0 &&
+        \\  groupingBraceSheet.cssRules[0].cssRules.length === 1 &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[0].selectorText === "a[data-z=\"{\"]" &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[0].style.getPropertyValue("--Grouping-Insert-Brace") === "ok";
+        \\var groupingTrailingIndex = groupingBraceSheet.cssRules[0].insertRule("p { --Grouping-Trailing-Comment: ok; } /* } */", 1);
+        \\globalThis.__cssGroupingInsertRuleTrailingCommentBrace =
+        \\  groupingTrailingIndex === 1 &&
+        \\  groupingBraceSheet.cssRules[0].cssRules.length === 2 &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[1].style.getPropertyValue("--Grouping-Trailing-Comment") === "ok" &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[1].cssText === "p { --Grouping-Trailing-Comment: ok; }";
+        \\var groupingSyncHost = document.createElement("style");
+        \\groupingSyncHost.textContent = "@media screen { }";
+        \\document.body.appendChild(groupingSyncHost);
+        \\groupingSyncHost.sheet.cssRules[0].insertRule("p { --Grouping-Sync: ok; }", 0);
+        \\globalThis.__cssGroupingInsertRuleSyncsOwner =
+        \\  groupingSyncHost.textContent.indexOf("--Grouping-Sync: ok") !== -1;
+        \\groupingSyncHost.sheet.cssRules[0].deleteRule(0);
+        \\globalThis.__cssGroupingDeleteRuleSyncsOwner =
+        \\  groupingSyncHost.textContent.indexOf("--Grouping-Sync: ok") === -1;
+        \\var groupingNestedAtIndex = groupingBraceSheet.cssRules[0].insertRule("@supports (display: block) { p { --Grouping-Nested-At: ok; } }", 2);
+        \\globalThis.__cssGroupingInsertNestedAtRule =
+        \\  groupingNestedAtIndex === 2 &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[2].type === CSSRule.SUPPORTS_RULE &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[2].cssRules.length === 1 &&
+        \\  groupingBraceSheet.cssRules[0].cssRules[2].cssRules[0].style.getPropertyValue("--Grouping-Nested-At") === "ok";
+        \\var groupingInvalidSelectorThrows = false;
+        \\try { groupingBraceSheet.cssRules[0].insertRule("> { color: red; }", 0); } catch (e) { groupingInvalidSelectorThrows = e.name === "SyntaxError"; }
+        \\globalThis.__cssGroupingInsertInvalidSelectorThrows = groupingInvalidSelectorThrows;
+        \\var groupingInsertTrailingRuleThrows = false;
+        \\try { groupingBraceSheet.cssRules[0].insertRule("p { color: red; } a { color: blue; }", 0); } catch (e) { groupingInsertTrailingRuleThrows = e.name === "SyntaxError"; }
+        \\globalThis.__cssGroupingInsertTrailingRuleThrows = groupingInsertTrailingRuleThrows;
+        \\var groupingInsertMissingCloseThrows = false;
+        \\try { groupingBraceSheet.cssRules[0].insertRule("p { color: red", 0); } catch (e) { groupingInsertMissingCloseThrows = e.name === "SyntaxError"; }
+        \\globalThis.__cssGroupingInsertMissingCloseThrows = groupingInsertMissingCloseThrows;
+        \\var groupingDefaultIndexSheet = new CSSStyleSheet();
+        \\groupingDefaultIndexSheet.replaceSync("@media screen { p { --Existing-Default-Index: old; } }");
+        \\var groupingDefaultIndex = groupingDefaultIndexSheet.cssRules[0].insertRule("p { --Grouping-Default-Index: ok; }");
+        \\globalThis.__cssGroupingInsertDefaultIndex =
+        \\  groupingDefaultIndex === 0 &&
+        \\  groupingDefaultIndexSheet.cssRules[0].cssRules[0].style.getPropertyValue("--Grouping-Default-Index") === "ok" &&
+        \\  groupingDefaultIndexSheet.cssRules[0].cssRules[1].style.getPropertyValue("--Existing-Default-Index") === "old";
+        \\var groupingStringIndex = groupingDefaultIndexSheet.cssRules[0].insertRule("a { --Grouping-String-Index: ok; }", "0");
+        \\globalThis.__cssGroupingInsertRuleStringIndexConverts =
+        \\  groupingStringIndex === 0 &&
+        \\  groupingDefaultIndexSheet.cssRules[0].cssRules[0].selectorText === "a";
+        \\globalThis.__cssGroupingInsertedRuleParentRule =
+        \\  groupingDefaultIndexSheet.cssRules[0].cssRules[0].parentRule === groupingDefaultIndexSheet.cssRules[0];
+        \\var parsedParentRuleSheet = new CSSStyleSheet();
+        \\parsedParentRuleSheet.replaceSync("@media screen { p { --Parsed-Parent-Rule: ok; } }");
+        \\globalThis.__cssParsedRuleParentRule =
+        \\  parsedParentRuleSheet.cssRules[0].parentRule === null &&
+        \\  parsedParentRuleSheet.cssRules[0].cssRules[0].parentRule === parsedParentRuleSheet.cssRules[0];
+        \\globalThis.__cssMediaListItemIndexConverts =
+        \\  parsedParentRuleSheet.cssRules[0].media.item(4294967296) === "screen" &&
+        \\  parsedParentRuleSheet.cssRules[0].media.item(NaN) === "screen";
+        \\var deletedGroupingRule = groupingDefaultIndexSheet.cssRules[0].cssRules[0];
+        \\groupingDefaultIndexSheet.cssRules[0].deleteRule(0);
+        \\globalThis.__cssGroupingDeletedRuleParentRefs =
+        \\  deletedGroupingRule.parentRule === null &&
+        \\  deletedGroupingRule.parentStyleSheet === null;
+        \\var deletedSheetRuleSheet = new CSSStyleSheet();
+        \\deletedSheetRuleSheet.replaceSync("p { --Deleted-Sheet-Rule: ok; }");
+        \\var deletedSheetRule = deletedSheetRuleSheet.cssRules[0];
+        \\deletedSheetRuleSheet.deleteRule(0);
+        \\globalThis.__cssDeletedSheetRuleParentRefs =
+        \\  deletedSheetRule.parentRule === null &&
+        \\  deletedSheetRule.parentStyleSheet === null;
+        \\var replacedRuleSheet = new CSSStyleSheet();
+        \\replacedRuleSheet.replaceSync("@media screen { p { --Replace-Old-Rule: old; } }");
+        \\var replacedTopRule = replacedRuleSheet.cssRules[0];
+        \\var replacedChildRule = replacedTopRule.cssRules[0];
+        \\replacedRuleSheet.replaceSync("a { --Replace-New-Rule: new; }");
+        \\globalThis.__cssReplaceClearsOldRuleParentRefs =
+        \\  replacedTopRule.parentRule === null &&
+        \\  replacedTopRule.parentStyleSheet === null &&
+        \\  replacedChildRule.parentRule === null &&
+        \\  replacedChildRule.parentStyleSheet === null;
+        \\var styleTextReplaceHost = document.createElement("style");
+        \\styleTextReplaceHost.textContent = "@media screen { p { --Style-Text-Old-Rule: old; } }";
+        \\document.body.appendChild(styleTextReplaceHost);
+        \\var styleTextOldTopRule = styleTextReplaceHost.sheet.cssRules[0];
+        \\var styleTextOldChildRule = styleTextOldTopRule.cssRules[0];
+        \\styleTextReplaceHost.textContent = "a { --Style-Text-New-Rule: new; }";
+        \\void styleTextReplaceHost.sheet.cssRules.length;
+        \\globalThis.__cssStyleTextReplaceClearsOldRuleParentRefs =
+        \\  styleTextOldTopRule.parentRule === null &&
+        \\  styleTextOldTopRule.parentStyleSheet === null &&
+        \\  styleTextOldChildRule.parentRule === null &&
+        \\  styleTextOldChildRule.parentStyleSheet === null;
+        \\var selectorTextSyncHost = document.createElement("style");
+        \\selectorTextSyncHost.textContent = "p { --Selector-Text-Sync: ok; }";
+        \\document.body.appendChild(selectorTextSyncHost);
+        \\selectorTextSyncHost.sheet.cssRules[0].selectorText = "a";
+        \\globalThis.__cssSelectorTextSyncsOwner =
+        \\  selectorTextSyncHost.textContent.indexOf("a { --Selector-Text-Sync: ok; }") !== -1;
+        \\var selectorTextObjectNoThrow = true;
+        \\try { selectorTextSyncHost.sheet.cssRules[0].selectorText = { toString: function(){ return "span"; } }; } catch (e) { selectorTextObjectNoThrow = false; }
+        \\globalThis.__cssSelectorTextObjectStringifies =
+        \\  selectorTextObjectNoThrow &&
+        \\  selectorTextSyncHost.sheet.cssRules[0].selectorText === "span";
+        \\var ruleStyleCssTextObjectHost = document.createElement("style");
+        \\ruleStyleCssTextObjectHost.textContent = "p { color: red; }";
+        \\document.body.appendChild(ruleStyleCssTextObjectHost);
+        \\ruleStyleCssTextObjectHost.sheet.cssRules[0].style.cssText = { toString: function(){ return "--Rule-CssText-Object: ok;"; } };
+        \\globalThis.__cssRuleStyleCssTextObjectStringifies =
+        \\  ruleStyleCssTextObjectHost.sheet.cssRules[0].style.getPropertyValue("--Rule-CssText-Object") === "ok" &&
+        \\  ruleStyleCssTextObjectHost.textContent.indexOf("--Rule-CssText-Object: ok") !== -1;
+        \\var deletedNestedGroupingRuleSheet = new CSSStyleSheet();
+        \\deletedNestedGroupingRuleSheet.replaceSync("@media screen { @supports (display: block) { p { --Deleted-Nested-Grouping-Rule: ok; } } }");
+        \\var deletedNestedGroupingRule = deletedNestedGroupingRuleSheet.cssRules[0].cssRules[0];
+        \\var deletedNestedGroupingChildRule = deletedNestedGroupingRule.cssRules[0];
+        \\deletedNestedGroupingRuleSheet.cssRules[0].deleteRule(0);
+        \\globalThis.__cssGroupingDeletedNestedRuleParentRefs =
+        \\  deletedNestedGroupingRule.parentRule === null &&
+        \\  deletedNestedGroupingRule.parentStyleSheet === null &&
+        \\  deletedNestedGroupingChildRule.parentRule === null &&
+        \\  deletedNestedGroupingChildRule.parentStyleSheet === null;
+        \\var deletedNestedSheetRuleSheet = new CSSStyleSheet();
+        \\deletedNestedSheetRuleSheet.replaceSync("@media screen { p { --Deleted-Nested-Sheet-Rule: ok; } }");
+        \\var deletedNestedSheetRule = deletedNestedSheetRuleSheet.cssRules[0];
+        \\var deletedNestedSheetChildRule = deletedNestedSheetRule.cssRules[0];
+        \\deletedNestedSheetRuleSheet.deleteRule(0);
+        \\globalThis.__cssDeletedNestedSheetRuleParentRefs =
+        \\  deletedNestedSheetRule.parentRule === null &&
+        \\  deletedNestedSheetRule.parentStyleSheet === null &&
+        \\  deletedNestedSheetChildRule.parentRule === null &&
+        \\  deletedNestedSheetChildRule.parentStyleSheet === null;
+        \\var deleteRuleWrapIndexSheet = new CSSStyleSheet();
+        \\deleteRuleWrapIndexSheet.replaceSync("p { --Delete-Wrap-Index: ok; }");
+        \\var deleteRuleWrapIndexConverts = false;
+        \\try { deleteRuleWrapIndexSheet.deleteRule(4294967296); deleteRuleWrapIndexConverts = deleteRuleWrapIndexSheet.cssRules.length === 0; } catch (e) {}
+        \\globalThis.__cssDeleteRuleWrapIndexConverts = deleteRuleWrapIndexConverts;
+        \\var groupingDeleteRuleWrapIndexSheet = new CSSStyleSheet();
+        \\groupingDeleteRuleWrapIndexSheet.replaceSync("@media screen { p { --Grouping-Delete-Wrap-Index: ok; } }");
+        \\var groupingDeleteRuleWrapIndexConverts = false;
+        \\try { groupingDeleteRuleWrapIndexSheet.cssRules[0].deleteRule(4294967296); groupingDeleteRuleWrapIndexConverts = groupingDeleteRuleWrapIndexSheet.cssRules[0].cssRules.length === 0; } catch (e) {}
+        \\globalThis.__cssGroupingDeleteRuleWrapIndexConverts = groupingDeleteRuleWrapIndexConverts;
+        \\var deleteDefaultIndexEmptyThrows = false;
+        \\try { new CSSStyleSheet().deleteRule(); } catch (e) { deleteDefaultIndexEmptyThrows = e.name === "IndexSizeError"; }
+        \\globalThis.__cssDeleteRuleDefaultIndexEmptyThrows = deleteDefaultIndexEmptyThrows;
+        \\var groupingDeleteDefaultIndexEmptyThrows = false;
+        \\try { groupingDefaultIndexSheet.cssRules[0].deleteRule(); groupingDefaultIndexSheet.cssRules[0].deleteRule(); groupingDefaultIndexSheet.cssRules[0].deleteRule(); } catch (e) { groupingDeleteDefaultIndexEmptyThrows = e.name === "IndexSizeError"; }
+        \\globalThis.__cssGroupingDeleteRuleDefaultIndexEmptyThrows = groupingDeleteDefaultIndexEmptyThrows;
+        \\var supportsSemiSheet = new CSSStyleSheet();
+        \\supportsSemiSheet.replaceSync("@supports (content: \"a;b\") { p { --Supports-Semi: ok; } }");
+        \\globalThis.__cssAtRuleHeaderSemiInString =
+        \\  supportsSemiSheet.cssRules.length === 1 &&
+        \\  supportsSemiSheet.cssRules[0].cssRules.length === 1 &&
+        \\  supportsSemiSheet.cssRules[0].cssRules[0].style.getPropertyValue("--Supports-Semi") === "ok";
+        \\var commentAtRuleSheet = new CSSStyleSheet();
+        \\commentAtRuleSheet.replaceSync("/* lead */ @media screen { p { --Comment-At-Rule: ok; } }");
+        \\globalThis.__cssLeadingCommentAtRule =
+        \\  commentAtRuleSheet.cssRules.length === 1 &&
+        \\  commentAtRuleSheet.cssRules[0].type === CSSRule.MEDIA_RULE &&
+        \\  commentAtRuleSheet.cssRules[0].cssRules.length === 1 &&
+        \\  commentAtRuleSheet.cssRules[0].cssRules[0].style.getPropertyValue("--Comment-At-Rule") === "ok";
+        \\var declCommentSemiSheet = new CSSStyleSheet();
+        \\declCommentSemiSheet.replaceSync("p { /* ; */ --Decl-Comment-Semi: ok; --Decl-Value-Comment-Semi: before /* ; */ after; color /* name */: green; background-color /* : */: blue; }");
+        \\globalThis.__cssDeclCommentSemiIgnored =
+        \\  declCommentSemiSheet.cssRules.length === 1 &&
+        \\  declCommentSemiSheet.cssRules[0].style.getPropertyValue("--Decl-Comment-Semi") === "ok" &&
+        \\  declCommentSemiSheet.cssRules[0].style.getPropertyValue("--Decl-Value-Comment-Semi") === "before /* ; */ after" &&
+        \\  declCommentSemiSheet.cssRules[0].style.getPropertyValue("color") === "green" &&
+        \\  declCommentSemiSheet.cssRules[0].style.getPropertyValue("background-color") === "blue";
+        \\var commentBraceSheet = new CSSStyleSheet();
+        \\commentBraceSheet.replaceSync("/* { */ p { --Comment-Brace: ok; /* } */ }");
+        \\globalThis.__cssCommentBraceIgnored =
+        \\  commentBraceSheet.cssRules.length === 1 &&
+        \\  commentBraceSheet.cssRules[0].selectorText === "p" &&
+        \\  commentBraceSheet.cssRules[0].style.getPropertyValue("--Comment-Brace") === "ok";
+        \\var ruleStyle = document.styleSheets[0].cssRules[0].style;
+        \\var emptyCustomRuleItem = "";
+        \\for (var rc = 0; rc < ruleStyle.length; rc++) {
+        \\  if (ruleStyle.item(rc) === "--Parsed-Empty") emptyCustomRuleItem = "--Parsed-Empty";
+        \\}
+        \\globalThis.__cssRuleStyleItemIndexConverts =
+        \\  ruleStyle.item(4294967296) === ruleStyle.item(0) &&
+        \\  ruleStyle.item(NaN) === ruleStyle.item(0);
+        \\ruleStyle.setProperty("color", "", "definitely-not-important");
+        \\ruleStyle.setProperty("color", "blue", 0);
+        \\var ruleObjectName = { toString: function(){ return "--rule-object-name"; } };
+        \\ruleStyle.setProperty(ruleObjectName, "ok");
+        \\ruleStyle.setProperty("--Mixed-Case", "kept");
+        \\ruleStyle.setProperty("background-color", "red");
+        \\ruleStyle.setProperty("background-color");
+        \\globalThis.__ruleStyleEmptySetInvalidPriority =
+        \\  ruleStyle.getPropertyValue("color") === "" &&
+        \\  ruleStyle.getPropertyValue("--Parsed-Mixed") === "kept" &&
+        \\  ruleStyle.getPropertyValue("--parsed-mixed") === "" &&
+        \\  ruleStyle.getPropertyValue("--Parsed-String") === "\"a;b\"" &&
+        \\  ruleStyle.getPropertyValue("--Parsed-Brace") === "\"}\"" &&
+        \\  ruleStyle.getPropertyValue("--Parsed-After-Brace") === "after" &&
+        \\  emptyCustomRuleItem === "--Parsed-Empty" &&
+        \\  ruleStyle.getPropertyValue("--rule-object-name") === "ok" &&
+        \\  ruleStyle.getPropertyValue("--Mixed-Case") === "kept" &&
+        \\  ruleStyle.getPropertyValue("--mixed-case") === "" &&
+        \\  ruleStyle.getPropertyValue("background-color") === "";
+        \\var longBoxHost = document.createElement("div");
+        \\var longBoxA = "var(--" + Array(302).join("a") + ")";
+        \\var longBoxB = "var(--" + Array(302).join("b") + ")";
+        \\longBoxHost.style.setProperty("margin-top", longBoxA);
+        \\longBoxHost.style.setProperty("margin-right", longBoxB);
+        \\longBoxHost.style.setProperty("margin-bottom", longBoxA);
+        \\longBoxHost.style.setProperty("margin-left", longBoxB);
+        \\var longBoxTop = longBoxHost.style.getPropertyValue("margin-top");
+        \\var longBoxRight = longBoxHost.style.getPropertyValue("margin-right");
+        \\var longBoxMargin = longBoxHost.style.getPropertyValue("margin");
+        \\var longBoxShorthandHost = document.createElement("div");
+        \\var longBoxHugeA = "var(--" + Array(5002).join("m") + ")";
+        \\var longBoxHugeB = "var(--" + Array(5002).join("n") + ")";
+        \\longBoxShorthandHost.style.setProperty("margin", longBoxHugeA + " " + longBoxHugeB);
+        \\var longBoxHugeMargin = longBoxShorthandHost.style.getPropertyValue("margin");
+        \\var longBoxRemoveHost = document.createElement("div");
+        \\var longBoxKeep = Array(5002).join("k");
+        \\longBoxRemoveHost.style.setProperty("--keep-long", longBoxKeep);
+        \\longBoxRemoveHost.style.setProperty("margin-top", longBoxHugeA);
+        \\longBoxRemoveHost.style.setProperty("margin-right", longBoxHugeB);
+        \\longBoxRemoveHost.style.setProperty("margin-bottom", longBoxHugeA);
+        \\longBoxRemoveHost.style.setProperty("margin-left", longBoxHugeB);
+        \\var removedLongBoxMargin = longBoxRemoveHost.style.removeProperty("margin");
+        \\globalThis.__styleLongShorthandGet =
+        \\  longBoxTop.length > 256 &&
+        \\  longBoxRight.length > 256 &&
+        \\  longBoxMargin === longBoxTop + " " + longBoxRight &&
+        \\  longBoxHost.style.removeProperty("margin") === longBoxMargin &&
+        \\  longBoxShorthandHost.style.getPropertyValue("margin-top") === longBoxHugeA &&
+        \\  longBoxShorthandHost.style.getPropertyValue("margin-right") === longBoxHugeB &&
+        \\  longBoxShorthandHost.style.getPropertyValue("margin-bottom") === longBoxHugeA &&
+        \\  longBoxShorthandHost.style.getPropertyValue("margin-left") === longBoxHugeB &&
+        \\  longBoxHugeMargin === longBoxHugeA + " " + longBoxHugeB &&
+        \\  removedLongBoxMargin === longBoxHugeMargin &&
+        \\  longBoxRemoveHost.style.getPropertyValue("--keep-long") === longBoxKeep &&
+        \\  longBoxRemoveHost.style.getPropertyValue("margin-top") === "" &&
+        \\  longBoxRemoveHost.style.getPropertyValue("margin-right") === "";
+        \\var longFlexHost = document.createElement("div");
+        \\var longFlexBasis = "var(--" + Array(302).join("f") + ")";
+        \\longFlexHost.style.setProperty("flex-grow", "1");
+        \\longFlexHost.style.setProperty("flex-shrink", "0");
+        \\longFlexHost.style.setProperty("flex-basis", longFlexBasis);
+        \\var longFlexValue = longFlexHost.style.getPropertyValue("flex");
+        \\var computedLongFlexValue = getComputedStyle(longFlexHost).getPropertyValue("flex");
+        \\var longFlexRemoveHost = document.createElement("div");
+        \\longFlexRemoveHost.style.setProperty("flex-grow", "1");
+        \\longFlexRemoveHost.style.setProperty("flex-shrink", "0");
+        \\longFlexRemoveHost.style.setProperty("flex-basis", longFlexBasis);
+        \\var removedLongFlexValue = longFlexRemoveHost.style.removeProperty("flex");
+        \\var flexFlowRemoveHost = document.createElement("div");
+        \\flexFlowRemoveHost.style.setProperty("flex-direction", "column");
+        \\flexFlowRemoveHost.style.setProperty("flex-wrap", "wrap");
+        \\var removedFlexFlowValue = flexFlowRemoveHost.style.removeProperty("flex-flow");
+        \\var longFlexFlowHost = document.createElement("div");
+        \\var longFlexDirection = "var(--" + Array(302).join("d") + ")";
+        \\longFlexFlowHost.style.setProperty("flex-direction", longFlexDirection);
+        \\longFlexFlowHost.style.setProperty("flex-wrap", "wrap");
+        \\var longFlexFlowValue = longFlexFlowHost.style.getPropertyValue("flex-flow");
+        \\var longFlexShorthandHost = document.createElement("div");
+        \\var longFlexHugeBasis = Array(5002).join("1") + "px";
+        \\longFlexShorthandHost.style.setProperty("flex", "1 0 " + longFlexHugeBasis);
+        \\var longFlexShorthandValue = longFlexShorthandHost.style.getPropertyValue("flex");
+        \\var flexSetHost = document.createElement("div");
+        \\flexSetHost.style.setProperty("--keep-flex", longBoxKeep);
+        \\flexSetHost.style.setProperty("flex", "2 0 10px");
+        \\var flexSetValue = flexSetHost.style.getPropertyValue("flex");
+        \\var flexFlowSetHost = document.createElement("div");
+        \\flexFlowSetHost.style.setProperty("--keep-flow", longBoxKeep);
+        \\flexFlowSetHost.style.setProperty("flex-flow", "column wrap");
+        \\var flexFlowSetValue = flexFlowSetHost.style.getPropertyValue("flex-flow");
+        \\globalThis.__styleLongFlexGet =
+        \\  longFlexHost.style.getPropertyValue("flex-basis").length > 256 &&
+        \\  longFlexValue === "1 0 " + longFlexHost.style.getPropertyValue("flex-basis") &&
+        \\  computedLongFlexValue === longFlexValue &&
+        \\  removedLongFlexValue === longFlexValue &&
+        \\  longFlexRemoveHost.style.getPropertyValue("flex-grow") === "" &&
+        \\  longFlexRemoveHost.style.getPropertyValue("flex-shrink") === "" &&
+        \\  longFlexRemoveHost.style.getPropertyValue("flex-basis") === "" &&
+        \\  removedFlexFlowValue === "column wrap" &&
+        \\  flexFlowRemoveHost.style.getPropertyValue("flex-direction") === "" &&
+        \\  flexFlowRemoveHost.style.getPropertyValue("flex-wrap") === "" &&
+        \\  longFlexFlowValue === longFlexDirection + " wrap" &&
+        \\  longFlexShorthandHost.style.getPropertyValue("flex-basis") === longFlexHugeBasis &&
+        \\  longFlexShorthandValue === "1 0 " + longFlexHugeBasis &&
+        \\  flexSetHost.style.getPropertyValue("--keep-flex") === longBoxKeep &&
+        \\  flexSetHost.style.getPropertyValue("flex-grow") === "2" &&
+        \\  flexSetHost.style.getPropertyValue("flex-shrink") === "0" &&
+        \\  flexSetHost.style.getPropertyValue("flex-basis") === "10px" &&
+        \\  flexSetValue === "2 0 10px" &&
+        \\  flexFlowSetHost.style.getPropertyValue("--keep-flow") === longBoxKeep &&
+        \\  flexFlowSetHost.style.getPropertyValue("flex-direction") === "column" &&
+        \\  flexFlowSetHost.style.getPropertyValue("flex-wrap") === "wrap" &&
+        \\  flexFlowSetValue === "column wrap";
+        \\var supportsThrows = false;
+        \\try { out.classList.supports("x"); } catch (e) { supportsThrows = e instanceof TypeError; }
+        \\var link = document.createElement("link");
+        \\link.rel = "bad token";
+        \\var relContainsNoThrow = link.relList.contains("bad token") === false;
+        \\link.rel = "stylesheet preload";
+        \\var relIter = Array.from(link.relList.values()).join(",");
+        \\var relKeys = Array.from(link.relList.keys()).join(",");
+        \\var relEntries = Array.from(link.relList.entries()).map(function(e){ return e[0] + "=" + e[1]; }).join(",");
+        \\var relForEach = "";
+        \\link.relList.forEach(function(v, i){ relForEach += (i ? "," : "") + i + "=" + v; });
+        \\var relSame = link.relList === link.relList;
+        \\var relCacheHidden = Object.keys(link).indexOf("__relList") === -1;
+        \\var relIsTokenList = link.relList instanceof DOMTokenList && Object.prototype.toString.call(link.relList) === "[object DOMTokenList]";
+        \\var relInvalidThrows = false;
+        \\try { link.relList.add("bad token"); } catch (e) { relInvalidThrows = e.name === "InvalidCharacterError"; }
+        \\var relAddAtomic = false;
+        \\try { link.relList.add("next", "bad token"); } catch (e) { relAddAtomic = e.name === "InvalidCharacterError" && link.rel === "stylesheet preload"; }
+        \\var relRemoveAtomic = false;
+        \\try { link.relList.remove("stylesheet", "bad token"); } catch (e) { relRemoveAtomic = e.name === "InvalidCharacterError" && link.rel === "stylesheet preload"; }
+        \\var relToggleBool = link.relList.toggle("preload", "yes") === true;
+        \\var relReplace = link.relList.replace("preload", "prefetch") === true && link.rel === "stylesheet prefetch";
+        \\var relReplacePrecedence = false;
+        \\try { link.relList.replace("bad token", ""); } catch (e) { relReplacePrecedence = e.name === "SyntaxError"; }
+        \\link.relList.add("next", "next");
+        \\var relAddDedup = link.rel === "stylesheet prefetch next";
+        \\link.rel = "stylesheet\tpreload";
+        \\link.relList.add("preload");
+        \\var relAddWhitespace = link.rel === "stylesheet preload";
+        \\link.rel = "stylesheet\tpreload";
+        \\link.relList.remove("stylesheet");
+        \\var relRemoveWhitespace = link.rel === "preload";
+        \\link.rel = "stylesheet\tpreload";
+        \\link.relList.add();
+        \\link.relList.remove();
+        \\var relNoArg = link.rel === "stylesheet preload";
+        \\var emptyLink = document.createElement("link");
+        \\emptyLink.relList.add();
+        \\emptyLink.relList.remove("stylesheet");
+        \\emptyLink.relList.toggle("stylesheet", false);
+        \\var relNoAttr = emptyLink.getAttribute("rel") === null;
+        \\link.rel = "stylesheet preload stylesheet";
+        \\var relOrderedSet = link.relList.length === 2 && Array.from(link.relList.values()).join(",") === "stylesheet,preload";
+        \\var relSupports = link.relList.supports("STYLESHEET") && !link.relList.supports("definitely-not-a-rel") && !link.relList.supports("") && !link.relList.supports("bad token");
+        \\globalThis.__relListItemIndexConverts =
+        \\  link.relList.item(4294967296) === "stylesheet" &&
+        \\  link.relList.item(NaN) === "stylesheet";
+        \\var nodeListForItem = document.querySelectorAll("p");
+        \\globalThis.__nodeListItemIndexConverts =
+        \\  nodeListForItem.item(4294967296) === nodeListForItem.item(0) &&
+        \\  nodeListForItem.item(NaN) === nodeListForItem.item(0);
+        \\out.textContent = tokens + ":" + out.classList.length + ":" + iter + ":" + keys + ":" + values + ":" + entries + ":" + ctorThrows + ":" + classSame + ":" + classCacheHidden + ":" + classIsTokenList + ":" + classContainsNoThrow + ":" + classNoArg + ":" + classNoAttr + ":" + classRemoveMany + ":" + classDedupMany + ":" + classLongToken + ":" + supportsThrows + ":" + relSame + ":" + relCacheHidden + ":" + relIsTokenList + ":" + relContainsNoThrow + ":" + relInvalidThrows + ":" + relAddAtomic + ":" + relRemoveAtomic + ":" + relToggleBool + ":" + relReplace + ":" + relReplacePrecedence + ":" + relAddDedup + ":" + relAddWhitespace + ":" + relRemoveWhitespace + ":" + relNoArg + ":" + relNoAttr + ":" + relOrderedSet + ":" + relSupports + ":" + relIter + ":" + relKeys + ":" + relEntries + ":" + relForEach;
+        \\</script>
+        \\</body></html>
+    ;
+
+    var doc = try Document.parse(html);
+    defer doc.deinit();
+
+    var js_rt = try JsRuntime.init();
+    defer js_rt.deinit();
+    defer events.deinitEvents(js_rt.ctx);
+
+    dom_api.registerDomApis(js_rt.rt, js_rt.ctx, @ptrCast(@alignCast(doc.html_doc)));
+    events.registerEventApis(js_rt.ctx);
+    events.injectElementEventMethods(js_rt.ctx, dom_api.element_class_id);
+    executeScripts(&doc, &js_rt, std.heap.c_allocator, null, null);
+    _ = web_api.tickTimers(js_rt.ctx);
+
+    const result = js_rt.eval("document.getElementById('out').textContent + ':' + globalThis.__classLongOldValue + ':' + globalThis.__attrLongName + ':' + globalThis.__attrLongOldValue + ':' + globalThis.__nsAttrLongOldValue + ':' + globalThis.__textLongOldValue + ':' + globalThis.__normalizeLongOldValue + ':' + globalThis.__liveChildNodesItemIndexConverts + ':' + globalThis.__documentChildNodesItemIndexConverts + ':' + globalThis.__documentChildrenItemIndexConverts + ':' + globalThis.__newDocumentItemIndexConverts + ':' + globalThis.__jsOnlyTextContentLong + ':' + globalThis.__titleLong + ':' + globalThis.__selectorLongCI + ':' + globalThis.__selectorLongEscapedSimple + ':' + globalThis.__classNameLongCollection + ':' + globalThis.__liveHTMLCollectionItemIndexConverts + ':' + globalThis.__selectorLongAttrName + ':' + globalThis.__namedNodeMapItemIndexConverts + ':' + globalThis.__getElementsByNameLong + ':' + globalThis.__liveNodeListItemIndexConverts + ':' + globalThis.__styleLongSetProperty + ':' + globalThis.__styleEmptySetInvalidPriority + ':' + globalThis.__ruleStyleEmptySetInvalidPriority + ':' + globalThis.__cssRuleStyleItemIndexConverts + ':' + globalThis.__styleSheetListItemIndexConverts + ':' + globalThis.__cssRuleOpenBraceInString + ':' + globalThis.__cssInsertRuleOpenBraceInString + ':' + globalThis.__cssInsertRuleTrailingCommentBrace + ':' + globalThis.__cssInsertRuleTrailingRuleThrows + ':' + globalThis.__cssInsertRuleMissingCloseThrows + ':' + globalThis.__cssInsertRuleStringIndexConverts + ':' + globalThis.__cssGroupingInsertRuleOpenBraceInString + ':' + globalThis.__cssGroupingInsertRuleTrailingCommentBrace + ':' + globalThis.__cssGroupingInsertRuleSyncsOwner + ':' + globalThis.__cssGroupingDeleteRuleSyncsOwner + ':' + globalThis.__cssGroupingInsertNestedAtRule + ':' + globalThis.__cssGroupingInsertInvalidSelectorThrows + ':' + globalThis.__cssGroupingInsertTrailingRuleThrows + ':' + globalThis.__cssGroupingInsertMissingCloseThrows + ':' + globalThis.__cssGroupingInsertDefaultIndex + ':' + globalThis.__cssGroupingInsertRuleStringIndexConverts + ':' + globalThis.__cssGroupingInsertedRuleParentRule + ':' + globalThis.__cssParsedRuleParentRule + ':' + globalThis.__cssGroupingDeletedRuleParentRefs + ':' + globalThis.__cssDeletedSheetRuleParentRefs + ':' + globalThis.__cssReplaceClearsOldRuleParentRefs + ':' + globalThis.__cssStyleTextReplaceClearsOldRuleParentRefs + ':' + globalThis.__cssSelectorTextSyncsOwner + ':' + globalThis.__cssSelectorTextObjectStringifies + ':' + globalThis.__cssRuleStyleCssTextObjectStringifies + ':' + globalThis.__cssGroupingDeletedNestedRuleParentRefs + ':' + globalThis.__cssDeletedNestedSheetRuleParentRefs + ':' + globalThis.__cssDeleteRuleWrapIndexConverts + ':' + globalThis.__cssGroupingDeleteRuleWrapIndexConverts + ':' + globalThis.__cssDeleteRuleDefaultIndexEmptyThrows + ':' + globalThis.__cssGroupingDeleteRuleDefaultIndexEmptyThrows + ':' + globalThis.__cssAtRuleHeaderSemiInString + ':' + globalThis.__cssLeadingCommentAtRule + ':' + globalThis.__cssDeclCommentSemiIgnored + ':' + globalThis.__cssCommentBraceIgnored + ':' + globalThis.__cssMediaListItemIndexConverts + ':' + globalThis.__styleLongShorthandGet + ':' + globalThis.__styleLongFlexGet + ':' + globalThis.__relListItemIndexConverts + ':' + globalThis.__nodeListItemIndexConverts + ':' + globalThis.__classListItemIndexConverts");
+    defer result.deinit();
+    const expected = "one,two:2:one,two:0,1:one,two:0=one,1=two:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:stylesheet,preload:0,1:0=stylesheet,1=preload:0=stylesheet,1=preload:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true:true";
+    if (!result.isOk() or !std.mem.eql(u8, result.value(), expected)) {
+        if (result.isOk()) std.debug.print("DOM JS smoke got: {s}\n", .{result.value()});
+        return error.DomJsSmokeFailed;
+    }
+    std.debug.print("DOM JS smoke PASS\n", .{});
 }
 
 // Session management is now in core/session.zig
@@ -1343,21 +2069,273 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Screenshot mode: render page and dump to PNG, then exit
+    // Screenshot mode: render page (including deferred JS, images, and any
+    // DOM mutations they trigger) and dump to PNG, then exit.
+    //
+    // The interactive event loop drives three things incrementally:
+    //   (a) deferred page-JS init (pending_js_init),
+    //   (b) background image fetch submit/drain (image_fetcher + pending_images),
+    //   (c) restyle when DOM becomes dirty.
+    // The screenshot path skips the event loop, so it must replay those three
+    // steps itself. We loop until the page is stable: no pending JS, no in-flight
+    // image fetches, and DOM not dirty. A bounded iteration count guards
+    // against runaway scripts.
     if (screenshot_path) |spath| {
-        // Clear surface to white
-        surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
-        // Paint page content (no chrome) directly
-        if (page_states.items.len > 0) {
-            const pg = &page_states.items[0];
-            if (pg.root_box) |root_box| {
-                const ic_ptr: ?*ImageCache = if (pg.image_cache) |*ic| ic else null;
-                painter_mod.paint(root_box, &surface, &fonts, 0, 0, 0, surface.height, ic_ptr);
-            }
+        if (page_states.items.len == 0) {
+            surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
+            surface.update();
+            _ = surface.dumpToPng(spath);
+            std.debug.print("[screenshot] Saved to {s} (no page)\n", .{spath});
+            return;
         }
-        surface.update();
-        if (surface.dumpToPng(spath)) {
-            std.debug.print("[screenshot] Saved to {s}\n", .{spath});
+        const pg = &page_states.items[0];
+
+        // Set restyle context so JS-side getComputedStyle / mark_dirty work
+        // exactly like the interactive path.
+        g_restyle_page = pg;
+        g_restyle_allocator = allocator;
+        g_restyle_fonts = &fonts;
+        g_restyle_width = surface.width;
+        g_restyle_height = surface.height;
+
+        const max_iters: usize = 32;
+        var iter: usize = 0;
+        while (iter < max_iters) : (iter += 1) {
+            var did_work = false;
+
+            // (a) Deferred JS init — runs inline <script> and external scripts,
+            // which is what most modern pages need to construct visible DOM.
+            if (pg.pending_js_init) {
+                pg.pending_js_init = false;
+                if (pg.doc) |*doc| {
+                    initPageJs(
+                        doc,
+                        pg,
+                        allocator,
+                        &loader,
+                        if (pg.base_url) |bu| bu else null,
+                        &fonts,
+                    );
+                    did_work = true;
+                }
+            }
+
+            // Tick JS timers (setTimeout/setInterval) and pump pending jobs so
+            // post-init callbacks (e.g. DOMContentLoaded handlers that build UI
+            // asynchronously) get a chance to run.
+            if (pg.js_rt) |*js_rt| {
+                _ = web_api.tickTimers(js_rt.ctx);
+                web_api.tickWebSockets(js_rt.ctx);
+                web_api.tickWorkers(js_rt.ctx);
+                js_rt.executePending();
+            }
+            // kotori timers: fire pending timers and microtasks a few times
+            // so short setTimeout(0) chains resolve within the budget.
+            if (pg.kotori_rt) |*krt| {
+                var tk: usize = 0;
+                while (tk < 4) : (tk += 1) {
+                    _ = krt.runPendingTimers();
+                }
+            }
+
+            // (b) Submit pending image fetches and drain completed ones.
+            // Mirrors the interactive loop's incremental-image block. The
+            // drain must run even if no submits happen this iteration, because
+            // a previous iteration's submits may have just completed.
+            while (pg.pending_images_idx < pg.pending_images.items.len and
+                pg.pending_images_loaded < 300)
+            {
+                const entry = pg.pending_images.items[pg.pending_images_idx];
+                pg.pending_images_idx += 1;
+
+                const img_url = entry.url;
+                if (pg.image_cache) |*ic| {
+                    if (ic.get(img_url) != null) continue;
+                }
+                const data_svg_prefix = "data:image/svg+xml,";
+                if (std.mem.startsWith(u8, img_url, data_svg_prefix)) {
+                    const svg_data = img_url[data_svg_prefix.len..];
+                    if (svg_data.len > 0) {
+                        const svg_decoder = @import("svg/decoder.zig");
+                        if (svg_decoder.decodeSvg(@as([]const u8, svg_data), 0, 0)) |img| {
+                            const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+                            if (px_count <= 4 * 1024 * 1024) {
+                                if (pg.image_cache) |*ic| {
+                                    ic.put(img_url, img) catch {
+                                        var mimg = img;
+                                        mimg.deinit();
+                                    };
+                                    pg.pending_images_loaded += 1;
+                                    did_work = true;
+                                    if (entry.dom_node) |node| {
+                                        if (pg.js_rt) |*jrt| {
+                                            _ = events.dispatchEvent(jrt.ctx, node, "load");
+                                            jrt.executePending();
+                                        }
+                                    }
+                                }
+                            } else {
+                                var mimg = img;
+                                mimg.deinit();
+                            }
+                        }
+                    }
+                } else if (image_fetcher.isActive() and
+                    !isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height))
+                {
+                    if (pg.base_url) |base| {
+                        if (resolveUrl(allocator, base, img_url)) |resolved| {
+                            defer allocator.free(resolved);
+                            if (pg.submitted_images == null) {
+                                pg.submitted_images = std.StringHashMap(void).init(allocator);
+                            }
+                            if (pg.submitted_images.?.contains(img_url)) continue;
+                            if (allocator.dupe(u8, img_url)) |key_copy| {
+                                pg.submitted_images.?.put(key_copy, {}) catch allocator.free(key_copy);
+                            } else |_| {}
+                            image_fetcher.submit(
+                                img_url,
+                                resolved,
+                                entry.intrinsic_width,
+                                entry.intrinsic_height,
+                                false,
+                                if (entry.dom_node) |n| @as(*anyopaque, @ptrCast(n)) else null,
+                                pg.fetch_gen,
+                            ) catch {};
+                            did_work = true;
+                        } else |_| {}
+                    }
+                }
+            }
+
+            // Drain completed fetches (decode + insert + fire load/error).
+            while (image_fetcher.popResult()) |res_val| {
+                var res = res_val;
+                defer res.deinit();
+                if (pg.fetch_gen != 0 and pg.fetch_gen != res.job.generation) continue;
+                const img_url = res.job.url;
+                if (pg.image_cache) |*ic| {
+                    if (ic.get(img_url) != null) continue;
+                }
+                const node_opt: ?*lxb.lxb_dom_node_t = if (res.job.dom_node) |n|
+                    @ptrCast(@alignCast(n))
+                else
+                    null;
+                const body = res.body orelse {
+                    if (!res.job.is_retry) {
+                        image_fetcher.submit(
+                            img_url,
+                            res.job.resolved,
+                            res.job.intrinsic_width,
+                            res.job.intrinsic_height,
+                            true,
+                            res.job.dom_node,
+                            res.job.generation,
+                        ) catch {};
+                    } else if (node_opt) |node| {
+                        if (pg.js_rt) |*jrt| {
+                            _ = events.dispatchEvent(jrt.ctx, node, "error");
+                            jrt.executePending();
+                        }
+                    }
+                    continue;
+                };
+                if (decodeImage(body)) |img| {
+                    const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+                    if (px_count <= 4 * 1024 * 1024) {
+                        if (pg.image_cache) |*ic| {
+                            ic.put(img_url, img) catch {
+                                var mimg = img;
+                                mimg.deinit();
+                                continue;
+                            };
+                            pg.pending_images_loaded += 1;
+                            if (pg.root_box) |rb| {
+                                var updated = false;
+                                updateImageDimensions(rb, ic, &updated);
+                                if (updated) {
+                                    const cw: f32 = @floatFromInt(surface.width);
+                                    block_layout.layoutBlockVp(rb, cw, 0, &fonts, @floatFromInt(surface.height));
+                                    pg.total_height = painter_mod.contentHeight(rb);
+                                    pg.total_width = painter_mod.contentWidth(rb);
+                                }
+                            }
+                            did_work = true;
+                            if (node_opt) |node| {
+                                if (pg.js_rt) |*jrt| {
+                                    _ = events.dispatchEvent(jrt.ctx, node, "load");
+                                    jrt.executePending();
+                                }
+                            }
+                        }
+                    } else {
+                        var mimg = img;
+                        mimg.deinit();
+                    }
+                } else |_| {
+                    if (node_opt) |node| {
+                        if (pg.js_rt) |*jrt| {
+                            _ = events.dispatchEvent(jrt.ctx, node, "error");
+                            jrt.executePending();
+                        }
+                    }
+                }
+            }
+
+            // (c) Restyle if JS / image loads mutated the DOM.
+            if (dom_api.dom_dirty or kotori_dom.dom_dirty) {
+                dom_api.dom_dirty = false;
+                kotori_dom.dom_dirty = false;
+                restylePage(pg, allocator, &fonts, surface.width, surface.height);
+                did_work = true;
+            }
+
+            // If no work happened this iteration but image fetches are still
+            // in flight, wait briefly for them to land before giving up.
+            if (!did_work and image_fetcher.busy()) {
+                env.sleepNs(20 * std.time.ns_per_ms);
+                continue;
+            }
+            if (!did_work) break;
+        }
+
+        // Render. The visible window may be smaller than the page content
+        // (e.g. Google's flex layout overflows past body height:100% and the
+        // search form sits below the viewport). The X backend refuses to grow
+        // past the screen size, so for screenshot we render to a fresh RAM
+        // surface sized to the full page height. The visible X surface stays
+        // untouched (the screenshot path exits immediately afterwards anyway).
+        //
+        // Clamp the page height to a sane maximum: 16384px is well above any
+        // realistic page (a 1280-wide page would need ~16 screens of content)
+        // and protects against runaway layout output (e.g. a JS-built DOM
+        // whose computed height overflowed to f32 max).
+        const render_w: i32 = surface.width;
+        // total_height can be NaN/infinity/f32-max if a JS-built DOM has
+        // absurd computed dimensions. Treat any non-finite or > 16384 value
+        // as "fit the visible window" so we don't try to allocate a 3.4e38px
+        // RAM surface (which would OOM) or @intFromFloat an overflowed f32.
+        var clamped_page_h: f32 = @floatFromInt(surface.height);
+        if (std.math.isFinite(pg.total_height) and pg.total_height < 16384) {
+            clamped_page_h = @max(clamped_page_h, pg.total_height);
+        }
+        const render_h: i32 = @intFromFloat(clamped_page_h);
+
+        var dump_surface: ?Surface = if (render_h > surface.height)
+            Surface.initRam(render_w, render_h) catch null
+        else
+            null;
+        defer if (dump_surface) |*ds| ds.deinit();
+
+        const target: *Surface = if (dump_surface) |*ds| ds else &surface;
+        target.fillRect(0, 0, target.width, target.height, 0xFFFFFFFF);
+        if (pg.root_box) |root_box| {
+            const ic_ptr: ?*ImageCache = if (pg.image_cache) |*ic| ic else null;
+            painter_mod.paint(root_box, target, &fonts, 0, 0, 0, target.height, ic_ptr);
+        }
+        if (dump_surface == null) surface.update();
+        if (target.dumpToPng(spath)) {
+            std.debug.print("[screenshot] Saved to {s} ({d}x{d})\n", .{ spath, target.width, target.height });
         } else {
             std.debug.print("[screenshot] Failed to save to {s}\n", .{spath});
         }
@@ -3391,6 +4369,59 @@ pub const js = struct {
 
 const webdriver = @import("net/webdriver.zig");
 
+fn webDriverStringResponse(allocator: std.mem.Allocator, value: []const u8) webdriver.Response {
+    const body = std.fmt.allocPrint(allocator, "{{\"value\":{f}}}", .{std.json.fmt(value, .{})}) catch return .{ .body = "{\"value\":\"\"}" };
+    return .{ .body = body, .allocated = true };
+}
+
+fn webDriverRawValueResponse(allocator: std.mem.Allocator, raw_json: []const u8) webdriver.Response {
+    const body = std.fmt.allocPrint(allocator, "{{\"value\":{s}}}", .{raw_json}) catch return .{ .body = "{\"value\":null}" };
+    return .{ .body = body, .allocated = true };
+}
+
+fn webDriverStringArrayResponse(allocator: std.mem.Allocator, values: []const []const u8) webdriver.Response {
+    const body = std.fmt.allocPrint(allocator, "{{\"value\":{f}}}", .{std.json.fmt(values, .{})}) catch return .{ .body = "{\"value\":[]}" };
+    return .{ .body = body, .allocated = true };
+}
+
+fn webDriverEvalResponse(allocator: std.mem.Allocator, val: []const u8) webdriver.Response {
+    if (std.mem.eql(u8, val, "undefined")) return webDriverRawValueResponse(allocator, "null");
+    const raw = val.len > 0 and (std.mem.eql(u8, val, "null") or
+        std.mem.eql(u8, val, "true") or
+        std.mem.eql(u8, val, "false") or
+        (val[0] >= '0' and val[0] <= '9') or
+        val[0] == '-' or val[0] == '{' or val[0] == '[' or val[0] == '"');
+    if (raw) return webDriverRawValueResponse(allocator, val);
+    return webDriverStringResponse(allocator, val);
+}
+
+test "webDriverStringResponse escapes JSON strings without fixed buffer cap" {
+    const resp = webDriverStringResponse(std.testing.allocator, "a\"b\\c\n");
+    defer if (resp.allocated) std.testing.allocator.free(@constCast(resp.body));
+    try std.testing.expect(resp.allocated);
+    try std.testing.expectEqualStrings("{\"value\":\"a\\\"b\\\\c\\n\"}", resp.body);
+
+    const long = try std.testing.allocator.alloc(u8, 5000);
+    defer std.testing.allocator.free(long);
+    @memset(long, 'x');
+    const long_resp = webDriverStringResponse(std.testing.allocator, long);
+    defer if (long_resp.allocated) std.testing.allocator.free(@constCast(long_resp.body));
+    try std.testing.expect(long_resp.body.len > 5000);
+
+    const empty = webDriverEvalResponse(std.testing.allocator, "");
+    defer if (empty.allocated) std.testing.allocator.free(@constCast(empty.body));
+    try std.testing.expectEqualStrings("{\"value\":\"\"}", empty.body);
+
+    const undef = webDriverEvalResponse(std.testing.allocator, "undefined");
+    defer if (undef.allocated) std.testing.allocator.free(@constCast(undef.body));
+    try std.testing.expectEqualStrings("{\"value\":null}", undef.body);
+
+    const handles = [_][]const u8{ "window-0", "quote\"slash\\" };
+    const arr = webDriverStringArrayResponse(std.testing.allocator, &handles);
+    defer if (arr.allocated) std.testing.allocator.free(@constCast(arr.body));
+    try std.testing.expectEqualStrings("{\"value\":[\"window-0\",\"quote\\\"slash\\\\\"]}", arr.body);
+}
+
 fn handleWebDriverCommand(
     cmd: webdriver.Command,
     allocator: std.mem.Allocator,
@@ -3436,12 +4467,7 @@ fn handleWebDriverCommand(
         .get_url => {
             // Return current URL
             if (tab_mgr.getActiveTab()) |tab| {
-                // Build JSON response with URL
-                var buf: [4096]u8 = undefined;
-                const result = std.fmt.bufPrint(&buf, "{{\"value\":\"{s}\"}}", .{tab.url}) catch return .{ .body = "{\"value\":\"\"}" };
-                // Need to return stable pointer — allocate
-                const owned = allocator.dupe(u8, result) catch return .{ .body = "{\"value\":\"\"}" };
-                return .{ .body = owned, .allocated = true };
+                return webDriverStringResponse(allocator, tab.url);
             }
             return .{ .body = "{\"value\":\"about:blank\"}" };
         },
@@ -3450,10 +4476,7 @@ fn handleWebDriverCommand(
                 if (page_states.items[window_mgr.getActiveTabIndex()].doc) |*d| {
                     const title = extractTitle(d);
                     if (title) |t| {
-                        var buf: [4096]u8 = undefined;
-                        const result = std.fmt.bufPrint(&buf, "{{\"value\":\"{s}\"}}", .{t}) catch return .{ .body = "{\"value\":\"\"}" };
-                        const owned = allocator.dupe(u8, result) catch return .{ .body = "{\"value\":\"\"}" };
-                        return .{ .body = owned, .allocated = true };
+                        return webDriverStringResponse(allocator, t);
                     }
                 }
             }
@@ -3466,14 +4489,14 @@ fn handleWebDriverCommand(
                 if (page_states.items[active_idx].js_rt) |*js_rt| {
                     // Wrap script: extract args from body JSON, apply with args
                     const body_json = cmd.payload2;
-                    var wrap_buf: [65536]u8 = undefined;
-                    const wrapped = std.fmt.bufPrint(&wrap_buf,
+                    const wrapped = std.fmt.allocPrint(allocator,
                         \\(function() {{
                         \\  var __body = {s};
                         \\  var __args = (__body && __body.args) ? __body.args : [];
                         \\  return (function() {{ {s} }}).apply(null, __args);
                         \\}})()
                     , .{ body_json, script }) catch return .{ .status = 500, .body = "{\"value\":null}" };
+                    defer allocator.free(wrapped);
 
                     std.debug.print("[WD-exec] script({d}): {s}\n", .{ wrapped.len, wrapped[0..@min(200, wrapped.len)] });
                     const result = js_rt.eval(wrapped);
@@ -3481,22 +4504,7 @@ fn handleWebDriverCommand(
 
                     switch (result) {
                         .ok => |val| {
-                            // Return the string result wrapped in WebDriver JSON
-                            // Eval result text: numbers/booleans are bare, strings need quoting
-                            var resp_buf: [65536]u8 = undefined;
-                            const is_json_primitive = val.len == 0 or
-                                std.mem.eql(u8, val, "undefined") or
-                                std.mem.eql(u8, val, "null") or
-                                std.mem.eql(u8, val, "true") or
-                                std.mem.eql(u8, val, "false") or
-                                (val[0] >= '0' and val[0] <= '9') or
-                                val[0] == '-' or val[0] == '{' or val[0] == '[' or val[0] == '"';
-                            const json = if (is_json_primitive or std.mem.eql(u8, val, "undefined"))
-                                std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{if (std.mem.eql(u8, val, "undefined")) "null" else val}) catch return .{ .body = "{\"value\":null}" }
-                            else
-                                std.fmt.bufPrint(&resp_buf, "{{\"value\":\"{s}\"}}", .{val}) catch return .{ .body = "{\"value\":null}" };
-                            const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
-                            return .{ .body = owned, .allocated = true };
+                            return webDriverEvalResponse(allocator, val);
                         },
                         .err => |e| {
                             std.debug.print("[WD-exec] ERR: {s}\n", .{e[0..@min(200, e.len)]});
@@ -3522,8 +4530,7 @@ fn handleWebDriverCommand(
                     // The event loop will poll for completion and send the response
                     // Extract args from the full request body JSON
                     const body_json = cmd.payload2;
-                    var wrap_buf: [65536]u8 = undefined;
-                    const setup = std.fmt.bufPrint(&wrap_buf,
+                    const setup = std.fmt.allocPrint(allocator,
                         \\window.__wd_async_done = false;
                         \\window.__wd_async_result = null;
                         \\(function() {{
@@ -3537,6 +4544,7 @@ fn handleWebDriverCommand(
                         \\  (function() {{ {s} }}).apply(null, __args);
                         \\}})();
                     , .{ body_json, script }) catch return .{ .status = 500, .body = "{\"value\":null}" };
+                    defer allocator.free(setup);
 
                     _ = js_rt.eval(setup);
                     js_rt.executePending();
@@ -3550,10 +4558,7 @@ fn handleWebDriverCommand(
                     switch (check) {
                         .ok => |val| {
                             if (!std.mem.eql(u8, val, "null") and !std.mem.eql(u8, val, "undefined") and val.len > 0) {
-                                var resp_buf: [65536]u8 = undefined;
-                                const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{val}) catch return .{ .body = "{\"value\":null}" };
-                                const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
-                                return .{ .body = owned, .allocated = true };
+                                return webDriverRawValueResponse(allocator, val);
                             }
                         },
                         .err => {},
@@ -3584,23 +4589,14 @@ fn handleWebDriverCommand(
                 const png_data = env.readToEndAlloc(file, allocator, 10 * 1024 * 1024) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
                 defer allocator.free(png_data);
 
-                // Base64 encode
-                const base64 = std.base64.standard;
-                const encoded_len = base64.Encoder.calcSize(png_data.len);
-                const encoded = allocator.alloc(u8, encoded_len + 20) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
-                // Build response: {"value":"<base64>"}
                 const base64_enc = std.base64.standard.Encoder;
                 const b64_len = base64_enc.calcSize(png_data.len);
                 // Build response: {"value":"<base64>"}
                 const total_len = 10 + b64_len + 2; // {"value":"..."}
-                const resp_mem = allocator.alloc(u8, total_len) catch {
-                    allocator.free(encoded);
-                    return .{ .status = 500, .body = "{\"value\":\"\"}" };
-                };
+                const resp_mem = allocator.alloc(u8, total_len) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
                 @memcpy(resp_mem[0..10], "{\"value\":\"");
                 _ = base64_enc.encode(resp_mem[10..][0..b64_len], png_data);
                 @memcpy(resp_mem[10 + b64_len ..][0..2], "\"}");
-                allocator.free(encoded);
                 return .{ .body = resp_mem, .allocated = true };
             }
             return .{ .status = 500, .body = "{\"value\":\"\"}" };
@@ -3623,11 +4619,8 @@ fn handleWebDriverCommand(
                 "",
                 new_idx,
             ) catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"window create failed\",\"stacktrace\":\"\"}}" };
-            // Build response: {"value":{"handle":"window-N","type":"tab"}}
-            var resp_buf: [128]u8 = undefined;
-            const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{{\"handle\":\"{s}\",\"type\":\"tab\"}}}}", .{new_handle}) catch return .{ .body = "{\"value\":null}" };
-            const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
-            return .{ .body = owned, .allocated = true };
+            const body = std.fmt.allocPrint(allocator, "{{\"value\":{{\"handle\":{f},\"type\":\"tab\"}}}}", .{std.json.fmt(new_handle, .{})}) catch return .{ .body = "{\"value\":null}" };
+            return .{ .body = body, .allocated = true };
         },
         .window_switch => {
             const handle = cmd.payload;
@@ -3645,63 +4638,20 @@ fn handleWebDriverCommand(
             var handles_buf: [16][]const u8 = undefined;
             const count = window_mgr.getHandles(&handles_buf);
             if (count > 0) {
-                var resp_buf: [512]u8 = undefined;
-                var pos: usize = 0;
-                const prefix = "{\"value\":[";
-                @memcpy(resp_buf[pos..][0..prefix.len], prefix);
-                pos += prefix.len;
-                for (0..count) |i| {
-                    if (i > 0) {
-                        resp_buf[pos] = ',';
-                        pos += 1;
-                    }
-                    resp_buf[pos] = '"';
-                    pos += 1;
-                    @memcpy(resp_buf[pos..][0..handles_buf[i].len], handles_buf[i]);
-                    pos += handles_buf[i].len;
-                    resp_buf[pos] = '"';
-                    pos += 1;
-                }
-                @memcpy(resp_buf[pos..][0..2], "]}");
-                pos += 2;
-                const owned = allocator.dupe(u8, resp_buf[0..pos]) catch return .{ .body = "{\"value\":[]}" };
-                return .{ .body = owned, .allocated = true };
+                return webDriverStringArrayResponse(allocator, handles_buf[0..count]);
             }
             return .{ .body = "{\"value\":[]}" };
         },
         .get_window_handle => {
             if (window_mgr.getActiveHandle()) |handle| {
-                var resp_buf: [64]u8 = undefined;
-                const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":\"{s}\"}}", .{handle}) catch return .{ .body = "{\"value\":\"\"}" };
-                const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":\"\"}" };
-                return .{ .body = owned, .allocated = true };
+                return webDriverStringResponse(allocator, handle);
             }
             return .{ .body = "{\"value\":\"\"}" };
         },
         .get_window_handles => {
             var handles_buf: [16][]const u8 = undefined;
             const count = window_mgr.getHandles(&handles_buf);
-            var resp_buf: [512]u8 = undefined;
-            var pos: usize = 0;
-            const prefix = "{\"value\":[";
-            @memcpy(resp_buf[pos..][0..prefix.len], prefix);
-            pos += prefix.len;
-            for (0..count) |i| {
-                if (i > 0) {
-                    resp_buf[pos] = ',';
-                    pos += 1;
-                }
-                resp_buf[pos] = '"';
-                pos += 1;
-                @memcpy(resp_buf[pos..][0..handles_buf[i].len], handles_buf[i]);
-                pos += handles_buf[i].len;
-                resp_buf[pos] = '"';
-                pos += 1;
-            }
-            @memcpy(resp_buf[pos..][0..2], "]}");
-            pos += 2;
-            const owned = allocator.dupe(u8, resp_buf[0..pos]) catch return .{ .body = "{\"value\":[]}" };
-            return .{ .body = owned, .allocated = true };
+            return webDriverStringArrayResponse(allocator, handles_buf[0..count]);
         },
     }
 }

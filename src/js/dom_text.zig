@@ -11,6 +11,12 @@ const events = @import("events.zig");
 extern fn lxb_dom_node_text_content(node: *lxb.lxb_dom_node_t, len: *usize) ?[*]const u8;
 extern fn lxb_dom_node_text_content_set(node: *lxb.lxb_dom_node_t, content: [*]const u8, len: usize) lxb.lxb_status_t;
 
+fn dupNodeText(node: *lxb.lxb_dom_node_t) ?[]u8 {
+    var len: usize = 0;
+    const ptr = lxb_dom_node_text_content(node, &len) orelse return null;
+    return std.heap.page_allocator.dupe(u8, ptr[0..len]) catch null;
+}
+
 // ── CharacterData.data getter ───────────────────────────────────────
 
 pub fn textGetData(
@@ -39,19 +45,8 @@ pub fn textSetData(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNodeFromText(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    // Capture old text content before mutation for MutationObserver characterDataOldValue
-    // Must copy to local buffer because lxb_dom_node_text_content_set invalidates the pointer
-    var old_text_buf: [4096]u8 = undefined;
-    var old_text: ?[]const u8 = null;
-    {
-        var old_len: usize = 0;
-        const old_ptr = lxb_dom_node_text_content(node, &old_len);
-        if (old_ptr) |p| {
-            const copy_len = @min(old_len, old_text_buf.len);
-            @memcpy(old_text_buf[0..copy_len], p[0..copy_len]);
-            old_text = old_text_buf[0..copy_len];
-        }
-    }
+    const old_text = dupNodeText(node);
+    defer if (old_text) |v| std.heap.page_allocator.free(v);
     const s = api.jsStringToSlice(c, args[0]) orelse {
         _ = lxb_dom_node_text_content_set(node, "", 0);
         events.recordMutationWithOldValue(node, "characterData", null, null, null, old_text);

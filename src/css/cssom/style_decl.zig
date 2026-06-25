@@ -45,6 +45,13 @@ pub fn resolveWebkitAlias(name: []const u8) []const u8 {
     return name;
 }
 
+fn propertyNameMatches(a: []const u8, b: []const u8) bool {
+    if (std.mem.startsWith(u8, a, "--") or std.mem.startsWith(u8, b, "--")) {
+        return std.mem.eql(u8, a, b);
+    }
+    return std.ascii.eqlIgnoreCase(a, b);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────
 
 pub const StyleDecl = struct {
@@ -86,7 +93,7 @@ pub const StyleDeclList = struct {
     pub fn indexOf(self: *const StyleDeclList, name: []const u8) ?usize {
         const canonical = resolveWebkitAlias(name);
         for (self.entries.items, 0..) |e, i| {
-            if (std.ascii.eqlIgnoreCase(e.name, canonical)) return i;
+            if (propertyNameMatches(e.name, canonical)) return i;
         }
         return null;
     }
@@ -403,6 +410,7 @@ pub fn parseIntoList(
             value = clean;
             important = true;
         }
+        if (value.len == 0 and !std.mem.startsWith(u8, raw_name, "--")) continue;
 
         try list.upsert(allocator, raw_name, value, important);
     }

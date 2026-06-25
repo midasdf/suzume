@@ -6,7 +6,9 @@
 
 Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB RAM, Cortex-A53).
 
-> **Note:** This project is under active development and not yet ready for general use.
+> Renders modern sites (Google, Wikipedia, Bing, Hacker News, GitHub) under the
+> QuickJS-ng engine (`SUZUME_JS=quickjs`). The default kotori engine is faster but
+> handles a smaller feature set — switch to QuickJS for sites with heavy JS.
 
 ## Features
 

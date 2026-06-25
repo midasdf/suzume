@@ -40,6 +40,13 @@ extern fn lxb_dom_element_set_attribute(element: *lxb.lxb_dom_element_t, qualifi
 
 // ── Style Property Access ────────────────────────────────────────────
 
+fn cssPropertyNameMatches(a: []const u8, b: []const u8) bool {
+    if (std.mem.startsWith(u8, a, "--") or std.mem.startsWith(u8, b, "--")) {
+        return std.mem.eql(u8, a, b);
+    }
+    return std.ascii.eqlIgnoreCase(a, b);
+}
+
 pub fn getStyleProperty(style_str: []const u8, css_prop: []const u8) ?[]const u8 {
     // CSS spec: for duplicate properties, the last valid declaration wins
     var result: ?[]const u8 = null;
@@ -60,7 +67,7 @@ pub fn getStyleProperty(style_str: []const u8, css_prop: []const u8) ?[]const u8
         const val = std.mem.trim(u8, style_str[val_start..pos], " \t\n");
         if (pos < style_str.len) pos += 1; // skip ';'
 
-        if (std.ascii.eqlIgnoreCase(prop_name, css_prop)) result = val;
+        if (cssPropertyNameMatches(prop_name, css_prop)) result = val;
     }
     return result;
 }
@@ -86,7 +93,7 @@ pub fn setStyleProperty(style_str: []const u8, css_prop: []const u8, css_val: []
         const val = std.mem.trim(u8, style_str[val_start..iter_pos], " \t\n");
         if (iter_pos < style_str.len) iter_pos += 1; // skip ';'
 
-        if (std.ascii.eqlIgnoreCase(prop_name, css_prop)) {
+        if (cssPropertyNameMatches(prop_name, css_prop)) {
             found = true;
             if (css_val.len == 0) continue; // remove property
             // Write replacement
@@ -290,6 +297,9 @@ pub fn computedStyleGetPropertyValue(
             }
             // Try shorthand reconstruction from expanded longhands (with resolution)
             const istyle = style_ptr.?[0..style_len];
+            if (eqlIgnoreCase(prop, "flex")) {
+                if (inlineFlexShorthandJS(c, istyle)) |reconstructed| return reconstructed;
+            }
             if (api.reconstructBoxShorthandJSWithElem(c, istyle, prop, elem_val)) |reconstructed| {
                 return reconstructed;
             }
@@ -317,6 +327,20 @@ pub fn computedStyleGetPropertyValue(
 /// Convert a ComputedStyle field to a CSS string for getComputedStyle (without box context).
 pub fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: []const u8) qjs.JSValue {
     return computedStyleToStringWithBox(c, style, prop, null);
+}
+
+fn inlineFlexShorthandJS(c: *qjs.JSContext, style_str: []const u8) ?qjs.JSValue {
+    const grow = getStyleProperty(style_str, "flex-grow");
+    const shrink = getStyleProperty(style_str, "flex-shrink");
+    const basis = getStyleProperty(style_str, "flex-basis");
+    if (grow == null and shrink == null and basis == null) return null;
+
+    const g = std.mem.trim(u8, grow orelse "0", " \t\r\n");
+    const s = std.mem.trim(u8, shrink orelse "1", " \t\r\n");
+    const b = std.mem.trim(u8, basis orelse "auto", " \t\r\n");
+    const out = std.fmt.allocPrint(std.heap.c_allocator, "{s} {s} {s}", .{ g, s, b }) catch return null;
+    defer std.heap.c_allocator.free(out);
+    return qjs.JS_NewStringLen(c, out.ptr, out.len);
 }
 
 /// Convert a ComputedStyle field to a CSS string, using layout box used values when available.

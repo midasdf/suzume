@@ -429,6 +429,26 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run suzume");
     run_step.dependOn(&run_cmd.step);
 
+    const run_test_js = b.addRunArtifact(exe);
+    run_test_js.step.dependOn(b.getInstallStep());
+    run_test_js.addArg("--test-js");
+    const test_js_step = b.step("test-js", "Run JS smoke test");
+    test_js_step.dependOn(&run_test_js.step);
+    const run_test_dom_js = b.addRunArtifact(exe);
+    run_test_dom_js.step.dependOn(b.getInstallStep());
+    run_test_dom_js.addArg("--test-dom-js");
+    const test_dom_js_step = b.step("test-dom-js", "Run DOM + JS smoke test");
+    test_dom_js_step.dependOn(&run_test_dom_js.step);
+    const run_test_http = b.addRunArtifact(exe);
+    run_test_http.step.dependOn(b.getInstallStep());
+    run_test_http.addArg("--test-http");
+    const test_http_step = b.step("test-http", "Run HTTP smoke test");
+    test_http_step.dependOn(&run_test_http.step);
+    const test_integration_step = b.step("test-integration", "Run JS, DOM+JS, and HTTP smoke tests");
+    test_integration_step.dependOn(&run_test_js.step);
+    test_integration_step.dependOn(&run_test_dom_js.step);
+    test_integration_step.dependOn(&run_test_http.step);
+
     // ── Test step ─────────────────────────────────────────────────
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -442,6 +462,8 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_test_js.step);
+    test_step.dependOn(&run_test_dom_js.step);
 
     const url_resolve_mod = b.createModule(.{
         .root_source_file = b.path("src/test_url_resolve.zig"),
@@ -597,6 +619,18 @@ pub fn build(b: *std.Build) void {
     run_test_dom.addArg("--test-dom");
     const test_dom_step = b.step("test-dom-style", "Run DOM + Style integration test");
     test_dom_step.dependOn(&run_test_dom.step);
+    test_step.dependOn(&run_test_dom.step);
+
+    const css_animation_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/animation.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const css_animation_tests = b.addTest(.{ .root_module = css_animation_mod });
+    const run_css_animation_tests = b.addRunArtifact(css_animation_tests);
+    const test_css_animation_step = b.step("test-css-animation", "Run CSS animation tests");
+    test_css_animation_step.dependOn(&run_css_animation_tests.step);
+    test_step.dependOn(&run_css_animation_tests.step);
 
     // ── CSS engine tests ──────────────────────────────────────
     // Single CSS module (uses relative .zig imports internally)
@@ -669,6 +703,13 @@ pub fn build(b: *std.Build) void {
     });
     test_style_decl_mod.addImport("style_decl", style_decl_src_mod);
 
+    const test_large_css_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_large_css.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_large_css_mod.addImport("css", css_mod);
+
     // Root test module that pulls in all CSS test modules
     const css_all_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_css_all.zig"),
@@ -683,6 +724,7 @@ pub fn build(b: *std.Build) void {
     css_all_test_mod.addImport("test_media", test_media_mod);
     css_all_test_mod.addImport("test_variables", test_variables_mod);
     css_all_test_mod.addImport("test_style_decl", test_style_decl_mod);
+    css_all_test_mod.addImport("test_large_css", test_large_css_mod);
 
     const css_tests = b.addTest(.{
         .root_module = css_all_test_mod,
@@ -690,6 +732,7 @@ pub fn build(b: *std.Build) void {
     const run_css_tests = b.addRunArtifact(css_tests);
     const test_css_step = b.step("test-css", "Run CSS engine tests");
     test_css_step.dependOn(&run_css_tests.step);
+    test_step.dependOn(&run_css_tests.step);
 
     // ── kotori JS engine tests ─────────────────────────────────
     // (kotori_mod is created above, shared with exe_mod)
@@ -732,6 +775,18 @@ pub fn build(b: *std.Build) void {
     const run_kotori_tests = b.addRunArtifact(kotori_tests);
     const test_kotori_step = b.step("test-kotori", "Run kotori JS engine tests");
     test_kotori_step.dependOn(&run_kotori_tests.step);
+    test_step.dependOn(&run_kotori_tests.step);
+
+    const kotori_regex_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori/regex.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const kotori_regex_tests = b.addTest(.{ .root_module = kotori_regex_mod });
+    const run_kotori_regex_tests = b.addRunArtifact(kotori_regex_tests);
+    const test_kotori_regex_step = b.step("test-kotori-regex", "Run kotori RegExp tests");
+    test_kotori_regex_step.dependOn(&run_kotori_regex_tests.step);
+    test_step.dependOn(&run_kotori_regex_tests.step);
 
     // ── kotori DOM integration tests ─────────────────────────────
     const kotori_dom_mod = b.createModule(.{
@@ -744,11 +799,18 @@ pub fn build(b: *std.Build) void {
     kotori_dom_mod.addImport("url_parser", url_parser_shared_mod);
     kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
 
+    const css_properties_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/properties.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const css_validator_mod = b.createModule(.{
         .root_source_file = b.path("src/js/css_validator.zig"),
         .target = target,
         .optimize = optimize,
     });
+    css_validator_mod.addImport("css_properties", css_properties_mod);
 
     // Standalone test target for css_validator's embedded unit tests.
     // Runs as part of `zig build test` so Wave 6 Phase 6.2 regressions
@@ -765,9 +827,19 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/test_kotori_dom.zig"),
         .target = target,
         .optimize = optimize,
+        .single_threaded = true,
     });
+    const kotori_rt_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori_runtime.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kotori_rt_test_mod.addImport("kotori", kotori_mod);
+    kotori_rt_test_mod.addImport("kotori_dom", kotori_dom_mod);
+    kotori_rt_test_mod.addImport("url_parser", url_parser_shared_mod);
     test_kotori_dom_mod.addImport("kotori", kotori_mod);
     test_kotori_dom_mod.addImport("kotori_dom", kotori_dom_mod);
+    test_kotori_dom_mod.addImport("kotori_runtime", kotori_rt_test_mod);
     test_kotori_dom_mod.addImport("css_validator", css_validator_mod);
     test_kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
 
@@ -779,6 +851,7 @@ pub fn build(b: *std.Build) void {
     const run_kotori_dom_tests = b.addRunArtifact(kotori_dom_tests);
     const test_kotori_dom_step = b.step("test-kotori-dom", "Run kotori DOM binding tests");
     test_kotori_dom_step.dependOn(&run_kotori_dom_tests.step);
+    test_step.dependOn(&run_kotori_dom_tests.step);
 
     // ── kotori HTML interfaces resolver tests (pure-Zig, no C deps) ──
     const kotori_html_ifaces_src_mod = b.createModule(.{

@@ -56,6 +56,8 @@ pub var resolve_fn: ?ResolveFn = null;
 /// `dom_style.isValidCssValue`.
 pub const ValidateFn = *const fn (prop: []const u8, val: []const u8) bool;
 pub var validate_fn: ?ValidateFn = null;
+pub const ElementMatchesFn = *const fn (node: *anyopaque, selector: []const u8) bool;
+pub var element_matches_fn: ?ElementMatchesFn = null;
 
 /// Register a callback invoked by getComputedStyle to flush pending
 /// restyle/layout before reading resolved values.
@@ -72,6 +74,10 @@ pub var mark_dirty_fn: ?*const fn () void = null;
 /// Register the cascade-dirty bridge. Called from main during page init.
 pub fn setMarkDirtyCallback(cb: ?*const fn () void) void {
     mark_dirty_fn = cb;
+}
+
+pub fn setElementMatchesCallback(cb: ?ElementMatchesFn) void {
+    element_matches_fn = cb;
 }
 
 /// Register the cascade-resolve bridge. Called from main after the first
@@ -125,7 +131,10 @@ const sr = struct {
 
     pub fn setNodeScope(node: *lxb.lxb_dom_node_t, id: u32) void {
         ensureInit();
-        if (id == 0) { _ = g_node_scope.?.remove(@intFromPtr(node)); return; }
+        if (id == 0) {
+            _ = g_node_scope.?.remove(@intFromPtr(node));
+            return;
+        }
         g_node_scope.?.put(@intFromPtr(node), id) catch {};
     }
 
@@ -158,7 +167,10 @@ const sr = struct {
         const id = g_next_id;
         g_next_id += 1;
         root.* = .{ .id = id, .host = host, .fragment = fragment, .mode = mode };
-        g_shadow_roots.?.put(id, root) catch { g_allocator.destroy(root); return null; };
+        g_shadow_roots.?.put(id, root) catch {
+            g_allocator.destroy(root);
+            return null;
+        };
         g_host_to_shadow.?.put(@intFromPtr(host), root) catch {};
         setNodeScope(fragment, id);
         return root;
@@ -167,9 +179,9 @@ const sr = struct {
     pub fn isAllowedShadowHost(local_name: []const u8) bool {
         if (std.mem.indexOfScalar(u8, local_name, '-') != null) return true;
         const allow = [_][]const u8{
-            "article", "aside", "blockquote", "body", "div", "footer",
-            "h1", "h2", "h3", "h4", "h5", "h6",
-            "header", "main", "nav", "p", "section", "span",
+            "article", "aside", "blockquote", "body", "div",     "footer",
+            "h1",      "h2",    "h3",         "h4",   "h5",      "h6",
+            "header",  "main",  "nav",        "p",    "section", "span",
         };
         for (allow) |name| if (std.mem.eql(u8, local_name, name)) return true;
         return false;
@@ -639,6 +651,7 @@ fn nodeCachePut(allocator: std.mem.Allocator, node: *lxb.lxb_dom_node_t, obj: *J
 /// DOM §4.9.1 requires `el.attributes[0] === el.attributes[0]` (Attr identity).
 /// Keyed on the lexbor attr pointer; invalidated on removeAttribute.
 var g_attr_wrappers: std.AutoHashMapUnmanaged(usize, *JsObject) = .{};
+var g_custom_validity: std.AutoHashMapUnmanaged(usize, StringId) = .{};
 
 /// Drop a cached Attr wrapper (called before lexbor frees the underlying
 /// attribute struct, e.g. from removeAttribute / toggleAttribute-removes).
@@ -688,6 +701,15 @@ fn bumpElemAttrVersion(elem: *lxb.lxb_dom_element_t) void {
     const gop = g_elem_attr_ver.getOrPut(g_alloc, key) catch return;
     if (!gop.found_existing) gop.value_ptr.* = 0;
     gop.value_ptr.* +%= 1;
+}
+
+fn refreshCachedAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) void {
+    const cache_sid = g_sid_nnm_cache orelse return;
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const node_obj = nodeCacheGet(node) orelse return;
+    const cached = node_obj.getProperty(cache_sid) orelse return;
+    if (!cached.isObject()) return;
+    refreshAttributesMap(vm, cached.asJsObject(), elem);
 }
 
 // Interned string IDs for hidden NamedNodeMap + Attr-owner slots.
@@ -845,14 +867,36 @@ pub fn deinit() void {
     }
     g_listeners.deinit(g_alloc);
     g_listeners = .empty;
+    g_abort_hooks.deinit(g_alloc);
+    g_abort_hooks = .empty;
+    for (g_mo_list.items) |*obs| {
+        obs.targets.deinit(g_alloc);
+        obs.pending.deinit(g_alloc);
+    }
+    g_mo_list.deinit(g_alloc);
+    g_mo_list = .empty;
+    g_mo_pending = false;
+    g_mo_vm = null;
     if (g_scroll_map) |*m| {
         m.deinit();
         g_scroll_map = null;
     }
+    if (ns_info_map) |*m| {
+        m.deinit(g_alloc);
+        ns_info_map = null;
+    }
+    if (g_pi_target_map) |*m| {
+        m.deinit(g_alloc);
+        g_pi_target_map = null;
+    }
+    g_node_cache.deinit(g_alloc);
+    g_node_cache = .{};
     // Attr wrapper cache: entries point to JsObjects owned by the VM arena,
     // so we only need to drop the HashMap's own storage here.
     g_attr_wrappers.deinit(g_alloc);
     g_attr_wrappers = .{};
+    g_custom_validity.deinit(g_alloc);
+    g_custom_validity = .{};
     // NamedNodeMap per-element attribute version counter (DOM §4.9.2 live semantics).
     g_elem_attr_ver.deinit(g_alloc);
     g_elem_attr_ver = .{};
@@ -1157,7 +1201,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
             const proto_name = entry.key_ptr.*;
             var skip = false;
             for (unfrozen_html_protos) |n| {
-                if (std.mem.eql(u8, proto_name, n)) { skip = true; break; }
+                if (std.mem.eql(u8, proto_name, n)) {
+                    skip = true;
+                    break;
+                }
             }
             if (skip) continue;
             try entry.value_ptr.*.freeze(vm.allocator);
@@ -1544,47 +1591,49 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // CompositionEvent.prototype → UIEvent.prototype (UI Events §3.6)
     const comp_proto = try vm.createObj(.{});
     comp_proto.prototype = ui_proto;
-    try registerEventCtor(vm, "CompositionEvent", comp_proto, proto_sid);
+    try vm.registerNativeMethod(comp_proto, "initCompositionEvent", &nativeInitDataUIEvent);
+    try registerEventCtorWithFn(vm, "CompositionEvent", comp_proto, proto_sid, &nativeDataUIEventConstructor);
 
     // TextEvent.prototype → UIEvent.prototype (legacy, DOM §5.1)
     const text_ev_proto = try vm.createObj(.{});
     text_ev_proto.prototype = ui_proto;
-    try registerEventCtor(vm, "TextEvent", text_ev_proto, proto_sid);
+    try vm.registerNativeMethod(text_ev_proto, "initTextEvent", &nativeInitDataUIEvent);
+    try registerEventCtorWithFn(vm, "TextEvent", text_ev_proto, proto_sid, &nativeDataUIEventConstructor);
 
     // DragEvent.prototype → MouseEvent.prototype (HTML §6.11.5)
     const drag_proto = try vm.createObj(.{});
     drag_proto.prototype = mouse_proto;
-    try registerEventCtor(vm, "DragEvent", drag_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "DragEvent", drag_proto, proto_sid, &nativeDragEventConstructor);
 
     // MessageEvent.prototype → Event.prototype (HTML §9.2.3)
     const msg_proto = try vm.createObj(.{});
     msg_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "MessageEvent", msg_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "MessageEvent", msg_proto, proto_sid, &nativeMessageEventConstructor);
 
     // HashChangeEvent.prototype → Event.prototype (HTML §8.8.2)
     const hash_proto = try vm.createObj(.{});
     hash_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "HashChangeEvent", hash_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "HashChangeEvent", hash_proto, proto_sid, &nativeHashChangeEventConstructor);
 
     // StorageEvent.prototype → Event.prototype (HTML §12.2.3)
     const storage_proto = try vm.createObj(.{});
     storage_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "StorageEvent", storage_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "StorageEvent", storage_proto, proto_sid, &nativeStorageEventConstructor);
 
     // BeforeUnloadEvent.prototype → Event.prototype (HTML §8.1.5.3)
     const bu_proto = try vm.createObj(.{});
     bu_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "BeforeUnloadEvent", bu_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "BeforeUnloadEvent", bu_proto, proto_sid, &nativeBeforeUnloadEventConstructor);
 
     // DeviceMotionEvent.prototype → Event.prototype (DeviceOrientation §4.1)
     const dm_proto = try vm.createObj(.{});
     dm_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "DeviceMotionEvent", dm_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "DeviceMotionEvent", dm_proto, proto_sid, &nativeDeviceMotionEventConstructor);
 
     // DeviceOrientationEvent.prototype → Event.prototype (DeviceOrientation §4.2)
     const do_proto = try vm.createObj(.{});
     do_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "DeviceOrientationEvent", do_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "DeviceOrientationEvent", do_proto, proto_sid, &nativeDeviceOrientationEventConstructor);
 
     // MutationEvent.prototype → Event.prototype (legacy DOM Events L3 §5)
     // Default attributes exposed on the prototype so `new MutationEvent()`
@@ -1598,11 +1647,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try mut_proto.setProperty(vm.allocator, try vm.pool.intern("newValue"), JsValue.initString(try vm.pool.intern("")));
     try mut_proto.setProperty(vm.allocator, try vm.pool.intern("attrName"), JsValue.initString(try vm.pool.intern("")));
     try mut_proto.setProperty(vm.allocator, try vm.pool.intern("attrChange"), JsValue.initNumber(0));
+    try vm.registerNativeMethod(mut_proto, "initMutationEvent", &nativeInitMutationEvent);
     // attrChange constants (DOM Events L3 §5) — required by dom/nodes/attributes.html
     try mut_proto.setProperty(vm.allocator, try vm.pool.intern("MODIFICATION"), JsValue.initNumber(1));
     try mut_proto.setProperty(vm.allocator, try vm.pool.intern("ADDITION"), JsValue.initNumber(2));
     try mut_proto.setProperty(vm.allocator, try vm.pool.intern("REMOVAL"), JsValue.initNumber(3));
-    try registerEventCtor(vm, "MutationEvent", mut_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "MutationEvent", mut_proto, proto_sid, &nativeMutationEventConstructor);
     // Mirror the constants onto the constructor itself for MutationEvent.MODIFICATION access
     const mut_ctor_val = vm.globals.get(try vm.pool.intern("MutationEvent")) orelse unreachable;
     const mut_ctor_obj = mut_ctor_val.asJsObject();
@@ -1618,19 +1668,22 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try prog_proto.setProperty(vm.allocator, try vm.pool.intern("lengthComputable"), JsValue.initBool(false));
     try prog_proto.setProperty(vm.allocator, try vm.pool.intern("loaded"), JsValue.initNumber(0));
     try prog_proto.setProperty(vm.allocator, try vm.pool.intern("total"), JsValue.initNumber(0));
-    try registerEventCtor(vm, "ProgressEvent", prog_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "ProgressEvent", prog_proto, proto_sid, &nativeProgressEventConstructor);
 
     // TouchEvent.prototype → UIEvent.prototype (Touch Events §5)
     // touches/targetTouches/changedTouches default to empty TouchList-like arrays.
     const touch_proto = try vm.createObj(.{});
     touch_proto.prototype = ui_proto;
     const empty_touches = try vm.createObj(.{ .obj_type = .array });
+    empty_touches.data = .{ .array = .empty };
     const empty_target_touches = try vm.createObj(.{ .obj_type = .array });
+    empty_target_touches.data = .{ .array = .empty };
     const empty_changed_touches = try vm.createObj(.{ .obj_type = .array });
+    empty_changed_touches.data = .{ .array = .empty };
     try touch_proto.setProperty(vm.allocator, try vm.pool.intern("touches"), JsValue.initObject(empty_touches));
     try touch_proto.setProperty(vm.allocator, try vm.pool.intern("targetTouches"), JsValue.initObject(empty_target_touches));
     try touch_proto.setProperty(vm.allocator, try vm.pool.intern("changedTouches"), JsValue.initObject(empty_changed_touches));
-    try registerEventCtor(vm, "TouchEvent", touch_proto, proto_sid);
+    try registerEventCtorWithFn(vm, "TouchEvent", touch_proto, proto_sid, &nativeTouchEventConstructor);
 
     // ── MutationObserver constructor (DOM §4.3) ──
     const mo_ctor = try vm.createObj(.{ .obj_type = .native_function });
@@ -2054,9 +2107,9 @@ fn autocompleteCategoryFor(field_lc: []const u8) ?AutocompleteCategory {
     if (std.mem.eql(u8, field_lc, "on") or std.mem.eql(u8, field_lc, "off")) return .normal;
     // Contact category — phone/email/impp.
     const contact_names = [_][]const u8{
-        "tel",          "tel-country-code", "tel-national", "tel-area-code",
-        "tel-local",    "tel-local-prefix", "tel-local-suffix", "tel-extension",
-        "email",        "impp",
+        "tel",       "tel-country-code", "tel-national",     "tel-area-code",
+        "tel-local", "tel-local-prefix", "tel-local-suffix", "tel-extension",
+        "email",     "impp",
     };
     for (contact_names) |c| {
         if (std.mem.eql(u8, c, field_lc)) return .contact;
@@ -2065,21 +2118,21 @@ fn autocompleteCategoryFor(field_lc: []const u8) ?AutocompleteCategory {
     if (std.mem.eql(u8, "webauthn", field_lc)) return .credential;
     // Normal category — everything else from the spec list.
     const normal_names = [_][]const u8{
-        "name",                   "honorific-prefix",     "given-name",
-        "additional-name",        "family-name",          "honorific-suffix",
-        "nickname",               "username",             "new-password",
-        "current-password",       "one-time-code",        "organization-title",
-        "organization",           "street-address",       "address-line1",
-        "address-line2",          "address-line3",        "address-level4",
-        "address-level3",         "address-level2",       "address-level1",
-        "country",                "country-name",         "postal-code",
-        "cc-name",                "cc-given-name",        "cc-additional-name",
-        "cc-family-name",         "cc-number",            "cc-exp",
-        "cc-exp-month",           "cc-exp-year",          "cc-csc",
-        "cc-type",                "transaction-currency", "transaction-amount",
-        "language",               "bday",                 "bday-day",
-        "bday-month",             "bday-year",            "sex",
-        "url",                    "photo",
+        "name",             "honorific-prefix",     "given-name",
+        "additional-name",  "family-name",          "honorific-suffix",
+        "nickname",         "username",             "new-password",
+        "current-password", "one-time-code",        "organization-title",
+        "organization",     "street-address",       "address-line1",
+        "address-line2",    "address-line3",        "address-level4",
+        "address-level3",   "address-level2",       "address-level1",
+        "country",          "country-name",         "postal-code",
+        "cc-name",          "cc-given-name",        "cc-additional-name",
+        "cc-family-name",   "cc-number",            "cc-exp",
+        "cc-exp-month",     "cc-exp-year",          "cc-csc",
+        "cc-type",          "transaction-currency", "transaction-amount",
+        "language",         "bday",                 "bday-day",
+        "bday-month",       "bday-year",            "sex",
+        "url",              "photo",
     };
     for (normal_names) |c| {
         if (std.mem.eql(u8, c, field_lc)) return .normal;
@@ -2253,7 +2306,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
             return true;
         },
         .long => {
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             const i32v: i32 = if (std.math.isFinite(n)) blk: {
                 if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
                 if (n < @as(f64, std.math.minInt(i32))) break :blk std.math.minInt(i32);
@@ -2265,7 +2318,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
             return true;
         },
         .unsigned_long => {
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             // §2.6.2 unsigned long setter: negative / non-finite ⇒ default.
             const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
                 if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
@@ -2297,7 +2350,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
             // "unrestricted double" vs "double"; our rows use the finite
             // form so reject non-finite as an early return (leaves existing
             // content attribute untouched, matching browser behavior).
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             if (!std.math.isFinite(n)) return true;
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{d}", .{n}) catch "0";
@@ -2307,7 +2360,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
         .limited_long => {
             // HTML §2.6.2 "limited long" setter: throw IndexSizeError for
             // negative values (WebIDL §3.2.4.1 "limited to non-negative numbers").
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             const i32v: i32 = if (std.math.isFinite(n)) blk: {
                 if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
                 if (n < @as(f64, std.math.minInt(i32))) break :blk std.math.minInt(i32);
@@ -2325,7 +2378,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
         .limited_unsigned_long => {
             // HTML §2.6.2 "limited unsigned long" setter: throw IndexSizeError
             // for zero (value must be > 0). Non-finite → default.
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
                 if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
                 break :blk @intFromFloat(@trunc(n));
@@ -2342,7 +2395,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
         .limited_unsigned_long_with_fallback => {
             // HTML §2.6.2 "limited unsigned long with fallback" setter:
             // if value is 0 or out-of-range, use default_int instead of throwing.
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             const raw: i64 = if (!std.math.isFinite(n) or n < 0) 0 else blk: {
                 if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
                 break :blk @intFromFloat(@trunc(n));
@@ -2356,7 +2409,7 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
         .clamped_unsigned_long => {
             // HTML §2.6.2 "clamped unsigned long" setter: same as unsigned_long
             // setter (writes value as-is; clamping only applies on get).
-            const n = val.toNumber();
+            const n = argToNumber(vm, val);
             const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
                 if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
                 break :blk @intFromFloat(@trunc(n));
@@ -2369,21 +2422,8 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
     }
 }
 
-/// Minimal ECMAScript ToString for DOMString setters. Covers string,
-/// number, boolean, null, undefined. Falls back to "[object Object]" for
-/// objects (spec-correct for the primitive path we care about here — full
-/// ToPrimitive coercion lives in kotori/vm.zig).
-fn valueToString(vm: *VM, val: JsValue, buf: []u8) []const u8 {
-    if (val.isString()) {
-        return vm.pool.get(val.asStringId()) orelse "";
-    }
-    if (val.isBool()) return if (val.asBool()) "true" else "false";
-    if (val.isNumber()) {
-        return std.fmt.bufPrint(buf, "{d}", .{val.toNumber()}) catch "0";
-    }
-    if (val.isNull()) return "null";
-    if (val.isUndefined()) return "undefined";
-    return "[object Object]";
+fn valueToString(vm: *VM, val: JsValue, _: []u8) []const u8 {
+    return argToString(vm, val);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2512,17 +2552,366 @@ fn walkCollectFormControls(
 }
 
 fn nativeRadioNodeListItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-    _ = VM.vmFromCtx(ctx);
+    const vm = VM.vmFromCtx(ctx);
     if (!this.isObject()) return JsValue.null_val;
     const arr_obj = this.asJsObject();
     if (arr_obj.obj_type != .array) return JsValue.null_val;
     const items = arr_obj.data.array.items;
     if (args.len == 0) return JsValue.null_val;
-    const idx_f = args[0].toNumber();
-    if (!std.math.isFinite(idx_f) or idx_f < 0) return JsValue.null_val;
-    const idx: usize = @intFromFloat(idx_f);
+    const idx: usize = @intCast(toUint32(argToNumber(vm, args[0])));
     if (idx >= items.len) return JsValue.null_val;
     return items[idx];
+}
+
+fn buildRadioNodeList(vm: *VM, matches: []const *lxb.lxb_dom_element_t) ?JsValue {
+    const arr = vm.createObj(.{ .obj_type = .array }) catch return null;
+    arr.data = .{ .array = .empty };
+    for (matches) |m| {
+        const wrapped = wrapNode(vm, @ptrCast(m)) orelse JsValue.null_val;
+        arr.data.array.append(vm.allocator, wrapped) catch break;
+    }
+    const item_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+    item_fn.data = .{ .native_fn = &nativeRadioNodeListItem };
+    const item_sid = vm.pool.intern("item") catch return null;
+    arr.setProperty(vm.allocator, item_sid, JsValue.initObject(item_fn)) catch {};
+    if (vm.pool.intern("RadioNodeList") catch null) |rnl_id| {
+        if (vm.globals.get(rnl_id)) |rnl_val| {
+            if (rnl_val.isObject()) {
+                const rnl_ctor = rnl_val.asJsObject();
+                if (vm.pool.intern("prototype") catch null) |proto_id| {
+                    if (rnl_ctor.getProperty(proto_id)) |proto_val| {
+                        if (proto_val.isObject()) {
+                            arr.prototype = proto_val.asJsObject();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return JsValue.initObject(arr);
+}
+
+fn collectFormControlsForForm(
+    vm: *VM,
+    form_node: *lxb.lxb_dom_node_t,
+    controls: *std.ArrayListUnmanaged(*lxb.lxb_dom_element_t),
+) bool {
+    var root: *lxb.lxb_dom_node_t = form_node;
+    while (nodeParent(root)) |p| root = p;
+    walkCollectFormControls(vm.allocator, root, form_node, controls) catch return false;
+    return true;
+}
+
+fn nativeFormElementsItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.null_val;
+    const arr_obj = this.asJsObject();
+    if (arr_obj.obj_type != .array) return JsValue.null_val;
+    const items = arr_obj.data.array.items;
+    if (args.len == 0) return JsValue.null_val;
+    const idx: usize = @intCast(toUint32(argToNumber(vm, args[0])));
+    if (idx >= items.len) return JsValue.null_val;
+    return items[idx];
+}
+
+fn nativeFormElementsNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !this.isObject()) return JsValue.null_val;
+    const arr_obj = this.asJsObject();
+    if (arr_obj.obj_type != .array) return JsValue.null_val;
+    const name = argToString(vm, args[0]);
+    if (name.len == 0) return JsValue.null_val;
+
+    var matches: std.ArrayListUnmanaged(*lxb.lxb_dom_element_t) = .empty;
+    defer matches.deinit(vm.allocator);
+    for (arr_obj.data.array.items) |item| {
+        if (!item.isObject()) continue;
+        const obj = item.asJsObject();
+        if (obj.obj_type != .dom_node) continue;
+        const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(obj.data.dom_node));
+        if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        if (nsIdToUri(elem.node.ns)) |ns| {
+            if (!eql(ns, "http://www.w3.org/1999/xhtml")) continue;
+        }
+        var id_len: usize = 0;
+        const id_ptr = dom_b.lxb_dom_element_get_attribute(elem, "id", 2, &id_len);
+        const id_match = if (id_ptr) |p| eql(p[0..id_len], name) else false;
+        var nm_len: usize = 0;
+        const nm_ptr = dom_b.lxb_dom_element_get_attribute(elem, "name", 4, &nm_len);
+        const nm_match = if (nm_ptr) |p| eql(p[0..nm_len], name) else false;
+        if (id_match or nm_match) {
+            matches.append(vm.allocator, elem) catch break;
+        }
+    }
+
+    if (matches.items.len == 0) return JsValue.null_val;
+    if (matches.items.len == 1) return wrapNode(vm, @ptrCast(matches.items[0])) orelse JsValue.null_val;
+    return buildRadioNodeList(vm, matches.items) orelse JsValue.null_val;
+}
+
+fn buildFormElementsCollection(vm: *VM, form_node: *lxb.lxb_dom_node_t) ?JsValue {
+    var controls: std.ArrayListUnmanaged(*lxb.lxb_dom_element_t) = .empty;
+    defer controls.deinit(vm.allocator);
+    if (!collectFormControlsForForm(vm, form_node, &controls)) return null;
+
+    const arr = vm.createObj(.{ .obj_type = .array }) catch return null;
+    arr.prototype = vm.array_proto;
+    arr.data = .{ .array = .empty };
+    for (controls.items) |elem| {
+        if (isInputTypeImage(elem)) continue;
+        arr.data.array.append(vm.allocator, wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val) catch break;
+    }
+    const item_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+    item_fn.data = .{ .native_fn = &nativeFormElementsItem };
+    if (vm.pool.intern("item") catch null) |item_sid| {
+        arr.setProperty(vm.allocator, item_sid, JsValue.initObject(item_fn)) catch {};
+    }
+    const named_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+    named_fn.data = .{ .native_fn = &nativeFormElementsNamedItem };
+    if (vm.pool.intern("namedItem") catch null) |named_sid| {
+        arr.setProperty(vm.allocator, named_sid, JsValue.initObject(named_fn)) catch {};
+    }
+    if (vm.pool.intern("HTMLFormControlsCollection") catch null) |hfcc_id| {
+        if (vm.globals.get(hfcc_id)) |hfcc_val| {
+            if (hfcc_val.isObject()) {
+                const hfcc_ctor = hfcc_val.asJsObject();
+                if (vm.pool.intern("prototype") catch null) |proto_id| {
+                    if (hfcc_ctor.getProperty(proto_id)) |proto_val| {
+                        if (proto_val.isObject()) arr.prototype = proto_val.asJsObject();
+                    }
+                }
+            }
+        }
+    }
+    return JsValue.initObject(arr);
+}
+
+fn formElementsLength(vm: *VM, form_node: *lxb.lxb_dom_node_t) ?JsValue {
+    var controls: std.ArrayListUnmanaged(*lxb.lxb_dom_element_t) = .empty;
+    defer controls.deinit(vm.allocator);
+    if (!collectFormControlsForForm(vm, form_node, &controls)) return null;
+
+    var count: usize = 0;
+    for (controls.items) |elem| {
+        if (!isInputTypeImage(elem)) count += 1;
+    }
+    return JsValue.initNumber(@floatFromInt(count));
+}
+
+fn elementLocalName(elem: *lxb.lxb_dom_element_t) []const u8 {
+    var ln_len: usize = 0;
+    const ln = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return "";
+    return ln[0..ln_len];
+}
+
+fn hasElementAttr(elem: *lxb.lxb_dom_element_t, name: []const u8) bool {
+    return dom_b.lxb_dom_element_has_attribute(elem, name.ptr, name.len);
+}
+
+fn inputType(elem: *lxb.lxb_dom_element_t) []const u8 {
+    var len: usize = 0;
+    const ptr = dom_b.lxb_dom_element_get_attribute(elem, "type", 4, &len) orelse return "text";
+    return ptr[0..len];
+}
+
+fn elementValue(elem: *lxb.lxb_dom_element_t) []const u8 {
+    var len: usize = 0;
+    const ptr = dom_b.lxb_dom_element_get_attribute(elem, "value", 5, &len) orelse return "";
+    return ptr[0..len];
+}
+
+fn isBarredFromConstraintValidation(elem: *lxb.lxb_dom_element_t) bool {
+    const ln = elementLocalName(elem);
+    if (hasElementAttr(elem, "disabled")) return true;
+    if (eql(ln, "input")) {
+        const ty = inputType(elem);
+        return asciiEqualIgnoreCase(ty, "hidden") or asciiEqualIgnoreCase(ty, "button") or
+            asciiEqualIgnoreCase(ty, "reset") or asciiEqualIgnoreCase(ty, "image");
+    }
+    if (eql(ln, "button")) {
+        const ty = inputType(elem);
+        return asciiEqualIgnoreCase(ty, "button") or asciiEqualIgnoreCase(ty, "reset");
+    }
+    return false;
+}
+
+fn constraintWillValidate(node: *lxb.lxb_dom_node_t) bool {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const ln = elementLocalName(elem);
+    if (!(eql(ln, "input") or eql(ln, "select") or eql(ln, "textarea") or eql(ln, "button")))
+        return false;
+    return !isBarredFromConstraintValidation(elem);
+}
+
+fn constraintValueMissing(node: *lxb.lxb_dom_node_t) bool {
+    if (!constraintWillValidate(node)) return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    if (!hasElementAttr(elem, "required")) return false;
+    return std.mem.trim(u8, elementValue(elem), " \t\r\n").len == 0;
+}
+
+fn constraintCustomError(node: *lxb.lxb_dom_node_t) bool {
+    if (g_custom_validity.get(@intFromPtr(node))) |sid| {
+        return sid != 0;
+    }
+    return false;
+}
+
+fn constraintIsValid(node: *lxb.lxb_dom_node_t) bool {
+    return !constraintValueMissing(node) and !constraintCustomError(node);
+}
+
+fn buildValidityState(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
+    const value_missing = constraintValueMissing(node);
+    const custom_error = constraintCustomError(node);
+    const valid = !value_missing and !custom_error;
+    const obj = vm.createObj(.{}) catch return null;
+    const false_names = [_][]const u8{
+        "typeMismatch",   "patternMismatch", "tooLong",      "tooShort",
+        "rangeUnderflow", "rangeOverflow",   "stepMismatch", "badInput",
+    };
+    for (false_names) |prop| {
+        obj.setProperty(vm.allocator, vm.pool.intern(prop) catch return null, JsValue.initBool(false)) catch {};
+    }
+    obj.setProperty(vm.allocator, vm.pool.intern("valueMissing") catch return null, JsValue.initBool(value_missing)) catch {};
+    obj.setProperty(vm.allocator, vm.pool.intern("customError") catch return null, JsValue.initBool(custom_error)) catch {};
+    obj.setProperty(vm.allocator, vm.pool.intern("valid") catch return null, JsValue.initBool(valid)) catch {};
+    return JsValue.initObject(obj);
+}
+
+fn constraintValidationMessage(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
+    if (g_custom_validity.get(@intFromPtr(node))) |sid| {
+        if (sid != 0) return JsValue.initString(sid);
+    }
+    if (constraintValueMissing(node)) {
+        return JsValue.initString(vm.pool.intern("Please fill out this field.") catch return JsValue.null_val);
+    }
+    return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+}
+
+fn makeValidationNative(vm: *VM, f: kotori.JsObject.NativeFn) ?JsValue {
+    const fn_obj = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+    fn_obj.data = .{ .native_fn = f };
+    return JsValue.initObject(fn_obj);
+}
+
+fn dispatchInvalidEvent(vm: *VM, node: *lxb.lxb_dom_node_t) void {
+    const ev = vm.createObj(.{}) catch return;
+    ev.setProperty(vm.allocator, vm.pool.intern("type") catch return, JsValue.initString(vm.pool.intern("invalid") catch return)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("bubbles") catch return, JsValue.initBool(false)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("cancelable") catch return, JsValue.initBool(true)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("defaultPrevented") catch return, JsValue.initBool(false)) catch {};
+    const this_val = wrapNode(vm, node) orelse return;
+    _ = nativeDispatchEvent(@ptrCast(vm), this_val, &.{JsValue.initObject(ev)}) catch {};
+}
+
+fn checkControlValidity(vm: *VM, node: *lxb.lxb_dom_node_t) bool {
+    if (constraintIsValid(node)) return true;
+    dispatchInvalidEvent(vm, node);
+    return false;
+}
+
+fn checkFormValidity(vm: *VM, form_node: *lxb.lxb_dom_node_t) bool {
+    var controls: std.ArrayListUnmanaged(*lxb.lxb_dom_element_t) = .empty;
+    defer controls.deinit(vm.allocator);
+    if (!collectFormControlsForForm(vm, form_node, &controls)) return true;
+
+    var ok = true;
+    for (controls.items) |elem| {
+        const n: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        if (!constraintWillValidate(n)) continue;
+        if (!checkControlValidity(vm, n)) ok = false;
+    }
+    return ok;
+}
+
+fn nativeCheckValidity(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    _ = args;
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.initBool(true);
+    if (isHtmlForm(node)) return JsValue.initBool(checkFormValidity(vm, node));
+    return JsValue.initBool(checkControlValidity(vm, node));
+}
+
+fn nativeReportValidity(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    return nativeCheckValidity(ctx, this, args);
+}
+
+fn nativeSetCustomValidity(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    var buf: [64]u8 = undefined;
+    const msg = if (args.len > 0) valueToString(vm, args[0], &buf) else "";
+    const key = @intFromPtr(node);
+    if (msg.len == 0) {
+        _ = g_custom_validity.remove(key);
+    } else {
+        const sid = try vm.pool.intern(msg);
+        try g_custom_validity.put(vm.allocator, key, sid);
+    }
+    return JsValue.undefined_val;
+}
+
+fn isSubmitButtonNode(node: *lxb.lxb_dom_node_t) bool {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const ln = elementLocalName(elem);
+    const ty = inputType(elem);
+    if (eql(ln, "button")) {
+        return !(asciiEqualIgnoreCase(ty, "reset") or asciiEqualIgnoreCase(ty, "button"));
+    }
+    if (eql(ln, "input")) {
+        return asciiEqualIgnoreCase(ty, "submit") or asciiEqualIgnoreCase(ty, "image");
+    }
+    return false;
+}
+
+fn dispatchSubmitEvent(vm: *VM, form_node: *lxb.lxb_dom_node_t, cancelable: bool, submitter: JsValue) bool {
+    const ev = vm.createObj(.{}) catch return true;
+    ev.setProperty(vm.allocator, vm.pool.intern("type") catch return true, JsValue.initString(vm.pool.intern("submit") catch return true)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("bubbles") catch return true, JsValue.initBool(true)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("cancelable") catch return true, JsValue.initBool(cancelable)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("defaultPrevented") catch return true, JsValue.initBool(false)) catch {};
+    ev.setProperty(vm.allocator, vm.pool.intern("submitter") catch return true, submitter) catch {};
+    const this_val = wrapNode(vm, form_node) orelse return true;
+    const result = nativeDispatchEvent(@ptrCast(vm), this_val, &.{JsValue.initObject(ev)}) catch return true;
+    return !result.isBool() or result.asBool();
+}
+
+fn nativeFormSubmit(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    _ = args;
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    if (!isHtmlForm(node)) return error.TypeError;
+    if (!sr.isShadowInclusiveConnected(node)) return JsValue.undefined_val;
+    _ = dispatchSubmitEvent(vm, node, false, JsValue.null_val);
+    return JsValue.undefined_val;
+}
+
+fn nativeFormRequestSubmit(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const form_node = getThisNode(this) orelse return JsValue.undefined_val;
+    if (!isHtmlForm(form_node)) return error.TypeError;
+    if (!sr.isShadowInclusiveConnected(form_node)) return JsValue.undefined_val;
+
+    var submitter = JsValue.null_val;
+    if (args.len > 0 and !args[0].isUndefined() and !args[0].isNull()) {
+        const submitter_node = getThisNode(args[0]) orelse return error.TypeError;
+        if (!isSubmitButtonNode(submitter_node)) return error.TypeError;
+        if (nodeType(submitter_node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return error.TypeError;
+        const submitter_elem: *lxb.lxb_dom_element_t = @ptrCast(submitter_node);
+        if (formOwnerOf(submitter_elem) != form_node) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+            return JsValue.undefined_val;
+        }
+        submitter = args[0];
+    }
+
+    if (!checkFormValidity(vm, form_node)) return JsValue.undefined_val;
+    _ = dispatchSubmitEvent(vm, form_node, true, submitter);
+    return JsValue.undefined_val;
 }
 
 fn formNamedItemFallback(
@@ -2649,34 +3038,7 @@ fn formNamedItemFallback(
     // `instanceof NodeList` and `instanceof RadioNodeList` succeed (HTML
     // §4.10.21.3). Supports `radio[i]`, `radio.length`, `radio.item(i)`;
     // calling `radio()` throws TypeError (not callable).
-    const arr = vm.createObj(.{ .obj_type = .array }) catch return null;
-    arr.data = .{ .array = .empty };
-    for (matches.items) |m| {
-        const wrapped = wrapNode(vm, @ptrCast(m)) orelse JsValue.null_val;
-        arr.data.array.append(vm.allocator, wrapped) catch break;
-    }
-    const item_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
-    item_fn.data = .{ .native_fn = &nativeRadioNodeListItem };
-    const item_sid = vm.pool.intern("item") catch return null;
-    arr.setProperty(vm.allocator, item_sid, JsValue.initObject(item_fn)) catch {};
-    // Brand as RadioNodeList: arr.[[Prototype]] = RadioNodeList.prototype.
-    // The runtime polyfill sets RadioNodeList.prototype.[[Prototype]] =
-    // NodeList.prototype, so `instanceof NodeList` also succeeds.
-    if (vm.pool.intern("RadioNodeList") catch null) |rnl_id| {
-        if (vm.globals.get(rnl_id)) |rnl_val| {
-            if (rnl_val.isObject()) {
-                const rnl_ctor = rnl_val.asJsObject();
-                if (vm.pool.intern("prototype") catch null) |proto_id| {
-                    if (rnl_ctor.getProperty(proto_id)) |proto_val| {
-                        if (proto_val.isObject()) {
-                            arr.prototype = proto_val.asJsObject();
-                        }
-                    }
-                }
-            }
-        }
-    }
-    const result = JsValue.initObject(arr);
+    const result = buildRadioNodeList(vm, matches.items) orelse return null;
     installFormGetterOwnProp(vm, form_obj, name_sid, result, false);
     return result;
 }
@@ -3163,6 +3525,21 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return createStyleObj(vm, @ptrCast(node));
     }
 
+    // HTML constraint validation. The full runtime installs a JS polyfill,
+    // but kotori_dom unit tests initialise only native DOM builtins.
+    if (eql(name, "willValidate")) return JsValue.initBool(constraintWillValidate(node));
+    if (eql(name, "validity")) return buildValidityState(vm, node) orelse JsValue.undefined_val;
+    if (eql(name, "validationMessage")) return constraintValidationMessage(vm, node);
+    if (eql(name, "checkValidity")) return makeValidationNative(vm, &nativeCheckValidity);
+    if (eql(name, "reportValidity")) return makeValidationNative(vm, &nativeReportValidity);
+    if (eql(name, "setCustomValidity")) return makeValidationNative(vm, &nativeSetCustomValidity);
+    if (eql(name, "form") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        if (isListedFormControl(elem)) {
+            return if (formOwnerOf(elem)) |form_node| wrapNode(vm, form_node) else JsValue.null_val;
+        }
+    }
+
     // CSSOM View §6.5: scrollTop / scrollLeft
     if (eql(name, "scrollTop")) {
         const pos = ensureScrollMap().get(@intFromPtr(node)) orelse return JsValue.initNumber(0);
@@ -3278,6 +3655,10 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // from the select polyfill, etc.) can still be overridden by a matching
     // named child. No allocation when the form has no controls.
     if (isHtmlForm(node)) {
+        if (eql(name, "submit")) return makeValidationNative(vm, &nativeFormSubmit);
+        if (eql(name, "requestSubmit")) return makeValidationNative(vm, &nativeFormRequestSubmit);
+        if (eql(name, "elements")) return buildFormElementsCollection(vm, node);
+        if (eql(name, "length")) return formElementsLength(vm, node);
         if (formNamedItemFallback(vm, obj, node, name)) |v| return v;
     }
 
@@ -3362,14 +3743,14 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
     }
     // CSSOM View §6.5: scrollTop / scrollLeft setters (clamp to ≥ 0)
     if (eql(name, "scrollTop")) {
-        const v = @max(0.0, val.toNumber());
+        const v = @max(0.0, argToNumber(vm, val));
         const key = @intFromPtr(node);
         const cur = ensureScrollMap().get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
         ensureScrollMap().put(key, .{ .top = v, .left = cur.left }) catch {};
         return true;
     }
     if (eql(name, "scrollLeft")) {
-        const v = @max(0.0, val.toNumber());
+        const v = @max(0.0, argToNumber(vm, val));
         const key = @intFromPtr(node);
         const cur = ensureScrollMap().get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
         ensureScrollMap().put(key, .{ .top = cur.top, .left = v }) catch {};
@@ -3411,21 +3792,16 @@ fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // coerces correctly per WPT tests (e.g.
     // css/cssom/getComputedStyle-detached-subtree.html).
     if (eql(name, "length")) {
+        const elem_marker_sid_len = vm.pool.intern("__element") catch null;
+        if (elem_marker_sid_len) |em| {
+            if (obj.getProperty(em) != null) return JsValue.initNumber(0);
+        }
         var attr_len_l: usize = 0;
         const style_l = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len_l)) |p|
             p[0..attr_len_l]
         else
             "";
-        var count: usize = 0;
-        var rest = style_l;
-        while (rest.len > 0) {
-            const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
-            const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
-            if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
-            if (decl.len == 0) continue;
-            if (std.mem.indexOfScalar(u8, decl, ':') != null) count += 1;
-        }
-        return JsValue.initNumber(@floatFromInt(count));
+        return JsValue.initNumber(@floatFromInt(countCssProps(style_l)));
     }
 
     // Convert camelCase → kebab-case
@@ -3481,22 +3857,18 @@ fn domStyleSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool
     }
 
     if (eql(name, "cssText")) {
-        if (val.isString()) {
-            if (vm.pool.get(val.asStringId())) |s| {
-                _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
-                setDomDirty();
-            }
-        }
+        const s = argToString(vm, val);
+        _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
+        setDomDirty();
         return true;
     }
 
     var kebab_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(name, &kebab_buf);
+    if (css_prop.len == 0) return true;
 
-    const new_val_str: []const u8 = if (val.isString())
-        (vm.pool.get(val.asStringId()) orelse "")
-    else
-        "";
+    const new_val_str = argToString(vm, val);
+    if (hasImportantSuffix(new_val_str)) return true;
 
     // CSSOM §6.7.2: invalid values must leave the inline style attribute
     // unchanged. Return `true` so the assignment evaluates successfully
@@ -4379,8 +4751,7 @@ fn nativeCSSDeclSupports(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
 
     if (args.len == 1) {
         // Condition form: "property: value" — optionally wrapped in parens.
-        if (!args[0].isString()) return JsValue.initBool(false);
-        const cond_in = vm.pool.get(args[0].asStringId()) orelse "";
+        const cond_in = argToString(vm, args[0]);
         var cond = std.mem.trim(u8, cond_in, " \t\r\n");
         if (cond.len >= 2 and cond[0] == '(' and cond[cond.len - 1] == ')') {
             cond = std.mem.trim(u8, cond[1 .. cond.len - 1], " \t\r\n");
@@ -4396,9 +4767,8 @@ fn nativeCSSDeclSupports(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
         @memcpy(val_buf[0..vn], v_raw[0..vn]);
         val_slice = val_buf[0..vn];
     } else {
-        if (!args[0].isString() or !args[1].isString()) return JsValue.initBool(false);
-        const p_in = vm.pool.get(args[0].asStringId()) orelse "";
-        const v_in = vm.pool.get(args[1].asStringId()) orelse "";
+        const p_in = argToString(vm, args[0]);
+        const v_in = argToString(vm, args[1]);
         if (p_in.len == 0 or v_in.len == 0) return JsValue.initBool(false);
         prop_slice = p_in;
         val_slice = v_in;
@@ -4417,13 +4787,17 @@ fn nativeCSSDeclSupports(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
 /// element's inline style attribute, returning the trimmed value or "".
 fn nativeCSSGetPropertyValue(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString() or !this.isObject()) {
+    if (args.len == 0 or !this.isObject()) {
         return JsValue.initString(try vm.pool.intern(""));
     }
     const obj = this.asJsObject();
     if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem_marker_sid = vm.pool.intern("__element") catch null;
+    if (elem_marker_sid) |em| {
+        if (obj.getProperty(em) != null) return JsValue.initString(try vm.pool.intern(""));
+    }
     const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
-    const prop_in = vm.pool.get(args[0].asStringId()) orelse "";
+    const prop_in = argToString(vm, args[0]);
 
     // Normalize to lowercase kebab-case. getPropertyValue takes the CSS
     // property name (already kebab per CSSOM), but accept camelCase too for
@@ -4459,11 +4833,29 @@ fn nativeCSSGetPropertyValue(ctx: *anyopaque, this: JsValue, args: []const JsVal
 }
 
 /// CSSStyleDeclaration.getPropertyPriority — returns "important" if the
-/// property is marked !important in the inline style, else "". MVP does not
-/// parse !important (inline parser above strips everything at ';'), so
-/// always returns "". This avoids `undefined` when scripts call it.
-fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+/// property is marked !important in the inline style, else "".
+fn nativeCSSGetPropertyPriority(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !this.isObject()) return JsValue.initString(try vm.pool.intern(""));
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem_marker_sid = vm.pool.intern("__element") catch null;
+    if (elem_marker_sid) |em| {
+        if (obj.getProperty(em) != null) return JsValue.initString(try vm.pool.intern(""));
+    }
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const prop_in = argToString(vm, args[0]);
+    var name_buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &name_buf);
+    if (css_prop.len == 0) return JsValue.initString(try vm.pool.intern(""));
+    var attr_len: usize = 0;
+    const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    if (findCssPropImportant(style_str, css_prop)) {
+        return JsValue.initString(try vm.pool.intern("important"));
+    }
     return JsValue.initString(try vm.pool.intern(""));
 }
 
@@ -4472,18 +4864,36 @@ fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue)
 /// the same `updateStyleProp` helper that the `element.style.X = Y` path uses.
 fn nativeCSSSetProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !this.isObject()) return JsValue.undefined_val;
+    if (args.len == 0 or !this.isObject()) return JsValue.undefined_val;
     const obj = this.asJsObject();
     if (obj.obj_type != .dom_style) return JsValue.undefined_val;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
-    const prop_in = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    const prop_in = argToString(vm, args[0]);
     var name_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(prop_in, &name_buf);
-    const new_val = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    if (css_prop.len == 0) return JsValue.undefined_val;
+    const new_val = if (args.len > 1) argToString(vm, args[1]) else "";
+    if (hasImportantSuffix(new_val)) return JsValue.undefined_val;
     // CSSOM §6.7.4: invalid values are ignored (same invariant as the
     // `el.style.X = Y` path above).
     if (validate_fn) |vf| {
         if (!vf(css_prop, new_val)) return JsValue.undefined_val;
+    }
+    var write_val = new_val;
+    var priority_buf: [2048]u8 = undefined;
+    if (args.len > 2) {
+        const priority = argToString(vm, args[2]);
+        if (priority.len > 0 and !std.ascii.eqlIgnoreCase(priority, "important")) {
+            if (new_val.len > 0) return JsValue.undefined_val;
+        } else if (priority.len > 0 and new_val.len > 0) {
+            var end = @min(new_val.len, priority_buf.len);
+            @memcpy(priority_buf[0..end], new_val[0..end]);
+            const suffix = " !important";
+            const suffix_len = @min(suffix.len, priority_buf.len - end);
+            @memcpy(priority_buf[end .. end + suffix_len], suffix[0..suffix_len]);
+            end += suffix_len;
+            write_val = priority_buf[0..end];
+        }
     }
     var attr_len: usize = 0;
     const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
@@ -4491,7 +4901,7 @@ fn nativeCSSSetProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     else
         "";
     var result_buf: [2048]u8 = undefined;
-    const new_style = updateStyleProp(old_style, css_prop, new_val, &result_buf);
+    const new_style = updateStyleProp(old_style, css_prop, write_val, &result_buf);
     _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
     setDomDirty();
     return JsValue.undefined_val;
@@ -4505,9 +4915,10 @@ fn nativeCSSRemoveProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue
     const obj = this.asJsObject();
     if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
     const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
-    const prop_in = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    const prop_in = argToString(vm, args[0]);
     var name_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(prop_in, &name_buf);
+    if (css_prop.len == 0) return JsValue.initString(try vm.pool.intern(""));
     // Capture old value before removal (return value per spec).
     var attr_len: usize = 0;
     const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
@@ -4532,8 +4943,12 @@ fn nativeCSSItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
     if (!this.isObject()) return JsValue.initString(try vm.pool.intern(""));
     const obj = this.asJsObject();
     if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem_marker_sid = vm.pool.intern("__element") catch null;
+    if (elem_marker_sid) |em| {
+        if (obj.getProperty(em) != null) return JsValue.initString(try vm.pool.intern(""));
+    }
     const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
-    const idx: usize = if (args.len > 0) @intFromFloat(@max(0, @trunc(args[0].toNumber()))) else 0;
+    const idx = if (args.len > 0) toUint32(argToNumber(vm, args[0])) else 0;
     var attr_len: usize = 0;
     const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
         p[0..attr_len]
@@ -4544,6 +4959,7 @@ fn nativeCSSItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
     var rest = style_str;
     while (rest.len > 0) {
         // Find next semicolon or end
+        const decl_start = style_str.len - rest.len;
         const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
         const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
         if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
@@ -4551,8 +4967,11 @@ fn nativeCSSItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
         const colon = std.mem.indexOfScalar(u8, decl, ':') orelse continue;
         const prop = std.mem.trim(u8, decl[0..colon], " \t\r\n");
         if (prop.len == 0) continue;
+        var name_buf: [128]u8 = undefined;
+        const css_prop = camelToKebab(prop, &name_buf);
+        if (cssPropSeenBefore(style_str, decl_start, css_prop)) continue;
         if (count == idx) {
-            return JsValue.initString(try vm.pool.intern(prop));
+            return JsValue.initString(try vm.pool.intern(css_prop));
         }
         count += 1;
     }
@@ -4571,16 +4990,7 @@ fn nativeCSSLengthGet(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror
         p[0..attr_len]
     else
         "";
-    var count: usize = 0;
-    var rest = style_str;
-    while (rest.len > 0) {
-        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
-        const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
-        if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
-        if (decl.len == 0) continue;
-        if (std.mem.indexOfScalar(u8, decl, ':') != null) count += 1;
-    }
-    return JsValue.initNumber(@floatFromInt(count));
+    return JsValue.initNumber(@floatFromInt(countCssProps(style_str)));
 }
 
 fn nativeCreateTextNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -4619,12 +5029,15 @@ fn nativeCreateComment(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
 /// only care about CharacterData shape (common.js, Node-contains, Range) keep
 /// passing; tests that inspect `nodeType === 4` specifically still fail — those
 /// are out of scope for the core-regression fix.
-/// Per spec: HTML documents should throw NotSupportedError; for now we return
-/// the comment-backed node unconditionally so in-HTML-testsuite tests that
-/// build a mock xmlDocument from `new Document()` keep working.
+/// Per spec: HTML documents throw NotSupportedError. XML documents still use
+/// the existing comment-backed node until a distinct CDATASection type exists.
 fn nativeCreateCDATASection(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const doc = getDocFromThis(this) orelse return JsValue.null_val;
+    if (!thisIsXmlDoc(vm, this)) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
+        return JsValue.null_val;
+    }
     const data = if (args.len > 0) argToString(vm, args[0]) else "";
     if (std.mem.indexOf(u8, data, "]]>") != null) {
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
@@ -4632,6 +5045,16 @@ fn nativeCreateCDATASection(ctx: *anyopaque, this: JsValue, args: []const JsValu
     }
     const node = dom_b.lxb_dom_document_create_comment(doc, data.ptr, data.len) orelse return JsValue.null_val;
     return wrapNode(vm, node) orelse JsValue.null_val;
+}
+
+fn callStringCoercionMethod(vm: *VM, val: JsValue, method_name: []const u8) ?[]const u8 {
+    if (!val.isObject()) return null;
+    const method_id = vm.pool.intern(method_name) catch return null;
+    const method = val.asJsObject().getProperty(method_id) orelse return null;
+    if (!method.isObject()) return null;
+    const result = vm.callJsFunction(method, val, &.{}) catch return null;
+    if (result.isObject()) return null;
+    return argToString(vm, result);
 }
 
 /// Convert a JS argument to string (String(x) semantics for DOM APIs).
@@ -4651,27 +5074,22 @@ fn argToString(vm: *VM, val: JsValue) []const u8 {
         return vm.pool.get(vm.pool.intern(s) catch return "") orelse "";
     }
     if (val.isBool()) return if (val.asBool()) "true" else "false";
-    // Web IDL DOMString: call object's toString() method
     if (val.isObject()) {
-        const obj = val.asJsObject();
-        const toString_id = vm.pool.intern("toString") catch return "[object Object]";
-        if (obj.getProperty(toString_id)) |ts_val| {
-            if (ts_val.isObject()) {
-                const result = vm.callJsFunction(ts_val, val, &.{}) catch return "[object Object]";
-                if (result.isString()) return vm.pool.get(result.asStringId()) orelse "[object Object]";
-            }
-        }
-        // Check prototype chain
-        if (obj.prototype) |proto| {
-            if (proto.getProperty(toString_id)) |ts_val| {
-                if (ts_val.isObject()) {
-                    const result = vm.callJsFunction(ts_val, val, &.{}) catch return "[object Object]";
-                    if (result.isString()) return vm.pool.get(result.asStringId()) orelse "[object Object]";
-                }
-            }
-        }
+        if (callStringCoercionMethod(vm, val, "toString")) |s| return s;
+        if (callStringCoercionMethod(vm, val, "valueOf")) |s| return s;
     }
     return "[object Object]";
+}
+
+fn argToNumber(vm: *VM, val: JsValue) f64 {
+    if (val.isString() or val.isObject()) {
+        var buf: [64]u8 = undefined;
+        const raw = if (val.isString()) vm.pool.get(val.asStringId()) orelse "" else valueToString(vm, val, &buf);
+        const s = std.mem.trim(u8, raw, " \t\r\n");
+        if (s.len == 0) return 0;
+        return std.fmt.parseFloat(f64, s) catch std.math.nan(f64);
+    }
+    return val.toNumber();
 }
 
 fn nativeCreateDocumentFragment(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
@@ -4987,12 +5405,6 @@ fn jsOnlyImportElement(vm: *VM, src_val: JsValue, target_doc: JsValue, deep: boo
     return new_val;
 }
 
-// ── Helper: register an event interface constructor + prototype ──────
-
-fn registerEventCtor(vm: *VM, name: []const u8, proto: *JsObject, proto_sid: StringId) !void {
-    return registerEventCtorWithFn(vm, name, proto, proto_sid, &nativeEventConstructor);
-}
-
 fn registerEventCtorWithFn(
     vm: *VM,
     name: []const u8,
@@ -5183,7 +5595,9 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []con
     try obj.setProperty(vm.allocator, try vm.pool.intern("nextSibling"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("lastChild"), JsValue.null_val);
-    try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initNumber(0)); // placeholder
+    const cn = try vm.createObj(.{ .obj_type = .array });
+    cn.data = .{ .array = .empty };
+    try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initObject(cn));
     // DOM §2.7: ProcessingInstruction implements EventTarget. Store self-pointer
     // as `_et_ptr` so addEventListener/dispatchEvent identify this PI as a
     // standalone target (PIs are plain JsObjects, not `.dom_node`).
@@ -5650,6 +6064,7 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     // DOM §4.9.2 — NamedNodeMap is live. Bump the per-element version so
     // any cached `el.attributes` map refreshes its snapshot on next read.
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -5697,6 +6112,7 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     pinAttrNs(vm, elem, qn, ns_in) catch {};
     // DOM §4.9.2 NamedNodeMap live-map version bump.
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -5755,6 +6171,7 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
     // DOM §4.9.2 NamedNodeMap live-map version bump.
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
     // MO: queue attribute mutation record with captured old value.
     if (g_mo_list.items.len > 0) {
@@ -6032,8 +6449,11 @@ fn nativeQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
 
 // ── Element.matches() / closest() — DOM Selectors API §4.1/§4.2 ────
 
-/// C-ABI bridge to dom_selector.zig's full selector matching engine
-extern fn suzume_element_matches(node: *lxb.lxb_dom_node_t, sel_ptr: [*]const u8, sel_len: usize) bool;
+fn elementMatches(node: *lxb.lxb_dom_node_t, sel: []const u8) bool {
+    if (element_matches_fn) |f| return f(@ptrCast(node), sel);
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    return matchSimpleSelector(@ptrCast(node), sel);
+}
 
 fn nativeMatches(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
@@ -6041,7 +6461,7 @@ fn nativeMatches(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
     const sel = argToString(vm, args[0]);
     const node = getThisNode(this) orelse return JsValue.initBool(false);
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
-    return JsValue.initBool(suzume_element_matches(node, sel.ptr, sel.len));
+    return JsValue.initBool(elementMatches(node, sel));
 }
 
 fn nativeClosest(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -6051,7 +6471,7 @@ fn nativeClosest(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
     var cur: ?*lxb.lxb_dom_node_t = getThisNode(this);
     while (cur) |n| {
         if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            if (suzume_element_matches(n, sel.ptr, sel.len))
+            if (elementMatches(n, sel))
                 return wrapNode(vm, n) orelse JsValue.null_val;
         }
         cur = nodeParent(n);
@@ -6073,7 +6493,7 @@ fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     if (args.len >= 1 and args[0].isObject()) {
         const init_obj = args[0].asJsObject();
         const mode_sid = vm.pool.intern("mode") catch return JsValue.undefined_val;
-        if (init_obj.getProperty(mode_sid)) |mode_val| {
+        if (try vm.getPropertyWithAccessors(init_obj, mode_sid, args[0])) |mode_val| {
             if (mode_val.isString()) {
                 const mode_str = vm.pool.get(mode_val.asStringId()) orelse "";
                 if (std.mem.eql(u8, mode_str, "open")) {
@@ -6304,7 +6724,7 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
             type_str = vm.pool.get(args[0].asStringId()) orelse "event";
         } else if (args[0].isObject()) {
             const t_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
-            if (args[0].asJsObject().getProperty(t_sid)) |tv| {
+            if (try vm.getPropertyWithAccessors(args[0].asJsObject(), t_sid, args[0])) |tv| {
                 if (tv.isString()) type_str = vm.pool.get(tv.asStringId()) orelse "event";
             }
         }
@@ -6352,7 +6772,7 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
                             type_str_et = vm.pool.get(args[0].asStringId()) orelse "event";
                         } else if (args[0].isObject()) {
                             const t_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
-                            if (args[0].asJsObject().getProperty(t_sid)) |tv| {
+                            if (try vm.getPropertyWithAccessors(args[0].asJsObject(), t_sid, args[0])) |tv| {
                                 if (tv.isString()) type_str_et = vm.pool.get(tv.asStringId()) orelse "event";
                             }
                         }
@@ -6396,14 +6816,20 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     } else if (args[0].isObject()) {
         event_obj_in = args[0].asJsObject();
         const t_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
-        if (event_obj_in.?.getProperty(t_sid)) |tv| {
+        if (try vm.getPropertyWithAccessors(event_obj_in.?, t_sid, args[0])) |tv| {
             if (tv.isString()) type_str = vm.pool.get(tv.asStringId()) orelse "event";
         }
         const comp_sid = vm.pool.intern("composed") catch return JsValue.initBool(false);
-        if (event_obj_in.?.getProperty(comp_sid)) |cv| {
+        if (try vm.getPropertyWithAccessors(event_obj_in.?, comp_sid, args[0])) |cv| {
             event_composed = cv.isTruthy();
         }
     }
+    var type_owned: ?[]u8 = null;
+    if (vm.allocator.dupe(u8, type_str)) |owned| {
+        type_owned = owned;
+        type_str = owned;
+    } else |_| {}
+    defer if (type_owned) |owned| vm.allocator.free(owned);
 
     // Build composed path: path[0] = target, walking up via composedParent.
     var path_buf: [64]*lxb.lxb_dom_node_t = undefined;
@@ -6462,9 +6888,9 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     ev_obj.setProperty(vm.allocator, rpi_sid, JsValue.initObject(raw_ids)) catch {};
 
     // Read bubbles/cancelable from the event to drive §2.9 phases.
-    var event_bubbles = false;
+    var event_bubbles = event_composed;
     const bubbles_sid = vm.pool.intern("bubbles") catch return JsValue.initBool(false);
-    if (ev_obj.getProperty(bubbles_sid)) |bv| event_bubbles = bv.isTruthy();
+    if (try vm.getPropertyWithAccessors(ev_obj, bubbles_sid, JsValue.initObject(ev_obj))) |bv| event_bubbles = bv.isTruthy();
 
     // Intern the stop/cancelBubble sids for use during and after dispatch.
     const stopped_sid = vm.pool.intern("_stopped") catch return JsValue.initBool(false);
@@ -6647,7 +7073,7 @@ fn nativeGetRootNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     if (args.len >= 1 and args[0].isObject()) {
         const opts = args[0].asJsObject();
         const composed_sid = vm.pool.intern("composed") catch return JsValue.undefined_val;
-        if (opts.getProperty(composed_sid)) |cv| {
+        if (try vm.getPropertyWithAccessors(opts, composed_sid, args[0])) |cv| {
             composed = cv.isTruthy();
         }
     }
@@ -6684,19 +7110,20 @@ fn nativeGetRootNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
 /// Parse (x, y) or ({top?, left?}) args into {top, left} floats.
 /// CSSOM View §6.5: scroll()/scrollTo() accept either two numbers or a
 /// ScrollToOptions dictionary {top?, left?, behavior?}.
-fn parseScrollArgs(vm: *VM, args: []const JsValue) struct { top: f64, left: f64 } {
+fn parseScrollArgs(vm: *VM, args: []const JsValue) !struct { top: f64, left: f64 } {
     if (args.len >= 2) {
-        return .{ .top = args[1].toNumber(), .left = args[0].toNumber() };
+        return .{ .top = argToNumber(vm, args[1]), .left = argToNumber(vm, args[0]) };
     }
     if (args.len == 1 and args[0].isObject()) {
         const opts = args[0].asJsObject();
+        const this_val = args[0];
         var top: f64 = 0;
         var left: f64 = 0;
         if (vm.pool.intern("top") catch null) |top_sid| {
-            if (opts.getProperty(top_sid)) |tv| top = tv.toNumber();
+            if (try vm.getPropertyWithAccessors(opts, top_sid, this_val)) |tv| top = argToNumber(vm, tv);
         }
         if (vm.pool.intern("left") catch null) |left_sid| {
-            if (opts.getProperty(left_sid)) |lv| left = lv.toNumber();
+            if (try vm.getPropertyWithAccessors(opts, left_sid, this_val)) |lv| left = argToNumber(vm, lv);
         }
         return .{ .top = top, .left = left };
     }
@@ -6706,7 +7133,7 @@ fn parseScrollArgs(vm: *VM, args: []const JsValue) struct { top: f64, left: f64 
 fn nativeScrollTo(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const node = getThisNode(this) orelse return JsValue.undefined_val;
-    const parsed = parseScrollArgs(vm, args);
+    const parsed = try parseScrollArgs(vm, args);
     const key = @intFromPtr(node);
     ensureScrollMap().put(key, .{
         .top = @max(0.0, parsed.top),
@@ -6722,7 +7149,7 @@ fn nativeScroll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!
 fn nativeScrollBy(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const node = getThisNode(this) orelse return JsValue.undefined_val;
-    const delta = parseScrollArgs(vm, args);
+    const delta = try parseScrollArgs(vm, args);
     const key = @intFromPtr(node);
     const cur = ensureScrollMap().get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
     ensureScrollMap().put(key, .{
@@ -6748,7 +7175,10 @@ fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
     const is_sr_sid = vm.pool.intern("__isShadowRoot") catch return JsValue.initObject(obj);
     obj.setProperty(vm.allocator, is_sr_sid, JsValue.initBool(true)) catch {};
     const mode_sid = vm.pool.intern("mode") catch return JsValue.initObject(obj);
-    const mode_str: []const u8 = switch (root_sr.mode) { .open => "open", .closed => "closed" };
+    const mode_str: []const u8 = switch (root_sr.mode) {
+        .open => "open",
+        .closed => "closed",
+    };
     const mode_val = JsValue.initString(vm.pool.intern(mode_str) catch return JsValue.initObject(obj));
     obj.setProperty(vm.allocator, mode_sid, mode_val) catch {};
     // DOM §4.8 — the shadow root's ownerDocument equals the host element's
@@ -6952,26 +7382,10 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     // createEvent() now passes an explicit empty-string type arg, so no internal
     // caller relies on the args.len==0 shortcut. From script, `new Event()` or
     // `new Event(undefined)` must throw TypeError per the spec.
-    var type_str: []const u8 = "";
     if (args.len == 0 or args[0].isUndefined()) {
         return error.TypeError;
-    } else if (args[0].isString()) {
-        type_str = vm.pool.get(args[0].asStringId()) orelse "";
-    } else if (args[0].isObject()) {
-        // Call .toString() on the object (WebIDL DOMString coercion) — may throw
-        const ts_sid = vm.pool.intern("toString") catch null;
-        if (ts_sid) |sid| {
-            if (args[0].asJsObject().getProperty(sid)) |ts_fn| {
-                if (ts_fn.isObject()) {
-                    const result = try vm.callJsFunction(ts_fn, args[0], &.{});
-                    if (result.isString()) {
-                        type_str = vm.pool.get(result.asStringId()) orelse "";
-                    }
-                }
-            }
-        }
     }
-    // numbers, bools etc coerce to "" (acceptable approximation)
+    const type_str = argToString(vm, args[0]);
     const type_sid = try vm.pool.intern("type");
     obj.setProperty(vm.allocator, type_sid, JsValue.initString(try vm.pool.intern(type_str))) catch {};
 
@@ -7066,8 +7480,9 @@ fn nativeCustomEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsVal
     var detail = JsValue.null_val;
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         if (vm.pool.intern("detail") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| detail = v;
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| detail = v;
         }
     }
     obj.setProperty(vm.allocator, try vm.pool.intern("detail"), detail) catch {};
@@ -7087,12 +7502,13 @@ fn nativeUIEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) 
     var detail: f64 = 0;
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         if (vm.pool.intern("view") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| view = v;
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| view = v;
         }
         if (vm.pool.intern("detail") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isNumber()) detail = v.asNumber();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                detail = argToNumber(vm, v);
             }
         }
     }
@@ -7122,34 +7538,35 @@ fn nativeMouseEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValu
     var related: JsValue = JsValue.null_val;
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         const readF64 = struct {
-            fn f(vm_: *VM, opts_: *JsObject, key: []const u8, dest: *f64) void {
+            fn f(vm_: *VM, opts_: *JsObject, this_: JsValue, key: []const u8, dest: *f64) !void {
                 if (vm_.pool.intern(key) catch null) |sid| {
-                    if (opts_.getProperty(sid)) |v| {
-                        if (v.isNumber()) dest.* = v.asNumber();
+                    if (try vm_.getPropertyWithAccessors(opts_, sid, this_)) |v| {
+                        dest.* = argToNumber(vm_, v);
                     }
                 }
             }
         }.f;
         const readBool = struct {
-            fn f(vm_: *VM, opts_: *JsObject, key: []const u8, dest: *bool) void {
+            fn f(vm_: *VM, opts_: *JsObject, this_: JsValue, key: []const u8, dest: *bool) !void {
                 if (vm_.pool.intern(key) catch null) |sid| {
-                    if (opts_.getProperty(sid)) |v| dest.* = v.isTruthy();
+                    if (try vm_.getPropertyWithAccessors(opts_, sid, this_)) |v| dest.* = v.isTruthy();
                 }
             }
         }.f;
-        readF64(vm, opts, "screenX", &screenX);
-        readF64(vm, opts, "screenY", &screenY);
-        readF64(vm, opts, "clientX", &clientX);
-        readF64(vm, opts, "clientY", &clientY);
-        readBool(vm, opts, "ctrlKey", &ctrl);
-        readBool(vm, opts, "altKey", &alt);
-        readBool(vm, opts, "shiftKey", &shift);
-        readBool(vm, opts, "metaKey", &meta);
-        readF64(vm, opts, "button", &button);
-        readF64(vm, opts, "buttons", &buttons);
+        try readF64(vm, opts, this_val, "screenX", &screenX);
+        try readF64(vm, opts, this_val, "screenY", &screenY);
+        try readF64(vm, opts, this_val, "clientX", &clientX);
+        try readF64(vm, opts, this_val, "clientY", &clientY);
+        try readBool(vm, opts, this_val, "ctrlKey", &ctrl);
+        try readBool(vm, opts, this_val, "altKey", &alt);
+        try readBool(vm, opts, this_val, "shiftKey", &shift);
+        try readBool(vm, opts, this_val, "metaKey", &meta);
+        try readF64(vm, opts, this_val, "button", &button);
+        try readF64(vm, opts, this_val, "buttons", &buttons);
         if (vm.pool.intern("relatedTarget") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| related = v;
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| related = v;
         }
     }
     obj.setProperty(vm.allocator, try vm.pool.intern("screenX"), JsValue.initNumber(screenX)) catch {};
@@ -7186,26 +7603,20 @@ fn nativeWheelEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValu
     var deltaMode: f64 = 0; // DOM_DELTA_PIXEL
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
-        if (vm.pool.intern("deltaX") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isNumber()) deltaX = v.asNumber();
+        const this_val = args[1];
+        const readF64 = struct {
+            fn f(vm_: *VM, opts_: *JsObject, this_: JsValue, key: []const u8, dest: *f64) !void {
+                if (vm_.pool.intern(key) catch null) |sid| {
+                    if (try vm_.getPropertyWithAccessors(opts_, sid, this_)) |v| {
+                        dest.* = argToNumber(vm_, v);
+                    }
+                }
             }
-        }
-        if (vm.pool.intern("deltaY") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isNumber()) deltaY = v.asNumber();
-            }
-        }
-        if (vm.pool.intern("deltaZ") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isNumber()) deltaZ = v.asNumber();
-            }
-        }
-        if (vm.pool.intern("deltaMode") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isNumber()) deltaMode = v.asNumber();
-            }
-        }
+        }.f;
+        try readF64(vm, opts, this_val, "deltaX", &deltaX);
+        try readF64(vm, opts, this_val, "deltaY", &deltaY);
+        try readF64(vm, opts, this_val, "deltaZ", &deltaZ);
+        try readF64(vm, opts, this_val, "deltaMode", &deltaMode);
     }
     obj.setProperty(vm.allocator, try vm.pool.intern("deltaX"), JsValue.initNumber(deltaX)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("deltaY"), JsValue.initNumber(deltaY)) catch {};
@@ -7233,34 +7644,35 @@ fn nativeKeyboardEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsV
     var is_composing = false;
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         if (vm.pool.intern("key") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isString()) key_sid_val = v.asStringId();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                key_sid_val = try vm.pool.intern(argToString(vm, v));
             }
         }
         if (vm.pool.intern("code") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isString()) code_sid_val = v.asStringId();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                code_sid_val = try vm.pool.intern(argToString(vm, v));
             }
         }
         if (vm.pool.intern("location") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isNumber()) location = v.asNumber();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                location = argToNumber(vm, v);
             }
         }
         const readBool = struct {
-            fn f(vm_: *VM, opts_: *JsObject, key: []const u8, dest: *bool) void {
+            fn f(vm_: *VM, opts_: *JsObject, this_: JsValue, key: []const u8, dest: *bool) !void {
                 if (vm_.pool.intern(key) catch null) |sid| {
-                    if (opts_.getProperty(sid)) |v| dest.* = v.isTruthy();
+                    if (try vm_.getPropertyWithAccessors(opts_, sid, this_)) |v| dest.* = v.isTruthy();
                 }
             }
         }.f;
-        readBool(vm, opts, "ctrlKey", &ctrl);
-        readBool(vm, opts, "altKey", &alt);
-        readBool(vm, opts, "shiftKey", &shift);
-        readBool(vm, opts, "metaKey", &meta);
-        readBool(vm, opts, "repeat", &repeat);
-        readBool(vm, opts, "isComposing", &is_composing);
+        try readBool(vm, opts, this_val, "ctrlKey", &ctrl);
+        try readBool(vm, opts, this_val, "altKey", &alt);
+        try readBool(vm, opts, this_val, "shiftKey", &shift);
+        try readBool(vm, opts, this_val, "metaKey", &meta);
+        try readBool(vm, opts, this_val, "repeat", &repeat);
+        try readBool(vm, opts, this_val, "isComposing", &is_composing);
     }
     obj.setProperty(vm.allocator, try vm.pool.intern("key"), JsValue.initString(key_sid_val)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initString(code_sid_val)) catch {};
@@ -7288,8 +7700,9 @@ fn nativeFocusEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValu
     // relatedTarget defaults to null (already null from base Event)
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         if (vm.pool.intern("relatedTarget") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
                 obj.setProperty(vm.allocator, sid, v) catch {};
             }
         }
@@ -7305,30 +7718,448 @@ fn nativeInputEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValu
     if (!ev_val.isObject()) return ev_val;
     const obj = ev_val.asJsObject();
 
-    var data_sid: StringId = try vm.pool.intern("");
+    var data = JsValue.null_val;
     var is_composing = false;
     var input_type_sid: StringId = try vm.pool.intern("");
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         if (vm.pool.intern("data") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isString()) data_sid = v.asStringId();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                data = if (v.isNull()) JsValue.null_val else JsValue.initString(try vm.pool.intern(argToString(vm, v)));
             }
         }
         if (vm.pool.intern("isComposing") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
                 if (v.isTruthy()) is_composing = true;
             }
         }
         if (vm.pool.intern("inputType") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| {
-                if (v.isString()) input_type_sid = v.asStringId();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                input_type_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("data"), data) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("isComposing"), JsValue.initBool(is_composing)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("inputType"), JsValue.initString(input_type_sid)) catch {};
+    return ev_val;
+}
+
+/// CompositionEvent/TextEvent ctor: extends UIEvent with data.
+fn nativeDataUIEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeUIEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var data_sid: StringId = try vm.pool.intern("");
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("data") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, args[1])) |v| {
+                data_sid = try vm.pool.intern(argToString(vm, v));
             }
         }
     }
     obj.setProperty(vm.allocator, try vm.pool.intern("data"), JsValue.initString(data_sid)) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("isComposing"), JsValue.initBool(is_composing)) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("inputType"), JsValue.initString(input_type_sid)) catch {};
+    return ev_val;
+}
+
+/// DragEvent ctor: extends MouseEvent with dataTransfer.
+fn nativeDragEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeMouseEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var data_transfer = JsValue.null_val;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("dataTransfer") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, args[1])) |v| data_transfer = v;
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("dataTransfer"), data_transfer) catch {};
+    return ev_val;
+}
+
+/// ProgressEvent ctor: extends Event with lengthComputable/loaded/total.
+fn nativeProgressEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var length_computable = false;
+    var loaded: f64 = 0;
+    var total: f64 = 0;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("lengthComputable") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| length_computable = v.isTruthy();
+        }
+        if (vm.pool.intern("loaded") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| loaded = argToNumber(vm, v);
+        }
+        if (vm.pool.intern("total") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| total = argToNumber(vm, v);
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("lengthComputable"), JsValue.initBool(length_computable)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("loaded"), JsValue.initNumber(loaded)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("total"), JsValue.initNumber(total)) catch {};
+    return ev_val;
+}
+
+/// HashChangeEvent ctor: extends Event with oldURL/newURL.
+fn nativeHashChangeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var old_url_sid: StringId = try vm.pool.intern("");
+    var new_url_sid: StringId = try vm.pool.intern("");
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("oldURL") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                old_url_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("newURL") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                new_url_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("oldURL"), JsValue.initString(old_url_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("newURL"), JsValue.initString(new_url_sid)) catch {};
+    return ev_val;
+}
+
+/// MessageEvent ctor: extends Event with data/origin/lastEventId/source/ports.
+fn nativeMessageEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var data = JsValue.null_val;
+    var origin_sid: StringId = try vm.pool.intern("");
+    var last_event_id_sid: StringId = try vm.pool.intern("");
+    var source = JsValue.null_val;
+    const ports_arr = try vm.createObj(.{ .obj_type = .array });
+    ports_arr.data = .{ .array = .empty };
+    var ports = JsValue.initObject(ports_arr);
+
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("data") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| data = v;
+        }
+        if (vm.pool.intern("origin") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                origin_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("lastEventId") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                last_event_id_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("source") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| source = v;
+        }
+        if (vm.pool.intern("ports") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| ports = v;
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("data"), data) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("origin"), JsValue.initString(origin_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("lastEventId"), JsValue.initString(last_event_id_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("source"), source) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("ports"), ports) catch {};
+    return ev_val;
+}
+
+/// StorageEvent ctor: extends Event with key/oldValue/newValue/url/storageArea.
+fn nativeStorageEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var key = JsValue.null_val;
+    var old_value = JsValue.null_val;
+    var new_value = JsValue.null_val;
+    var url_sid: StringId = try vm.pool.intern("");
+    var storage_area = JsValue.null_val;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("key") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                key = if (v.isNull()) JsValue.null_val else JsValue.initString(try vm.pool.intern(argToString(vm, v)));
+            }
+        }
+        if (vm.pool.intern("oldValue") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                old_value = if (v.isNull()) JsValue.null_val else JsValue.initString(try vm.pool.intern(argToString(vm, v)));
+            }
+        }
+        if (vm.pool.intern("newValue") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                new_value = if (v.isNull()) JsValue.null_val else JsValue.initString(try vm.pool.intern(argToString(vm, v)));
+            }
+        }
+        if (vm.pool.intern("url") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                url_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("storageArea") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| storage_area = v;
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("key"), key) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("oldValue"), old_value) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("newValue"), new_value) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("url"), JsValue.initString(url_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("storageArea"), storage_area) catch {};
+    return ev_val;
+}
+
+/// BeforeUnloadEvent ctor: extends Event with string returnValue.
+fn nativeBeforeUnloadEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    ev_val.asJsObject().setProperty(
+        vm.allocator,
+        try vm.pool.intern("returnValue"),
+        JsValue.initString(try vm.pool.intern("")),
+    ) catch {};
+    return ev_val;
+}
+
+/// TouchEvent ctor: extends UIEvent with touch lists and modifier keys.
+fn nativeTouchEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeUIEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    const touches_arr = try vm.createObj(.{ .obj_type = .array });
+    touches_arr.data = .{ .array = .empty };
+    const target_touches_arr = try vm.createObj(.{ .obj_type = .array });
+    target_touches_arr.data = .{ .array = .empty };
+    const changed_touches_arr = try vm.createObj(.{ .obj_type = .array });
+    changed_touches_arr.data = .{ .array = .empty };
+    var touches = JsValue.initObject(touches_arr);
+    var target_touches = JsValue.initObject(target_touches_arr);
+    var changed_touches = JsValue.initObject(changed_touches_arr);
+    var ctrl = false;
+    var shift = false;
+    var alt = false;
+    var meta = false;
+
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("touches") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| touches = v;
+        }
+        if (vm.pool.intern("targetTouches") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| target_touches = v;
+        }
+        if (vm.pool.intern("changedTouches") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| changed_touches = v;
+        }
+        if (vm.pool.intern("ctrlKey") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| ctrl = v.isTruthy();
+        }
+        if (vm.pool.intern("shiftKey") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| shift = v.isTruthy();
+        }
+        if (vm.pool.intern("altKey") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| alt = v.isTruthy();
+        }
+        if (vm.pool.intern("metaKey") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| meta = v.isTruthy();
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("touches"), touches) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("targetTouches"), target_touches) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("changedTouches"), changed_touches) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("metaKey"), JsValue.initBool(meta)) catch {};
+    return ev_val;
+}
+
+fn buildNullableNumberDict(vm: *VM, val: JsValue, keys: []const []const u8) !JsValue {
+    if (val.isNull() or !val.isObject()) return JsValue.null_val;
+    const src = val.asJsObject();
+    const out = try vm.createObj(.{});
+    for (keys) |key| {
+        var item = JsValue.null_val;
+        if (vm.pool.intern(key) catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(src, sid, val)) |v| {
+                item = if (v.isNull()) JsValue.null_val else JsValue.initNumber(argToNumber(vm, v));
+            }
+            out.setProperty(vm.allocator, sid, item) catch {};
+        }
+    }
+    return JsValue.initObject(out);
+}
+
+/// DeviceMotionEvent ctor: extends Event with acceleration/rotation dictionaries.
+fn nativeDeviceMotionEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var acceleration = JsValue.null_val;
+    var acceleration_including_gravity = JsValue.null_val;
+    var rotation_rate = JsValue.null_val;
+    var interval: f64 = 0;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("acceleration") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                acceleration = try buildNullableNumberDict(vm, v, &.{ "x", "y", "z" });
+            }
+        }
+        if (vm.pool.intern("accelerationIncludingGravity") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                acceleration_including_gravity = try buildNullableNumberDict(vm, v, &.{ "x", "y", "z" });
+            }
+        }
+        if (vm.pool.intern("rotationRate") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                rotation_rate = try buildNullableNumberDict(vm, v, &.{ "alpha", "beta", "gamma" });
+            }
+        }
+        if (vm.pool.intern("interval") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| interval = argToNumber(vm, v);
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("acceleration"), acceleration) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("accelerationIncludingGravity"), acceleration_including_gravity) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("rotationRate"), rotation_rate) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("interval"), JsValue.initNumber(interval)) catch {};
+    return ev_val;
+}
+
+/// MutationEvent ctor: legacy Event with relatedNode/value/name/change fields.
+fn nativeMutationEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var related_node = JsValue.null_val;
+    var prev_value_sid: StringId = try vm.pool.intern("");
+    var new_value_sid: StringId = try vm.pool.intern("");
+    var attr_name_sid: StringId = try vm.pool.intern("");
+    var attr_change: f64 = 0;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("relatedNode") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| related_node = v;
+        }
+        if (vm.pool.intern("prevValue") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                prev_value_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("newValue") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                new_value_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("attrName") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                attr_name_sid = try vm.pool.intern(argToString(vm, v));
+            }
+        }
+        if (vm.pool.intern("attrChange") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| attr_change = argToNumber(vm, v);
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("relatedNode"), related_node) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("prevValue"), JsValue.initString(prev_value_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("newValue"), JsValue.initString(new_value_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("attrName"), JsValue.initString(attr_name_sid)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("attrChange"), JsValue.initNumber(attr_change)) catch {};
+    return ev_val;
+}
+
+/// DeviceOrientationEvent ctor: extends Event with alpha/beta/gamma/absolute.
+fn nativeDeviceOrientationEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var alpha = JsValue.null_val;
+    var beta = JsValue.null_val;
+    var gamma = JsValue.null_val;
+    var absolute = false;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const this_val = args[1];
+        if (vm.pool.intern("alpha") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                alpha = if (v.isNull()) JsValue.null_val else JsValue.initNumber(argToNumber(vm, v));
+            }
+        }
+        if (vm.pool.intern("beta") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                beta = if (v.isNull()) JsValue.null_val else JsValue.initNumber(argToNumber(vm, v));
+            }
+        }
+        if (vm.pool.intern("gamma") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| {
+                gamma = if (v.isNull()) JsValue.null_val else JsValue.initNumber(argToNumber(vm, v));
+            }
+        }
+        if (vm.pool.intern("absolute") catch null) |sid| {
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| absolute = v.isTruthy();
+        }
+    }
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("alpha"), alpha) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("beta"), beta) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("gamma"), gamma) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("absolute"), JsValue.initBool(absolute)) catch {};
     return ev_val;
 }
 
@@ -7388,10 +8219,7 @@ fn nativeInitEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
         }
     }
 
-    if (args.len >= 1 and args[0].isString()) {
-        const t = vm.pool.get(args[0].asStringId()) orelse "";
-        obj.setProperty(vm.allocator, try vm.pool.intern("type"), JsValue.initString(try vm.pool.intern(t))) catch {};
-    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("type"), JsValue.initString(try vm.pool.intern(argToString(vm, args[0])))) catch {};
     const bubbles = if (args.len >= 2) args[1].isTruthy() else false;
     const cancelable = if (args.len >= 3) args[2].isTruthy() else false;
     obj.setProperty(vm.allocator, try vm.pool.intern("bubbles"), JsValue.initBool(bubbles)) catch {};
@@ -7447,9 +8275,9 @@ fn nativeInitUIEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
     _ = try nativeInitEvent(ctx, this, args);
     const view = if (args.len >= 4) args[3] else JsValue.null_val;
-    const detail = if (args.len >= 5) args[4] else JsValue.initNumber(0);
+    const detail = if (args.len >= 5) argToNumber(vm, args[4]) else 0;
     obj.setProperty(vm.allocator, try vm.pool.intern("view"), view) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("detail"), detail) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("detail"), JsValue.initNumber(detail)) catch {};
     return JsValue.undefined_val;
 }
 
@@ -7461,25 +8289,25 @@ fn nativeInitMouseEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     const obj = this.asJsObject();
     if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
     _ = try nativeInitUIEvent(ctx, this, args);
-    const screenX = if (args.len >= 6 and args[5].isNumber()) args[5] else JsValue.initNumber(0);
-    const screenY = if (args.len >= 7 and args[6].isNumber()) args[6] else JsValue.initNumber(0);
-    const clientX = if (args.len >= 8 and args[7].isNumber()) args[7] else JsValue.initNumber(0);
-    const clientY = if (args.len >= 9 and args[8].isNumber()) args[8] else JsValue.initNumber(0);
+    const screenX = if (args.len >= 6) argToNumber(vm, args[5]) else 0;
+    const screenY = if (args.len >= 7) argToNumber(vm, args[6]) else 0;
+    const clientX = if (args.len >= 8) argToNumber(vm, args[7]) else 0;
+    const clientY = if (args.len >= 9) argToNumber(vm, args[8]) else 0;
     const ctrl = if (args.len >= 10) args[9].isTruthy() else false;
     const alt = if (args.len >= 11) args[10].isTruthy() else false;
     const shift = if (args.len >= 12) args[11].isTruthy() else false;
     const meta = if (args.len >= 13) args[12].isTruthy() else false;
-    const button = if (args.len >= 14 and args[13].isNumber()) args[13] else JsValue.initNumber(0);
+    const button = if (args.len >= 14) argToNumber(vm, args[13]) else 0;
     const related = if (args.len >= 15) args[14] else JsValue.null_val;
-    obj.setProperty(vm.allocator, try vm.pool.intern("screenX"), screenX) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("screenY"), screenY) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("clientX"), clientX) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("clientY"), clientY) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("screenX"), JsValue.initNumber(screenX)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("screenY"), JsValue.initNumber(screenY)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("clientX"), JsValue.initNumber(clientX)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("clientY"), JsValue.initNumber(clientY)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("metaKey"), JsValue.initBool(meta)) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("button"), button) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("button"), JsValue.initNumber(button)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("relatedTarget"), related) catch {};
     return JsValue.undefined_val;
 }
@@ -7495,14 +8323,14 @@ fn nativeInitKeyboardEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue
     // initUIEvent's 5th arg (detail) is not present in initKeyboardEvent signature; default 0.
     const ui_args = args[0..@min(args.len, 4)];
     _ = try nativeInitUIEvent(ctx, this, ui_args);
-    const key = if (args.len >= 5 and args[4].isString()) args[4] else JsValue.initString(try vm.pool.intern(""));
-    const location = if (args.len >= 6 and args[5].isNumber()) args[5] else JsValue.initNumber(0);
+    const key = if (args.len >= 5) JsValue.initString(try vm.pool.intern(argToString(vm, args[4]))) else JsValue.initString(try vm.pool.intern(""));
+    const location = if (args.len >= 6) argToNumber(vm, args[5]) else 0;
     const ctrl = if (args.len >= 7) args[6].isTruthy() else false;
     const alt = if (args.len >= 8) args[7].isTruthy() else false;
     const shift = if (args.len >= 9) args[8].isTruthy() else false;
     const meta = if (args.len >= 10) args[9].isTruthy() else false;
     obj.setProperty(vm.allocator, try vm.pool.intern("key"), key) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("location"), location) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("location"), JsValue.initNumber(location)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
@@ -7510,10 +8338,47 @@ fn nativeInitKeyboardEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue
     return JsValue.undefined_val;
 }
 
-/// Event.prototype.composedPath -- stub returning empty array
+/// CompositionEvent/TextEvent legacy init(type, bubbles, cancelable, view, data).
+fn nativeInitDataUIEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
+    _ = try nativeInitUIEvent(ctx, this, args);
+    const data = if (args.len >= 5) argToString(vm, args[4]) else "";
+    obj.setProperty(vm.allocator, try vm.pool.intern("data"), JsValue.initString(try vm.pool.intern(data))) catch {};
+    return JsValue.undefined_val;
+}
+
+/// MutationEvent.prototype.initMutationEvent(type, bubbles, cancelable, relatedNode,
+/// prevValue, newValue, attrName, attrChange) -- legacy DOM Events L3.
+fn nativeInitMutationEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
+    _ = try nativeInitEvent(ctx, this, args);
+
+    const related_node = if (args.len >= 4) args[3] else JsValue.null_val;
+    const prev_value = if (args.len >= 5) argToString(vm, args[4]) else "";
+    const new_value = if (args.len >= 6) argToString(vm, args[5]) else "";
+    const attr_name = if (args.len >= 7) argToString(vm, args[6]) else "";
+    const attr_change = if (args.len >= 8) argToNumber(vm, args[7]) else 0;
+
+    obj.setProperty(vm.allocator, try vm.pool.intern("relatedNode"), related_node) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("prevValue"), JsValue.initString(try vm.pool.intern(prev_value))) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("newValue"), JsValue.initString(try vm.pool.intern(new_value))) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("attrName"), JsValue.initString(try vm.pool.intern(attr_name))) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("attrChange"), JsValue.initNumber(attr_change)) catch {};
+    return JsValue.undefined_val;
+}
+
+/// Event.prototype.composedPath fallback for events that have not been dispatched.
+/// Dispatched DOM events install nativeEventComposedPath with the live path.
 fn nativeComposedPath(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const arr = try vm.createObj(.{ .obj_type = .array });
+    arr.data = .{ .array = .empty };
     return JsValue.initObject(arr);
 }
 
@@ -7645,7 +8510,6 @@ fn freeListenerRecord(vm: *VM, idx: usize) void {
     _ = g_listeners.orderedRemove(idx);
 }
 
-
 // ══════════════════════════════════════════════════════════════════════
 // Helpers — value extraction
 // ══════════════════════════════════════════════════════════════════════
@@ -7674,11 +8538,11 @@ fn getArgNode(val: JsValue) ?*lxb.lxb_dom_node_t {
 /// ECMA-262 §7.1.7 ToUint32: convert f64 to unsigned 32-bit integer.
 /// Equivalent to JS `value >>> 0`. Negative values wrap around.
 fn toUint32(n: f64) usize {
-    if (std.math.isNan(n) or std.math.isInf(n) or n == 0) return 0;
-    // Truncate to i64 first, then mask to u32
-    const i: i64 = @intFromFloat(@trunc(n));
-    const u: u32 = @bitCast(@as(i32, @truncate(i)));
-    return @intCast(u);
+    if (std.math.isNan(n) or !std.math.isFinite(n)) return 0;
+    const two32 = 4294967296.0;
+    const rem = @rem(@trunc(n), two32);
+    const mod = if (rem < 0) rem + two32 else rem;
+    return @intFromFloat(mod);
 }
 
 fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
@@ -7762,13 +8626,13 @@ fn createStyleObj(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
     // Mirror the registrations done in nativeGetComputedStyle so that both
     // `element.style.getPropertyValue()` and `getComputedStyle(el).getPropertyValue()`
     // resolve. Without this, the methods are undefined on inline style objects.
-    vm.registerNativeMethod(obj, "getPropertyValue",  &nativeCSSGetPropertyValue)  catch {};
-    vm.registerNativeMethod(obj, "getPropertyPriority",&nativeCSSGetPropertyPriority) catch {};
-    vm.registerNativeMethod(obj, "setProperty",        &nativeCSSSetProperty)        catch {};
-    vm.registerNativeMethod(obj, "removeProperty",     &nativeCSSRemoveProperty)     catch {};
+    vm.registerNativeMethod(obj, "getPropertyValue", &nativeCSSGetPropertyValue) catch {};
+    vm.registerNativeMethod(obj, "getPropertyPriority", &nativeCSSGetPropertyPriority) catch {};
+    vm.registerNativeMethod(obj, "setProperty", &nativeCSSSetProperty) catch {};
+    vm.registerNativeMethod(obj, "removeProperty", &nativeCSSRemoveProperty) catch {};
     // CSS §2.1: supports() is callable on any CSSStyleDeclaration.
-    vm.registerNativeMethod(obj, "supports",           &nativeCSSDeclSupports)       catch {};
-    vm.registerNativeMethod(obj, "item",               &nativeCSSItem)               catch {};
+    vm.registerNativeMethod(obj, "supports", &nativeCSSDeclSupports) catch {};
+    vm.registerNativeMethod(obj, "item", &nativeCSSItem) catch {};
     // Note: `length` is NOT registered as a method here — domStyleGetProp
     // resolves it to a numeric property so `style.length == 0` coerces per
     // CSSOM §6.7.3 rather than returning the function object.
@@ -7792,10 +8656,8 @@ fn getAttr(vm: *VM, node: *lxb.lxb_dom_node_t, attr_name: []const u8) JsValue {
 fn setAttrFromVal(vm: *VM, node: *lxb.lxb_dom_node_t, attr_name: []const u8, val: JsValue) void {
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    if (val.isString()) {
-        if (vm.pool.get(val.asStringId())) |s|
-            _ = dom_b.lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, s.ptr, s.len);
-    }
+    const s = argToString(vm, val);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, s.ptr, s.len);
 }
 
 /// Get-or-create a cached Attr JS wrapper for a lexbor attr pointer.
@@ -7964,17 +8826,13 @@ fn elementInHtmlDoc(vm: *VM, elem: *lxb.lxb_dom_element_t) bool {
     return true;
 }
 
-/// DOM §4.9.2 item(index) — indexed getter steps. Returns `this[index]`
-/// from the live attribute list, or null if index is out of range /
-/// negative / NaN.
+/// DOM §4.9.2 item(index) — indexed getter steps after WebIDL unsigned long conversion.
 fn nativeNnmItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0) return JsValue.null_val;
     const elem = nnmElem(this) orelse return JsValue.null_val;
-    const want_f = args[0].toNumber();
-    if (!std.math.isFinite(want_f) or want_f < 0) return JsValue.null_val;
-    const want: u32 = @intFromFloat(want_f);
-    var idx: u32 = 0;
+    const want = toUint32(argToNumber(vm, args[0]));
+    var idx: usize = 0;
     var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (a) |attr| : (idx += 1) {
         if (idx == want) {
@@ -8012,24 +8870,22 @@ fn nativeNnmGetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 fn lookupAttrByNsLocal(elem: *lxb.lxb_dom_element_t, ns: ?[]const u8, local: []const u8) ?*lxb.lxb_dom_attr_t {
     var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (a) |attr| {
-        const attr_ns = nsIdToUri(attr.node.ns);
+        var qn_len: usize = 0;
+        const qn_ptr = dom_b.lxb_dom_attr_qualified_name(@ptrCast(attr), &qn_len) orelse {
+            a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+            continue;
+        };
+        const qn = qn_ptr[0..qn_len];
+        const colon_idx = std.mem.indexOfScalar(u8, qn, ':');
+        const attr_local: []const u8 = if (colon_idx) |ci| qn[ci + 1 ..] else qn;
+        const attr_ns: ?[]const u8 = if (colon_idx == null) null else nsIdToUri(attr.node.ns);
         const ns_match = blk: {
             if (ns == null) break :blk (attr_ns == null);
             if (attr_ns) |u| break :blk std.mem.eql(u8, u, ns.?);
             break :blk false;
         };
         if (ns_match) {
-            // Lexbor does not expose a standalone local-name accessor for
-            // attrs via the public `.noi` surface we import. Fall back to
-            // extracting the local name from the qualified name by
-            // trimming the prefix (if any).
-            var qn_len: usize = 0;
-            if (dom_b.lxb_dom_attr_qualified_name(@ptrCast(attr), &qn_len)) |qn_ptr| {
-                const qn = qn_ptr[0..qn_len];
-                const colon_idx = std.mem.indexOfScalar(u8, qn, ':');
-                const attr_local: []const u8 = if (colon_idx) |ci| qn[ci + 1 ..] else qn;
-                if (std.mem.eql(u8, attr_local, local)) return attr;
-            }
+            if (std.mem.eql(u8, attr_local, local)) return attr;
         }
         a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
     }
@@ -8075,8 +8931,7 @@ fn getAttrBackingPtr(attr_obj: *JsObject) ?usize {
 /// identity across element boundaries). `ptr == 0` clears the slot.
 fn setAttrBackingPtr(vm: *VM, attr_obj: *JsObject, ptr: usize) void {
     const sid = g_sid_attr_backing_ptr orelse return;
-    const v = if (ptr == 0) JsValue.null_val
-              else JsValue.initNumber(@floatFromInt(ptr));
+    const v = if (ptr == 0) JsValue.null_val else JsValue.initNumber(@floatFromInt(ptr));
     attr_obj.setProperty(vm.allocator, sid, v) catch {};
 }
 
@@ -8142,6 +8997,7 @@ fn nativeNnmRemoveNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValu
     invalidateAttrWrapper(lxb_attr);
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
     return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
 }
@@ -8191,6 +9047,7 @@ fn nativeNnmRemoveNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsVa
     invalidateAttrWrapper(lxb_attr);
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
     return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
 }
@@ -8244,8 +9101,7 @@ fn getAttrByQName(vm: *VM, elem: *lxb.lxb_dom_element_t, qn_in: []const u8) ?*Js
 /// Layer 1D `lookupAttrByNsLocal` walker (L4356) with the Attr-wrapper
 /// cache. Empty-string namespace is coerced to null per spec step 1 by
 /// the caller (e.g. `extractOptionalStringArg`) before invocation.
-fn getAttrByNsLocal(vm: *VM, elem: *lxb.lxb_dom_element_t,
-                    ns: ?[]const u8, local: []const u8) ?*JsObject {
+fn getAttrByNsLocal(vm: *VM, elem: *lxb.lxb_dom_element_t, ns: ?[]const u8, local: []const u8) ?*JsObject {
     const a = lookupAttrByNsLocal(elem, ns, local) orelse return null;
     return getOrCreateAttrWrapper(vm, a);
 }
@@ -8386,6 +9242,7 @@ fn nativeRemoveAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue
     invalidateAttrWrapper(attr);
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn_ptr, qn_len);
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -8426,7 +9283,10 @@ fn readAttrObjLocalName(vm: *VM, obj: *JsObject) ?[]const u8 {
 /// Read `attr.value`. Missing / null coerces to "".
 fn readAttrObjValue(vm: *VM, obj: *JsObject) []const u8 {
     const sid = vm.pool.intern("value") catch return "";
-    const v = obj.getProperty(sid) orelse return "";
+    const v = obj.getProperty(sid) orelse blk: {
+        const hidden_sid = vm.pool.intern("__suzume_attr_value_data") catch return "";
+        break :blk obj.getProperty(hidden_sid) orelse return "";
+    };
     if (v.isNull() or v.isUndefined()) return "";
     if (v.isString()) return vm.pool.get(v.asStringId()) orelse "";
     return argToString(vm, v);
@@ -8541,6 +9401,7 @@ fn nativeSetAttributeNodeImpl(ctx: *anyopaque, this: JsValue, args: []const JsVa
     if (old_lxb_opt) |ol| invalidateAttrWrapper(ol);
     _ = dom_b.lxb_dom_element_set_attribute(elem, qn_str.ptr, qn_str.len, value_str.ptr, value_str.len);
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
 
     // Re-resolve the just-written lexbor record. Apply the spec §R1
@@ -8648,6 +9509,7 @@ fn nativeRemoveAttributeNode(ctx: *anyopaque, this: JsValue, args: []const JsVal
     setAttrBackingPtr(vm, attr_obj, 0);
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
 
     // Step 3: return the passed-in Attr.
@@ -8697,54 +9559,13 @@ fn nativeNnmSetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
     }
 
-    // Extract metadata from the Attr JS object (createAttribute /
-    // createAttributeNS populate `namespaceURI`, `localName`, `prefix`,
-    // `value`, `name`).
-    const ns_sid = try vm.pool.intern("namespaceURI");
-    const ns_v = attr_obj.getProperty(ns_sid) orelse JsValue.null_val;
-    const ns_slice: ?[]const u8 = if (ns_v.isNull() or ns_v.isUndefined()) null else blk: {
-        if (!ns_v.isString()) break :blk null;
-        const s = vm.pool.get(ns_v.asStringId()) orelse break :blk null;
-        if (s.len == 0) break :blk null;
-        break :blk s;
-    };
-    const local_sid = try vm.pool.intern("localName");
-    const local_v = attr_obj.getProperty(local_sid) orelse {
+    const ns_slice = readAttrObjNs(vm, attr_obj);
+    const local_name = readAttrObjLocalName(vm, attr_obj) orelse {
         vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
         return JsValue.undefined_val;
     };
-    if (!local_v.isString()) {
-        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
-        return JsValue.undefined_val;
-    }
-    const local_name = vm.pool.get(local_v.asStringId()) orelse {
-        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
-        return JsValue.undefined_val;
-    };
-
-    // Resolve qualifiedName. Prefer the cached `name` property set in
-    // createAttrObject (includes prefix), else fall back to localName.
-    const name_sid = try vm.pool.intern("name");
-    const name_v = attr_obj.getProperty(name_sid) orelse JsValue.null_val;
-    const qn_str: []const u8 = blk: {
-        if (name_v.isString()) {
-            if (vm.pool.get(name_v.asStringId())) |s| {
-                if (s.len > 0) break :blk s;
-            }
-        }
-        break :blk local_name;
-    };
-
-    // Resolve the value. Missing `value` defaults to "" per §4.9.1
-    // "set an attribute value" (the algorithm treats missing as empty).
-    const value_sid = try vm.pool.intern("value");
-    const value_v = attr_obj.getProperty(value_sid) orelse JsValue.null_val;
-    const value_str: []const u8 = blk: {
-        if (value_v.isString()) {
-            if (vm.pool.get(value_v.asStringId())) |s| break :blk s;
-        }
-        break :blk "";
-    };
+    const qn_str = readAttrObjQName(vm, attr_obj) orelse local_name;
+    const value_str = readAttrObjValue(vm, attr_obj);
 
     // Step 2: look up old attr at (ns, local). If the incoming attr has
     // no namespace, fall back to the qualified-name lookup so attrs
@@ -8773,6 +9594,7 @@ fn nativeNnmSetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     if (old_lxb_opt) |ol| invalidateAttrWrapper(ol);
     _ = dom_b.lxb_dom_element_set_attribute(elem, qn_str.ptr, qn_str.len, value_str.ptr, value_str.len);
     bumpElemAttrVersion(elem);
+    refreshCachedAttributesMap(vm, elem);
     setDomDirty();
 
     // Re-resolve the just-written lexbor record and re-key g_attr_wrappers
@@ -8785,7 +9607,12 @@ fn nativeNnmSetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         return if (old_obj_opt) |oo| JsValue.initObject(oo) else JsValue.null_val;
     };
     const new_lxb: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(new_lxb_opaque));
-    g_attr_wrappers.put(g_alloc, @intFromPtr(new_lxb), attr_obj) catch {};
+    const new_key = @intFromPtr(new_lxb);
+    if (getAttrBackingPtr(attr_obj)) |old_key| {
+        if (old_key != new_key) _ = g_attr_wrappers.remove(old_key);
+    }
+    g_attr_wrappers.put(vm.allocator, new_key, attr_obj) catch {};
+    setAttrBackingPtr(vm, attr_obj, new_key);
 
     // Step 6: record ownership. Wrap the element to produce the JS-side
     // owner object once (no-op if already cached in the node map).
@@ -9454,7 +10281,10 @@ fn getDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t) JsValue {
     for (raw) |c| {
         const ws = c == 0x09 or c == 0x0A or c == 0x0C or c == 0x0D or c == 0x20;
         if (ws) {
-            if (!in_ws) { buf[out_len] = ' '; out_len += 1; }
+            if (!in_ws) {
+                buf[out_len] = ' ';
+                out_len += 1;
+            }
             in_ws = true;
         } else {
             buf[out_len] = c;
@@ -9470,8 +10300,7 @@ fn getDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t) JsValue {
 /// HTML §4.2.2 document.title setter.
 /// Finds or creates the <title> element and sets its text content.
 fn setDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t, val: JsValue) void {
-    var buf: [64]u8 = undefined;
-    const s = VM.formatValue(vm.pool, val, &buf);
+    const s = argToString(vm, val);
     if (findTitleNode(doc)) |title_node| {
         // Replace children with a single text node.
         while (nodeFirstChild(title_node)) |child| dom_b.lxb_dom_node_remove(child);
@@ -9668,6 +10497,14 @@ fn jsOnlyValueEqualForCompare(vm: *VM, av: JsValue, bv: JsValue) bool {
     return false;
 }
 
+fn maybeBytesEqual(a: ?[*]const u8, a_len: usize, b: ?[*]const u8, b_len: usize) bool {
+    if (a_len != b_len) return false;
+    if (a) |ap| {
+        return if (b) |bp| std.mem.eql(u8, ap[0..a_len], bp[0..b_len]) else false;
+    }
+    return b == null;
+}
+
 fn nodesEqual(vm: *VM, a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
     // Step 1: same nodeType
     if (nodeType(a) != nodeType(b)) return false;
@@ -9708,6 +10545,32 @@ fn nodesEqual(vm: *VM, a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
         }
         // Compare attribute count and values
         if (!attrsEqual(vm, a_elem, b_elem)) return false;
+    } else if (nt == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) {
+        var a_len: usize = 0;
+        var b_len: usize = 0;
+        const a_name = dom_b.lxb_dom_document_type_name_noi(@ptrCast(a), &a_len);
+        const b_name = dom_b.lxb_dom_document_type_name_noi(@ptrCast(b), &b_len);
+        if (!maybeBytesEqual(a_name, a_len, b_name, b_len)) return false;
+        a_len = 0;
+        b_len = 0;
+        const a_public = dom_b.lxb_dom_document_type_public_id_noi(@ptrCast(a), &a_len);
+        const b_public = dom_b.lxb_dom_document_type_public_id_noi(@ptrCast(b), &b_len);
+        if (!maybeBytesEqual(a_public, a_len, b_public, b_len)) return false;
+        a_len = 0;
+        b_len = 0;
+        const a_system = dom_b.lxb_dom_document_type_system_id_noi(@ptrCast(a), &a_len);
+        const b_system = dom_b.lxb_dom_document_type_system_id_noi(@ptrCast(b), &b_len);
+        if (!maybeBytesEqual(a_system, a_len, b_system, b_len)) return false;
+    } else if (nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+        if (getPITarget(a) != getPITarget(b)) return false;
+        var a_len: usize = 0;
+        var b_len: usize = 0;
+        const a_txt = dom_b.lxb_dom_node_text_content(a, &a_len);
+        const b_txt = dom_b.lxb_dom_node_text_content(b, &b_len);
+        if (a_len != b_len) return false;
+        if (a_txt != null and b_txt != null) {
+            if (!std.mem.eql(u8, a_txt.?[0..a_len], b_txt.?[0..b_len])) return false;
+        } else if (a_txt != b_txt) return false;
     } else if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
         // Compare text data
         var a_len: usize = 0;
@@ -9719,7 +10582,6 @@ fn nodesEqual(vm: *VM, a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
             if (!std.mem.eql(u8, a_txt.?[0..a_len], b_txt.?[0..b_len])) return false;
         } else if (a_txt != b_txt) return false;
     }
-    // DocumentType, PI: skip for now (handled as equal if same nodeType)
 
     // Step 3: compare children recursively
     var a_child = nodeFirstChild(a);
@@ -9827,29 +10689,7 @@ fn createDOMExceptionObj(vm: *VM, err_name: []const u8) !JsValue {
     try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern(err_name)));
     try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern(err_name)));
     // DOM §2.7: Legacy error code mapping (WebIDL §2.8.1)
-    const code: f64 = if (std.mem.eql(u8, err_name, "IndexSizeError")) 1
-        else if (std.mem.eql(u8, err_name, "HierarchyRequestError")) 3
-        else if (std.mem.eql(u8, err_name, "WrongDocumentError")) 4
-        else if (std.mem.eql(u8, err_name, "InvalidCharacterError")) 5
-        else if (std.mem.eql(u8, err_name, "NoModificationAllowedError")) 7
-        else if (std.mem.eql(u8, err_name, "NotFoundError")) 8
-        else if (std.mem.eql(u8, err_name, "NotSupportedError")) 9
-        else if (std.mem.eql(u8, err_name, "InUseAttributeError")) 10
-        else if (std.mem.eql(u8, err_name, "InvalidStateError")) 11
-        else if (std.mem.eql(u8, err_name, "SyntaxError")) 12
-        else if (std.mem.eql(u8, err_name, "InvalidModificationError")) 13
-        else if (std.mem.eql(u8, err_name, "NamespaceError")) 14
-        else if (std.mem.eql(u8, err_name, "InvalidAccessError")) 15
-        else if (std.mem.eql(u8, err_name, "TypeMismatchError")) 17
-        else if (std.mem.eql(u8, err_name, "SecurityError")) 18
-        else if (std.mem.eql(u8, err_name, "NetworkError")) 19
-        else if (std.mem.eql(u8, err_name, "AbortError")) 20
-        else if (std.mem.eql(u8, err_name, "URLMismatchError")) 21
-        else if (std.mem.eql(u8, err_name, "QuotaExceededError")) 22
-        else if (std.mem.eql(u8, err_name, "TimeoutError")) 23
-        else if (std.mem.eql(u8, err_name, "InvalidNodeTypeError")) 24
-        else if (std.mem.eql(u8, err_name, "DataCloneError")) 25
-        else 0;
+    const code: f64 = if (std.mem.eql(u8, err_name, "IndexSizeError")) 1 else if (std.mem.eql(u8, err_name, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, err_name, "WrongDocumentError")) 4 else if (std.mem.eql(u8, err_name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, err_name, "NoModificationAllowedError")) 7 else if (std.mem.eql(u8, err_name, "NotFoundError")) 8 else if (std.mem.eql(u8, err_name, "NotSupportedError")) 9 else if (std.mem.eql(u8, err_name, "InUseAttributeError")) 10 else if (std.mem.eql(u8, err_name, "InvalidStateError")) 11 else if (std.mem.eql(u8, err_name, "SyntaxError")) 12 else if (std.mem.eql(u8, err_name, "InvalidModificationError")) 13 else if (std.mem.eql(u8, err_name, "NamespaceError")) 14 else if (std.mem.eql(u8, err_name, "InvalidAccessError")) 15 else if (std.mem.eql(u8, err_name, "TypeMismatchError")) 17 else if (std.mem.eql(u8, err_name, "SecurityError")) 18 else if (std.mem.eql(u8, err_name, "NetworkError")) 19 else if (std.mem.eql(u8, err_name, "AbortError")) 20 else if (std.mem.eql(u8, err_name, "URLMismatchError")) 21 else if (std.mem.eql(u8, err_name, "QuotaExceededError")) 22 else if (std.mem.eql(u8, err_name, "TimeoutError")) 23 else if (std.mem.eql(u8, err_name, "InvalidNodeTypeError")) 24 else if (std.mem.eql(u8, err_name, "DataCloneError")) 25 else 0;
     try err.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(code));
     // Set constructor to DOMException
     const de_sid = try vm.pool.intern("DOMException");
@@ -9878,7 +10718,7 @@ fn nativeAppendData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len == 0) return error.TypeError;
-    const append_str = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else if (args[0].isNull()) "null" else if (args[0].isUndefined()) "undefined" else "";
+    const append_str = argToString(vm, args[0]);
     // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
     // Stack buffer with heap spill for values > 4 KiB (pattern: dom_element.zig:795-808).
     var old_stack_buf: [4096]u8 = undefined;
@@ -9909,13 +10749,13 @@ fn nativeDeleteData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
     const u16len = VM.utf16Len(info.text);
-    const offset_cu = toUint32(args[0].toNumber());
+    const offset_cu = toUint32(argToNumber(vm, args[0]));
     if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
     // DOM §4.2.5: count = min(count, length - offset) in UTF-16 code units
-    const raw_count = toUint32(args[1].toNumber());
+    const raw_count = toUint32(argToNumber(vm, args[1]));
     const count_cu = @min(raw_count, u16len - offset_cu);
     // Convert UTF-16 indices to byte offsets
     const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
@@ -9949,14 +10789,13 @@ fn nativeInsertData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
     const u16len = VM.utf16Len(info.text);
-    const offset_cu = toUint32(args[0].toNumber());
+    const offset_cu = toUint32(argToNumber(vm, args[0]));
     if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
     const byte_off = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
-    var buf_fmt: [64]u8 = undefined;
-    const ins_str = VM.formatValue(vm.pool, args[1], &buf_fmt);
+    const ins_str = argToString(vm, args[1]);
     // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
     var old_stack_buf: [4096]u8 = undefined;
     var old_heap: ?[]u8 = null;
@@ -9987,18 +10826,17 @@ fn nativeReplaceData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 3) return JsValue.undefined_val;
     const u16len = VM.utf16Len(info.text);
-    const offset_cu = toUint32(args[0].toNumber());
+    const offset_cu = toUint32(argToNumber(vm, args[0]));
     if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
     // DOM §4.2.5: count = min(count, length - offset) in UTF-16 code units
-    const raw_count = toUint32(args[1].toNumber());
+    const raw_count = toUint32(argToNumber(vm, args[1]));
     const count_cu = @min(raw_count, u16len - offset_cu);
     const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
     const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
-    var buf_fmt: [64]u8 = undefined;
-    const rep_str = VM.formatValue(vm.pool, args[2], &buf_fmt);
+    const rep_str = argToString(vm, args[2]);
     // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
     var old_stack_buf: [4096]u8 = undefined;
     var old_heap: ?[]u8 = null;
@@ -10029,12 +10867,12 @@ fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return error.TypeError;
     const u16len = VM.utf16Len(info.text);
-    const offset_cu = toUint32(args[0].toNumber());
+    const offset_cu = toUint32(argToNumber(vm, args[0]));
     if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
-    const raw_count = toUint32(args[1].toNumber());
+    const raw_count = toUint32(argToNumber(vm, args[1]));
     const count_cu = @min(raw_count, u16len - offset_cu);
     const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
     const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
@@ -10948,8 +11786,7 @@ fn validateJsOnlyDocumentAppend(
     var frag_has_text = false;
     for (args) |arg| {
         const nt = try argNodeTypeForAppend(vm, arg);
-        if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) frag_elements += 1
-        else if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_CDATA_SECTION) frag_has_text = true;
+        if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) frag_elements += 1 else if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_CDATA_SECTION) frag_has_text = true;
     }
     if (frag_has_text) {
         vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
@@ -11913,8 +12750,7 @@ fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
         // Without the undefined check, `el.textContent = undefined` ended
         // up appending the literal "undefined" text node.
         if (!val.isNull() and !val.isUndefined()) {
-            var buf: [64]u8 = undefined;
-            const s = VM.formatValue(vm.pool, val, &buf);
+            const s = argToString(vm, val);
             if (s.len > 0) {
                 _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
                 if (g_mo_list.items.len > 0) {
@@ -11958,8 +12794,7 @@ fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
         if (val.isNull()) {
             _ = dom_b.lxb_dom_node_text_content_set(node, "", 0);
         } else {
-            var buf: [64]u8 = undefined;
-            const s = VM.formatValue(vm.pool, val, &buf);
+            const s = argToString(vm, val);
             _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
         }
         if (g_mo_list.items.len > 0) {
@@ -12163,10 +12998,16 @@ fn findElementById(root: *lxb.lxb_dom_node_t, id: []const u8) ?*lxb.lxb_dom_elem
             }
         }
         if (nodeNext(node)) |nx| {
-            if (depth < stack.len) { stack[depth] = nx; depth += 1; }
+            if (depth < stack.len) {
+                stack[depth] = nx;
+                depth += 1;
+            }
         }
         if (nodeFirstChild(node)) |fc| {
-            if (depth < stack.len) { stack[depth] = fc; depth += 1; }
+            if (depth < stack.len) {
+                stack[depth] = fc;
+                depth += 1;
+            }
         }
     }
     return null;
@@ -12183,7 +13024,7 @@ fn findFirstMatch(root: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb_dom
             // Delegate to the full dom_selector engine for consistency with
             // findAllMatches (supports attribute selectors, pseudo-classes,
             // and combinators).
-            if (suzume_element_matches(node, sel.ptr, sel.len)) return node;
+            if (elementMatches(node, sel)) return node;
         }
         if (nodeFirstChild(node)) |child| {
             cur = child;
@@ -12191,7 +13032,10 @@ fn findFirstMatch(root: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb_dom
             var n = node;
             cur = null;
             while (true) {
-                if (nodeNext(n)) |nx| { cur = nx; break; }
+                if (nodeNext(n)) |nx| {
+                    cur = nx;
+                    break;
+                }
                 if (nodeParent(n)) |p| {
                     if (@intFromPtr(p) == @intFromPtr(root)) break;
                     n = p;
@@ -12216,7 +13060,7 @@ fn findAllMatches(root: *lxb.lxb_dom_node_t, selector: []const u8, alloc: std.me
             // the C-ABI bridge so that `[attr]`, `[attr=val]`, `:pseudo`,
             // and combinator selectors all match. Without this we had a
             // local simple matcher that only understood tag/#id/.class.
-            if (suzume_element_matches(node, sel.ptr, sel.len)) {
+            if (elementMatches(node, sel)) {
                 results.append(alloc, node) catch {};
             }
         }
@@ -12226,7 +13070,10 @@ fn findAllMatches(root: *lxb.lxb_dom_node_t, selector: []const u8, alloc: std.me
             var n = node;
             cur = null;
             while (true) {
-                if (nodeNext(n)) |nx| { cur = nx; break; }
+                if (nodeNext(n)) |nx| {
+                    cur = nx;
+                    break;
+                }
                 if (nodeParent(n)) |p| {
                     if (@intFromPtr(p) == @intFromPtr(root)) break;
                     n = p;
@@ -12238,8 +13085,8 @@ fn findAllMatches(root: *lxb.lxb_dom_node_t, selector: []const u8, alloc: std.me
 }
 
 /// Match a simple CSS selector: tag, #id, .class, tag.class, tag#id, .a.b
-/// (Retained for findFirstMatch legacy path; findAllMatches now delegates
-/// to suzume_element_matches for full selector support including [attr=val].)
+/// (Retained as the test fallback; browser builds register the full selector
+/// engine via `setElementMatchesCallback`.)
 fn matchSimpleSelector(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel.len == 0) return false;
 
@@ -12252,7 +13099,15 @@ fn matchSimpleSelector(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     var seg_start: usize = 0;
     var seg_type: enum { tag, id, class } = .tag;
 
-    if (sel[0] == '#') { seg_type = .id; seg_start = 1; i = 1; } else if (sel[0] == '.') { seg_type = .class; seg_start = 1; i = 1; }
+    if (sel[0] == '#') {
+        seg_type = .id;
+        seg_start = 1;
+        i = 1;
+    } else if (sel[0] == '.') {
+        seg_type = .class;
+        seg_start = 1;
+        i = 1;
+    }
 
     while (i <= sel.len) {
         const at_end = i == sel.len;
@@ -12263,7 +13118,10 @@ fn matchSimpleSelector(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
                 .tag => tag_part = seg,
                 .id => id_part = seg,
                 .class => {
-                    if (class_count < classes.len) { classes[class_count] = seg; class_count += 1; }
+                    if (class_count < classes.len) {
+                        classes[class_count] = seg;
+                        class_count += 1;
+                    }
                 },
             };
             if (!at_end) {
@@ -12313,13 +13171,43 @@ fn classContains(class_str: []const u8, needle: []const u8) bool {
 // ══════════════════════════════════════════════════════════════════════
 
 fn camelToKebab(input: []const u8, buf: *[128]u8) []const u8 {
+    if (eql(input, "cssFloat")) return "float";
+    if (std.mem.startsWith(u8, input, "--")) {
+        const end = @min(input.len, buf.len);
+        @memcpy(buf[0..end], input[0..end]);
+        return buf[0..end];
+    }
+
+    var has_upper = false;
+    var has_lower = false;
+    var has_dash = false;
+    for (input) |ch| {
+        has_upper = has_upper or std.ascii.isUpper(ch);
+        has_lower = has_lower or std.ascii.isLower(ch);
+        has_dash = has_dash or ch == '-';
+    }
+    if (has_dash or (has_upper and !has_lower)) {
+        const end = @min(input.len, buf.len);
+        for (input[0..end], 0..) |ch, i| buf[i] = std.ascii.toLower(ch);
+        return buf[0..end];
+    }
+
     var out: usize = 0;
     for (input) |ch| {
         if (std.ascii.isUpper(ch)) {
-            if (out < buf.len) { buf[out] = '-'; out += 1; }
-            if (out < buf.len) { buf[out] = std.ascii.toLower(ch); out += 1; }
+            if (out < buf.len) {
+                buf[out] = '-';
+                out += 1;
+            }
+            if (out < buf.len) {
+                buf[out] = std.ascii.toLower(ch);
+                out += 1;
+            }
         } else {
-            if (out < buf.len) { buf[out] = ch; out += 1; }
+            if (out < buf.len) {
+                buf[out] = ch;
+                out += 1;
+            }
         }
     }
     return buf[0..out];
@@ -12333,16 +13221,108 @@ fn findCssPropValue(style_str: []const u8, css_prop: []const u8) ?[]const u8 {
         if (pos >= style_str.len) break;
         const ps = pos;
         while (pos < style_str.len and style_str[pos] != ':' and style_str[pos] != ';') pos += 1;
-        if (pos >= style_str.len or style_str[pos] != ':') break;
+        if (pos >= style_str.len) break;
+        if (style_str[pos] != ':') {
+            pos += 1;
+            continue;
+        }
         const prop = std.mem.trim(u8, style_str[ps..pos], " \t");
         pos += 1;
         const vs = pos;
         while (pos < style_str.len and style_str[pos] != ';') pos += 1;
         const val = std.mem.trim(u8, style_str[vs..pos], " \t");
         if (pos < style_str.len) pos += 1;
-        if (eql(prop, css_prop)) result = val;
+        if (cssPropEql(prop, css_prop)) result = stripImportantSuffix(val);
     }
     return result;
+}
+
+fn findCssPropImportant(style_str: []const u8, css_prop: []const u8) bool {
+    var result = false;
+    var pos: usize = 0;
+    while (pos < style_str.len) {
+        while (pos < style_str.len and (style_str[pos] == ' ' or style_str[pos] == '\t')) pos += 1;
+        if (pos >= style_str.len) break;
+        const ps = pos;
+        while (pos < style_str.len and style_str[pos] != ':' and style_str[pos] != ';') pos += 1;
+        if (pos >= style_str.len) break;
+        if (style_str[pos] != ':') {
+            pos += 1;
+            continue;
+        }
+        const prop = std.mem.trim(u8, style_str[ps..pos], " \t");
+        pos += 1;
+        const vs = pos;
+        while (pos < style_str.len and style_str[pos] != ';') pos += 1;
+        const val = std.mem.trim(u8, style_str[vs..pos], " \t");
+        if (pos < style_str.len) pos += 1;
+        if (cssPropEql(prop, css_prop)) result = hasImportantSuffix(val);
+    }
+    return result;
+}
+
+fn hasImportantSuffix(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len < "important".len + 1) return false;
+    const important_start = trimmed.len - "important".len;
+    if (!std.ascii.eqlIgnoreCase(trimmed[important_start..], "important")) return false;
+    const before = std.mem.trimEnd(u8, trimmed[0..important_start], " \t\r\n");
+    return before.len > 0 and before[before.len - 1] == '!';
+}
+
+fn stripImportantSuffix(value: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len < "important".len + 1) return trimmed;
+    const important_start = trimmed.len - "important".len;
+    if (!std.ascii.eqlIgnoreCase(trimmed[important_start..], "important")) return trimmed;
+    const before = std.mem.trimEnd(u8, trimmed[0..important_start], " \t\r\n");
+    if (before.len == 0 or before[before.len - 1] != '!') return trimmed;
+    return std.mem.trimEnd(u8, before[0 .. before.len - 1], " \t\r\n");
+}
+
+fn cssPropEql(a: []const u8, b: []const u8) bool {
+    if (std.mem.startsWith(u8, a, "--") or std.mem.startsWith(u8, b, "--")) return eql(a, b);
+    return std.ascii.eqlIgnoreCase(a, b);
+}
+
+fn cssPropSeenBefore(style_str: []const u8, limit: usize, css_prop: []const u8) bool {
+    var pos: usize = 0;
+    while (pos < limit) {
+        while (pos < limit and (style_str[pos] == ' ' or style_str[pos] == '\t')) pos += 1;
+        if (pos >= limit) break;
+        const ps = pos;
+        while (pos < limit and style_str[pos] != ':' and style_str[pos] != ';') pos += 1;
+        if (pos >= limit) break;
+        if (style_str[pos] != ':') {
+            pos += 1;
+            continue;
+        }
+        const prop = std.mem.trim(u8, style_str[ps..pos], " \t\r\n");
+        pos += 1;
+        while (pos < limit and style_str[pos] != ';') pos += 1;
+        if (pos < limit) pos += 1;
+        if (prop.len > 0 and cssPropEql(prop, css_prop)) return true;
+    }
+    return false;
+}
+
+fn countCssProps(style_str: []const u8) usize {
+    var count: usize = 0;
+    var rest = style_str;
+    while (rest.len > 0) {
+        const decl_start = style_str.len - rest.len;
+        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+        const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
+        if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
+        if (decl.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, decl, ':') orelse continue;
+        const prop = std.mem.trim(u8, decl[0..colon], " \t\r\n");
+        if (prop.len == 0) continue;
+        var name_buf: [128]u8 = undefined;
+        const css_prop = camelToKebab(prop, &name_buf);
+        if (!cssPropSeenBefore(style_str, decl_start, css_prop)) count += 1;
+    }
+    return count;
 }
 
 fn updateStyleProp(old: []const u8, css_prop: []const u8, new_val: []const u8, buf: *[2048]u8) []const u8 {
@@ -12355,7 +13335,11 @@ fn updateStyleProp(old: []const u8, css_prop: []const u8, new_val: []const u8, b
         if (pos >= old.len) break;
         const ps = pos;
         while (pos < old.len and old[pos] != ':' and old[pos] != ';') pos += 1;
-        if (pos >= old.len or old[pos] != ':') break;
+        if (pos >= old.len) break;
+        if (old[pos] != ':') {
+            pos += 1;
+            continue;
+        }
         const prop = std.mem.trim(u8, old[ps..pos], " \t");
         pos += 1;
         const vs = pos;
@@ -12363,7 +13347,8 @@ fn updateStyleProp(old: []const u8, css_prop: []const u8, new_val: []const u8, b
         const val = std.mem.trim(u8, old[vs..pos], " \t");
         if (pos < old.len) pos += 1;
 
-        if (eql(prop, css_prop)) {
+        if (cssPropEql(prop, css_prop)) {
+            if (found) continue;
             found = true;
             if (new_val.len > 0) out += writeDecl(buf, out, css_prop, new_val);
         } else {
@@ -12378,15 +13363,28 @@ fn updateStyleProp(old: []const u8, css_prop: []const u8, new_val: []const u8, b
 
 fn writeDecl(buf: *[2048]u8, off: usize, prop: []const u8, val: []const u8) usize {
     var p = off;
-    if (p > 0 and p < buf.len) { buf[p] = ' '; p += 1; }
+    if (p > 0 and p < buf.len) {
+        buf[p] = ' ';
+        p += 1;
+    }
     const pe = @min(p + prop.len, buf.len);
     @memcpy(buf[p..pe], prop[0 .. pe - p]);
     p = pe;
-    if (p + 1 < buf.len) { buf[p] = ':'; buf[p + 1] = ' '; p += 2; } else if (p < buf.len) { buf[p] = ':'; p += 1; }
+    if (p + 1 < buf.len) {
+        buf[p] = ':';
+        buf[p + 1] = ' ';
+        p += 2;
+    } else if (p < buf.len) {
+        buf[p] = ':';
+        p += 1;
+    }
     const ve = @min(p + val.len, buf.len);
     @memcpy(buf[p..ve], val[0 .. ve - p]);
     p = ve;
-    if (p < buf.len) { buf[p] = ';'; p += 1; }
+    if (p < buf.len) {
+        buf[p] = ';';
+        p += 1;
+    }
     return p - off;
 }
 
@@ -12424,7 +13422,9 @@ fn getMoIdx(vm: *VM, this: JsValue) ?u32 {
     const sid = vm.pool.intern("_moIdx") catch return null;
     const val = this.asJsObject().getProperty(sid) orelse return null;
     if (!val.isNumber()) return null;
-    const idx: i32 = @intFromFloat(val.asNumber());
+    const idx_f = val.asNumber();
+    if (!std.math.isFinite(idx_f)) return null;
+    const idx: i32 = @intFromFloat(idx_f);
     if (idx < 0 or @as(usize, @intCast(idx)) >= g_mo_list.items.len) return null;
     return @intCast(idx);
 }
@@ -12451,36 +13451,37 @@ fn nativeMoObserve(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
 
     if (args.len >= 2 and args[1].isObject()) {
         const opts = args[1].asJsObject();
-        if (opts.getProperty(vm.pool.intern("childList") catch return JsValue.undefined_val)) |v| {
-            if (v.isBool()) child_list = v.asBool();
+        const opts_val = args[1];
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("childList") catch return JsValue.undefined_val, opts_val)) |v| {
+            child_list = v.isTruthy();
         }
-        if (opts.getProperty(vm.pool.intern("attributes") catch return JsValue.undefined_val)) |v| {
-            if (v.isBool()) attributes = v.asBool();
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("attributes") catch return JsValue.undefined_val, opts_val)) |v| {
+            attributes = v.isTruthy();
         }
-        if (opts.getProperty(vm.pool.intern("characterData") catch return JsValue.undefined_val)) |v| {
-            if (v.isBool()) character_data = v.asBool();
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("characterData") catch return JsValue.undefined_val, opts_val)) |v| {
+            character_data = v.isTruthy();
         }
-        if (opts.getProperty(vm.pool.intern("subtree") catch return JsValue.undefined_val)) |v| {
-            if (v.isBool()) subtree = v.asBool();
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("subtree") catch return JsValue.undefined_val, opts_val)) |v| {
+            subtree = v.isTruthy();
         }
-        if (opts.getProperty(vm.pool.intern("attributeOldValue") catch return JsValue.undefined_val)) |v| {
-            if (v.isBool()) attribute_old_value = v.asBool();
-            if (v.isBool() and v.asBool()) attributes = true;
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("attributeOldValue") catch return JsValue.undefined_val, opts_val)) |v| {
+            attribute_old_value = v.isTruthy();
+            if (attribute_old_value) attributes = true;
         }
-        if (opts.getProperty(vm.pool.intern("characterDataOldValue") catch return JsValue.undefined_val)) |v| {
-            if (v.isBool()) character_data_old_value = v.asBool();
-            if (v.isBool() and v.asBool()) character_data = true;
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("characterDataOldValue") catch return JsValue.undefined_val, opts_val)) |v| {
+            character_data_old_value = v.isTruthy();
+            if (character_data_old_value) character_data = true;
         }
         // attributeFilter: JS array of strings. Presence implies attributes=true
         // per DOM §4.3.3 step 3.3 (filter only applies when attributes observed).
-        if (opts.getProperty(vm.pool.intern("attributeFilter") catch return JsValue.undefined_val)) |v| {
+        if (try vm.getPropertyWithAccessors(opts, vm.pool.intern("attributeFilter") catch return JsValue.undefined_val, opts_val)) |v| {
             if (v.isObject()) {
                 const arr_obj = v.asJsObject();
                 if (arr_obj.obj_type == .array) {
                     const items = arr_obj.data.array.items;
                     const list = try vm.allocator.alloc([]const u8, items.len);
                     for (items, 0..) |item, fi| {
-                        const s = if (item.isString()) (vm.pool.get(item.asStringId()) orelse "") else "";
+                        const s = argToString(vm, item);
                         list[fi] = try vm.allocator.dupe(u8, s);
                     }
                     attribute_filter = list;
@@ -12535,7 +13536,7 @@ fn nativeMoDisconnect(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerr
 
 fn nativeMoTakeRecords(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    const idx = getMoIdx(vm, this) orelse return JsValue.undefined_val;
+    const idx = getMoIdx(vm, this) orelse return try buildRecordsArray(vm, &.{});
     var obs = &g_mo_list.items[idx];
     const arr = try buildRecordsArray(vm, obs.pending.items);
     obs.pending.clearRetainingCapacity();
@@ -12598,6 +13599,7 @@ pub fn recordChildListMutation(
             break;
         }
     }
+    if (g_mo_pending) flushMutationObservers();
 }
 
 /// Record a childList mutation for any matching MutationObservers with a
@@ -12658,6 +13660,7 @@ pub fn recordChildListMutationBulk(
             break;
         }
     }
+    if (g_mo_pending) flushMutationObservers();
 }
 
 /// Record an attribute mutation for any matching MutationObservers.
@@ -12715,6 +13718,7 @@ pub fn recordAttributeMutation(
             break;
         }
     }
+    if (g_mo_pending) flushMutationObservers();
 }
 
 /// Record a characterData mutation for any matching MutationObservers.
@@ -12758,6 +13762,7 @@ pub fn recordCharDataMutation(
             break;
         }
     }
+    if (g_mo_pending) flushMutationObservers();
 }
 
 fn isAncestor(node: *lxb.lxb_dom_node_t, ancestor_ptr: usize) bool {

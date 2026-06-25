@@ -1772,8 +1772,15 @@ fn jsSuzumeXhrSync(
                 const val_s = dom_api.jsStringToSlice(c, val_js) orelse continue;
                 defer qjs.JS_FreeCString(c, val_s.ptr);
                 const k = allocator.dupe(u8, std.mem.span(key_cstr)) catch continue;
-                const v = allocator.dupe(u8, val_s.ptr[0..val_s.len]) catch { allocator.free(k); continue; };
-                headers_list.append(allocator, .{ k, v }) catch { allocator.free(k); allocator.free(v); continue; };
+                const v = allocator.dupe(u8, val_s.ptr[0..val_s.len]) catch {
+                    allocator.free(k);
+                    continue;
+                };
+                headers_list.append(allocator, .{ k, v }) catch {
+                    allocator.free(k);
+                    allocator.free(v);
+                    continue;
+                };
             }
         }
     }
@@ -1789,17 +1796,20 @@ fn jsSuzumeXhrSync(
 
     // Map status code to text
     const STATUS_TEXT = [_][2][]const u8{
-        .{ "200", "OK" }, .{ "201", "Created" }, .{ "204", "No Content" },
-        .{ "301", "Moved Permanently" }, .{ "302", "Found" }, .{ "304", "Not Modified" },
-        .{ "400", "Bad Request" }, .{ "401", "Unauthorized" }, .{ "403", "Forbidden" },
-        .{ "404", "Not Found" }, .{ "500", "Internal Server Error" },
-        .{ "502", "Bad Gateway" }, .{ "503", "Service Unavailable" },
+        .{ "200", "OK" },                  .{ "201", "Created" },               .{ "204", "No Content" },
+        .{ "301", "Moved Permanently" },   .{ "302", "Found" },                 .{ "304", "Not Modified" },
+        .{ "400", "Bad Request" },         .{ "401", "Unauthorized" },          .{ "403", "Forbidden" },
+        .{ "404", "Not Found" },           .{ "500", "Internal Server Error" }, .{ "502", "Bad Gateway" },
+        .{ "503", "Service Unavailable" },
     };
     var status_text: []const u8 = "";
     var st_buf: [8]u8 = undefined;
     const st_str = std.fmt.bufPrint(&st_buf, "{d}", .{resp.status_code}) catch "";
     for (STATUS_TEXT) |pair| {
-        if (std.mem.eql(u8, pair[0], st_str)) { status_text = pair[1]; break; }
+        if (std.mem.eql(u8, pair[0], st_str)) {
+            status_text = pair[1];
+            break;
+        }
     }
 
     const result = qjs.JS_NewObject(c);
@@ -2214,11 +2224,11 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\    removeItem:function(k){var ks=String(k);if(ks in _ls){delete _ls[ks];_lsKeys=_lsKeys.filter(function(x){return x!==ks;});_lsSave();}},
         \\    clear:function(){_ls={};_lsKeys=[];_lsSave();},
         \\    get length(){return _lsKeys.length;},
-        \\    key:function(i){return i>=0&&i<_lsKeys.length?_lsKeys[i]:null;}
+        \\    key:function(i){i=i>>>0;return i<_lsKeys.length?_lsKeys[i]:null;}
         \\  };
         \\}
         \\if(typeof sessionStorage==='undefined'){
-        \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
+        \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){i=i>>>0;return Object.keys(_ss)[i]||null;}};
         \\}
         \\if(typeof XMLHttpRequest==='undefined'){
         \\  globalThis.XMLHttpRequest=function(){

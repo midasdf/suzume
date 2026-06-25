@@ -24,6 +24,7 @@
 //! safe to call recursively for nested function arguments.
 
 const std = @import("std");
+const css_properties = @import("css_properties");
 
 const ArgType = enum {
     number,
@@ -570,8 +571,7 @@ fn argTypeOf(arg: []const u8) ArgType {
 
 fn isNumericType(t: ArgType) bool {
     return switch (t) {
-        .number, .integer, .length, .percentage, .angle, .time,
-        .frequency, .resolution, .length_percentage => true,
+        .number, .integer, .length, .percentage, .angle, .time, .frequency, .resolution, .length_percentage => true,
         else => false,
     };
 }
@@ -940,7 +940,6 @@ fn validateUrlWithModifier(val: []const u8) bool {
 /// value for the given `prop`. Use as a setter-time guard per CSSOM
 /// §6.7.2 "invalid values don't change specified value".
 pub fn isValidPropertyValue(prop: []const u8, val: []const u8) bool {
-    _ = prop; // property-specific grammar is delegated to callers via dom_style
     const trimmed = trimWs(val);
 
     // Layer 0: empty / CSS-wide keywords / var().
@@ -958,6 +957,12 @@ pub fn isValidPropertyValue(prop: []const u8, val: []const u8) bool {
         const inner = funcInner(trimmed) orelse return false;
         if (trimWs(inner).len == 0) return false;
         return hasBalancedArgs(inner);
+    }
+
+    if (eqlIgnoreCase(prop, "color") or std.mem.endsWith(u8, prop, "-color")) {
+        if (eqlIgnoreCase(trimmed, "currentcolor")) return true;
+        if (startsWithIgnoreCase(trimmed, "hwb(") and std.mem.indexOfScalar(u8, trimmed, ',') != null) return false;
+        return css_properties.parseColor(trimmed) != null;
     }
 
     // Layer 2: classify shape. Focus on function-call validation — bare
@@ -1205,6 +1210,11 @@ test "background: linear-gradient() rejected in layer" {
 test "hwb: space syntax accepted, comma syntax rejected" {
     try testing.expect(isValidPropertyValue("color", "hwb(0 0% 0%)"));
     try testing.expect(!isValidPropertyValue("color", "hwb(0, 0%, 0%)"));
+}
+
+test "color properties reject unknown bare identifiers" {
+    try testing.expect(isValidPropertyValue("color", "red"));
+    try testing.expect(!isValidPropertyValue("color", "not-a-color-xyzzy"));
 }
 
 // ── Phase 6.3 additions ─────────────────────────────────────────────

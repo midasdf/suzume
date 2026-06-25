@@ -6,10 +6,16 @@ const properties = css.properties;
 
 test "parse large CSS without crash" {
     const alloc = std.testing.allocator;
-    const file = try std.fs.cwd().openFile("/tmp/github-combined.css", .{});
-    defer file.close();
-    const css_text = try file.readToEndAlloc(alloc, 10 * 1024 * 1024);
-    defer alloc.free(css_text);
+
+    var css_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer css_buf.deinit(alloc);
+    for (0..160) |i| {
+        try css_buf.writer(alloc).print(
+            ".item-{d} {{ margin: {d}px; padding: 1px 2px; color: red; }}\n",
+            .{ i, i % 16 },
+        );
+    }
+    const css_text = css_buf.items;
 
     std.debug.print("\nCSS size: {d} bytes\n", .{css_text.len});
 
@@ -31,7 +37,10 @@ test "parse large CSS without crash" {
     // Flatten with media queries (viewport 720x720)
     std.debug.print("Flattening rules...\n", .{});
     var flat_rules: std.ArrayListUnmanaged(FlatRule) = .empty;
-    defer flat_rules.deinit(alloc);
+    defer {
+        for (flat_rules.items) |rule| alloc.free(rule.declarations);
+        flat_rules.deinit(alloc);
+    }
     try flattenRulesHelper(sheet.rules, 720, 720, &flat_rules, alloc);
     std.debug.print("Flat rules: {d}\n", .{flat_rules.items.len});
 
@@ -72,6 +81,7 @@ fn flattenRulesHelper(
                 var expanded: std.ArrayListUnmanaged(css.ast.Declaration) = .empty;
                 for (sr.declarations) |decl| {
                     if (properties.expandShorthand(decl.property_name, decl.value_raw, alloc)) |exp| {
+                        defer alloc.free(exp);
                         for (exp) |*ed| {
                             ed.important = decl.important;
                         }

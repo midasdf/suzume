@@ -3,7 +3,7 @@
 // These tests exercise the low-level scope tagging / allowlist logic in
 // `src/js/shadow_root.zig`. End-to-end JS integration behavior (attachShadow
 // return values, querySelector scoping, outerHTML exclusion) is covered by
-// fixture-based tests driven through `tests/test_integration.zig::testDomJs`.
+// `zig build test-kotori-dom` and the `zig build test-dom-js` smoke.
 
 const std = @import("std");
 const shadow_root = @import("js/shadow_root.zig");

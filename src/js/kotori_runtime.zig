@@ -1266,8 +1266,9 @@ pub const KotoriRuntime = struct {
     ///  - The spec-faithful `Proxy`/`ToUint32` path is now safe because
     ///    kotori's `toInt32`/`toUint32` were fixed to match ECMA-262 §7.1.6
     ///    (NaN/Infinity/out-of-range → 0 instead of panicking).
-    /// Remaining limitation:
-    ///  - No `Symbol.iterator`; the WPT classList suite does not rely on it.
+    /// Iterator support:
+    ///  - `keys`, `values`, `entries`, and `Symbol.iterator` mirror the
+    ///    WebIDL iterable surface for DOMTokenList.
     const class_list_polyfill_js =
         \\(function(){
         \\  if (typeof Element==='undefined' || !Element.prototype) return;
@@ -1314,19 +1315,9 @@ pub const KotoriRuntime = struct {
         \\  function writeTokens(el, toks){
         \\    el.setAttribute('class', serializeOrderedSet(toks));
         \\  }
-        \\  /* Safe integer coercion — avoids `>>> 0`, which panics in kotori
-        \\   * when the operand becomes NaN or Infinity via toInt32. Returns
-        \\   * -1 for negative / non-finite / fractional — callers treat -1 as
-        \\   * "out of range" (item() returns null). */
+        \\  /* WebIDL unsigned long conversion for item(index). */
         \\  function toIntIndex(v){
-        \\    if (v===undefined || v===null) return -1;
-        \\    var n = Number(v);
-        \\    if (n !== n) return -1;            /* NaN */
-        \\    if (n === Infinity || n === -Infinity) return -1;
-        \\    if (n < 0) return -1;
-        \\    n = Math.floor(n);
-        \\    if (n > 2147483647) return -1;
-        \\    return n;
+        \\    return v>>>0;
         \\  }
         \\
         \\  /* DOMTokenList constructor — WebIDL [Exposed] with no constructor,
@@ -1344,7 +1335,6 @@ pub const KotoriRuntime = struct {
         \\  DTLP.item = function(idx){
         \\    /* DOM §7.1 item(index): if index is out of range, return null. */
         \\    var n = toIntIndex(idx);
-        \\    if (n < 0) return null;
         \\    var toks = getTokens(this._el);
         \\    if (n >= toks.length) return null;
         \\    return toks[n];
@@ -1634,11 +1624,7 @@ pub const KotoriRuntime = struct {
         \\  function writeRelTokens(el, toks){
         \\    el.setAttribute('rel', serializeOrderedSet(toks));
         \\  }
-        \\  function toIntIndex(v){
-        \\    if (v===undefined||v===null) return -1;
-        \\    var n=Number(v); if(n!==n||n===Infinity||n===-Infinity||n<0) return -1;
-        \\    n=Math.floor(n); if(n>2147483647) return -1; return n;
-        \\  }
+        \\  function toIntIndex(v){ return v>>>0; }
         \\
         \\  /* Build a relList wrapper for `el`, backed by the `rel` attribute. */
         \\  var DIGITS_RE = /^(?:0|[1-9][0-9]*)$/;
@@ -1650,7 +1636,7 @@ pub const KotoriRuntime = struct {
         \\    } catch(e){ target._el = el; }
         \\    /* Override methods that read/write `class` to use `rel` instead. */
         \\    target.item = function(idx){
-        \\      var n=toIntIndex(idx); if(n<0) return null;
+        \\      var n=toIntIndex(idx);
         \\      var toks=getRelTokens(this._el); return n<toks.length?toks[n]:null;
         \\    };
         \\    target.contains = function(token){
@@ -1766,7 +1752,7 @@ pub const KotoriRuntime = struct {
         \\      /* Override methods to use the correct attribute. */
         \\      function getToks(){ return parseOrderedSet(el.getAttribute(attrName)); }
         \\      function writeToks(t){ el.setAttribute(attrName, serializeOrderedSet(t)); }
-        \\      tl.item = function(i){ var n=toIntIndex(i); if(n<0)return null; var t=getToks(); return n<t.length?t[n]:null; };
+        \\      tl.item = function(i){ var n=toIntIndex(i); var t=getToks(); return n<t.length?t[n]:null; };
         \\      tl.contains = function(tk){ var t=getToks(); for(var i=0;i<t.length;i++) if(t[i]===String(tk)) return true; return false; };
         \\      tl.add = function(){ var args=[]; for(var i=0;i<arguments.length;i++){args.push(String(arguments[i]));validateToken(args[i]);} var t=getToks(),s={}; for(var j=0;j<t.length;j++)s[':'+t[j]]=1; var c=false; for(var k=0;k<args.length;k++){var kk=':'+args[k];if(!s[kk]){s[kk]=1;t.push(args[k]);c=true;}} if(c||el.getAttribute(attrName)==null)writeToks(t); };
         \\      tl.remove = function(){ var args=[]; for(var i=0;i<arguments.length;i++){args.push(String(arguments[i]));validateToken(args[i]);} var t=getToks(),d={}; for(var k=0;k<args.length;k++)d[':'+args[k]]=1; var o=[]; for(var j=0;j<t.length;j++){if(d[':'+t[j]])continue;o.push(t[j]);} if(el.getAttribute(attrName)!=null)writeToks(o); };
@@ -1788,7 +1774,7 @@ pub const KotoriRuntime = struct {
         \\  function parseOrderedSet(s){ if(s==null||s==='')return[]; var WS=/[\x09\x0A\x0C\x0D\x20]+/,raw=String(s).split(WS),seen={},out=[]; for(var i=0;i<raw.length;i++){var t=raw[i];if(t==='')continue;var k=':'+t;if(seen[k])continue;seen[k]=1;out.push(t);} return out; }
         \\  function serializeOrderedSet(arr){ var seen={},out=[]; for(var i=0;i<arr.length;i++){var t=String(arr[i]),k=':'+t;if(seen[k])continue;seen[k]=1;out.push(t);} return out.join(' '); }
         \\  function validateToken(t){ if(t==='')throw new DOMException("The token provided must not be empty.","SyntaxError"); if(/[\x09\x0A\x0C\x0D\x20]/.test(t))throw new DOMException("The token provided ('"+t+"') contains HTML space characters, which are not valid in tokens.","InvalidCharacterError"); }
-        \\  function toIntIndex(v){ if(v===undefined||v===null)return -1; var n=Number(v); if(n!==n||n===Infinity||n===-Infinity||n<0)return -1; n=Math.floor(n); if(n>2147483647)return -1; return n; }
+        \\  function toIntIndex(v){ return v>>>0; }
         \\  if (typeof Element !== 'undefined' && Element.prototype) {
         \\    var EP = Element.prototype;
         \\    Object.defineProperty(EP, 'relList', {
@@ -2819,7 +2805,7 @@ pub const KotoriRuntime = struct {
         \\    this.mediaText=this._items.join(', ');
         \\  }
         \\  Object.defineProperty(_MediaList.prototype,'length',{get:function(){return this._items.length;},enumerable:true,configurable:true});
-        \\  _MediaList.prototype.item=function(i){return this._items[i]||null;};
+        \\  _MediaList.prototype.item=function(i){return this._items[i>>>0]||null;};
         \\  _MediaList.prototype.toString=function(){return this.mediaText;};
         \\  // ── CSSRule hierarchy (CSSOM §6.4) ──
         \\  function _CSSRuleBase(){}
@@ -3095,7 +3081,7 @@ pub const KotoriRuntime = struct {
         \\    }
         \\  }
         \\  // Add .item() to a plain cssRules array (CSSRuleList interface)
-        \\  function _addItem(arr){if(!arr.item)arr.item=function(i){return(i>=0&&i<this.length)?this[i]:null;};return arr;}
+        \\  function _addItem(arr){if(!arr.item)arr.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};return arr;}
         \\  // CSSOM §6.4.2: replaceSync
         \\  CSSStyleSheet.prototype.replaceSync=function(css){
         \\    if(!this._constructed)throw new DOMException("replaceSync can only be called on constructed CSSStyleSheet.",'NotAllowedError');
@@ -3254,7 +3240,7 @@ pub const KotoriRuntime = struct {
         \\      if(el.getAttribute&&el.getAttribute('data-adopted')==='1')continue;
         \\      var sh=el.sheet;if(sh)sheets.push(sh);
         \\    }
-        \\    sheets.item=function(i){return this[i]||null;};
+        \\    sheets.item=function(i){return this[i>>>0]||null;};
         \\    return sheets;
         \\  },configurable:true,enumerable:true});
         \\  // ShadowRoot: adoptedStyleSheets + styleSheets via single attachShadow patch
@@ -3295,7 +3281,7 @@ pub const KotoriRuntime = struct {
         \\              if(el.getAttribute&&el.getAttribute('data-adopted')==='1')continue;
         \\              var sh=el.sheet;if(sh)sheets.push(sh);
         \\            }
-        \\            sheets.item=function(i){return this[i]||null;};
+        \\            sheets.item=function(i){return this[i>>>0]||null;};
         \\            return sheets;
         \\          },configurable:true,enumerable:true});
         \\        }
@@ -6178,7 +6164,7 @@ pub const KotoriRuntime = struct {
         \\    configurable:true,enumerable:true
         \\  });
         \\  FileList_.prototype.item=function(i){
-        \\    i=Number(i)|0;if(i<0)i=0;
+        \\    i=i>>>0;
         \\    return i<this._items.length?this._items[i]:null;
         \\  };
         \\  try{globalThis.FileList=FileList_;}catch(e){}
@@ -6926,12 +6912,12 @@ pub const KotoriRuntime = struct {
         \\    var s='',i=0;
         \\    // UTF-16 decode (little-endian, big-endian, auto-detect)
         \\    if(this.encoding==='utf-16le'||this.encoding==='utf-16be'||this.encoding==='utf-16'){
-      \\      var isLE=this.encoding==='utf-16le'||this.encoding==='utf-16';
-      \\      if(this.encoding==='utf-16'&&a.length>=2){
-      \\        if(a[0]===0xFF&&a[1]===0xFE){isLE=true;i=2;}
-      \\        else if(a[0]===0xFE&&a[1]===0xFF){isLE=false;i=2;}
-      \\        // else: no BOM — keep isLE=true (Encoding §6.2 step 4, default LE)
-      \\      }else if(!this.ignoreBOM&&a.length>=2){
+        \\      var isLE=this.encoding==='utf-16le'||this.encoding==='utf-16';
+        \\      if(this.encoding==='utf-16'&&a.length>=2){
+        \\        if(a[0]===0xFF&&a[1]===0xFE){isLE=true;i=2;}
+        \\        else if(a[0]===0xFE&&a[1]===0xFF){isLE=false;i=2;}
+        \\        // else: no BOM — keep isLE=true (Encoding §6.2 step 4, default LE)
+        \\      }else if(!this.ignoreBOM&&a.length>=2){
         \\        if((isLE&&a[0]===0xFF&&a[1]===0xFE)||(!isLE&&a[0]===0xFE&&a[1]===0xFF))i=2;
         \\      }
         \\      while(i<a.length){

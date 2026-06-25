@@ -52,6 +52,23 @@ pub const PendingEvent = struct {
     };
 };
 
+pub fn transitionPropertyName(property: ComputedStyle.TransitionProperty) []const u8 {
+    return switch (property) {
+        .all => "all",
+        .none => "none",
+        .opacity => "opacity",
+        .color => "color",
+        .background_color => "background-color",
+        .transform => "transform",
+    };
+}
+
+test "transitionPropertyName serializes CSS property names" {
+    try std.testing.expectEqualStrings("all", transitionPropertyName(.all));
+    try std.testing.expectEqualStrings("background-color", transitionPropertyName(.background_color));
+    try std.testing.expectEqualStrings("transform", transitionPropertyName(.transform));
+}
+
 /// Active animations for a page.
 pub const AnimationState = struct {
     animations: std.ArrayListUnmanaged(AnimationInstance),

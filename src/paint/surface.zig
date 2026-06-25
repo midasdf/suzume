@@ -37,10 +37,29 @@ pub const Surface = struct {
 
     /// Create and initialize an X11 window surface.
     pub fn init(width: i32, height: i32) !Surface {
+        return initBackend("x", width, height);
+    }
+
+    /// Create a RAM (off-screen) surface with no X11 window. Used by the
+    /// screenshot path when the page is taller than the visible window — the
+    /// X backend refuses to grow past the screen size, so a RAM surface is
+    /// the only way to render the full page in one image.
+    pub fn initRam(width: i32, height: i32) !Surface {
+        return initBackend("ram", width, height);
+    }
+
+    fn initBackend(backend_name: []const u8, width: i32, height: i32) !Surface {
         // Register surface backends (Zig linker doesn't run C constructors)
         nsfb_surface_init_all();
 
-        const surface_type = c.nsfb_type_from_name("x");
+        // nsfb_type_from_name expects a null-terminated C string; the names are
+        // short literals so build a small stack buffer.
+        var name_buf: [16:0]u8 = undefined;
+        if (backend_name.len >= name_buf.len) return error.BackendNameTooLong;
+        @memcpy(name_buf[0..backend_name.len], backend_name);
+        name_buf[backend_name.len] = 0;
+
+        const surface_type = c.nsfb_type_from_name(@ptrCast(&name_buf));
         if (surface_type == c.NSFB_SURFACE_NONE) {
             return error.SurfaceTypeNotFound;
         }
@@ -72,6 +91,26 @@ pub const Surface = struct {
         _ = c.nsfb_get_geometry(self.fb, &w, &h, null);
         self.width = @intCast(w);
         self.height = @intCast(h);
+    }
+
+    /// Resize the underlying framebuffer to a new width/height.
+    ///
+    /// Used by the screenshot path to extend the buffer to the full page height
+    /// (which can exceed the visible window) so paint() actually draws content
+    /// positioned below the viewport. Existing content is lost — callers must
+    /// re-render after resizing.
+    pub fn resize(self: *Surface, width: i32, height: i32) !void {
+        if (c.nsfb_set_geometry(self.fb, width, height, c.NSFB_FMT_XRGB8888) != 0) {
+            return error.SetGeometryFailed;
+        }
+        // Re-init the surface backend so the new geometry takes effect on the
+        // raster buffer. For the X backend this re-creates the window; for the
+        // RAM backend it reallocates the framebuffer.
+        if (c.nsfb_init(self.fb) != 0) {
+            return error.InitFailed;
+        }
+        self.width = width;
+        self.height = height;
     }
 
     pub fn deinit(self: *Surface) void {

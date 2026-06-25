@@ -184,7 +184,9 @@ pub const JsValue = packed struct {
     }
 
     pub fn jsMod(a: JsValue, b: JsValue) JsValue {
-        return initNumber(@mod(a.toNumber(), b.toNumber()));
+        const lhs = a.toNumber();
+        const rhs = b.toNumber();
+        return initNumber(lhs - @trunc(lhs / rhs) * rhs);
     }
 
     pub fn jsPow(a: JsValue, b: JsValue) JsValue {
@@ -214,8 +216,6 @@ pub const JsValue = packed struct {
     }
 
     pub fn jsStrictEq(a: JsValue, b: JsValue) JsValue {
-        // Same bits → always equal (handles null==null, undefined==undefined, bool, int, string by id)
-        if (a.bits == b.bits) return initBool(true);
         // ECMA-262 §7.2.15: Number and BigInt are separate types, but Int
         // and Number here are both representations of the same "Number" type
         // (NaN-boxed int32 vs f64). Compare numerically.
@@ -225,6 +225,8 @@ pub const JsValue = packed struct {
             // NaN !== NaN handled naturally by == on f64 (NaN != NaN).
             return initBool(a.toNumber() == b.toNumber());
         }
+        // Same bits → equal (handles null, undefined, bool, object, string id, symbol id)
+        if (a.bits == b.bits) return initBool(true);
         // Strings: same StringId means same content (interned)
         if (a.isString() and b.isString()) {
             return initBool(a.asStringId() == b.asStringId());
@@ -234,16 +236,13 @@ pub const JsValue = packed struct {
 
     pub fn jsEq(a: JsValue, b: JsValue) JsValue {
         // Abstract equality (==) with type coercion per ES spec
+        // Same numeric type comparisons. Keep this before same-bits so NaN != NaN.
+        if ((a.isNumber() or a.isInt()) and (b.isNumber() or b.isInt())) return initBool(a.toNumber() == b.toNumber());
         // Same bits → equal
         if (a.bits == b.bits) return initBool(true);
-        // Same type comparisons
-        if (a.isNumber() and b.isNumber()) return initBool(a.asNumber() == b.asNumber());
-        if (a.isInt() and b.isInt()) return initBool(a.asInt() == b.asInt());
         if (a.isString() and b.isString()) return initBool(a.asStringId() == b.asStringId());
         // null == undefined (and vice versa)
         if ((a.isNull() or a.isUndefined()) and (b.isNull() or b.isUndefined())) return initBool(true);
-        // number/int == number/int (mixed)
-        if ((a.isNumber() or a.isInt()) and (b.isNumber() or b.isInt())) return initBool(a.toNumber() == b.toNumber());
         // boolean == anything → ToNumber(bool) == other
         if (a.isBool()) return jsEq(initNumber(if (a.asBool()) 1.0 else 0.0), b);
         if (b.isBool()) return jsEq(a, initNumber(if (b.asBool()) 1.0 else 0.0));

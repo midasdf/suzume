@@ -1657,11 +1657,12 @@ pub fn documentGetElementsByClassName(
     qjs.JS_FreeValue(c, global);
     defer qjs.JS_FreeValue(c, doc_js);
 
-    const selector = api.buildClassSelector(class_name, &selector_buf) orelse {
+    const selector_holder = api.buildClassSelectorDynamic(std.heap.c_allocator, class_name, &selector_buf) orelse {
         return makeLiveHTMLCollection(c, doc_js, "");
     };
+    defer selector_holder.deinit(std.heap.c_allocator);
 
-    return makeLiveHTMLCollection(c, doc_js, selector);
+    return makeLiveHTMLCollection(c, doc_js, selector_holder.value);
 }
 
 pub fn documentGetElementsByTagName(
@@ -1717,7 +1718,7 @@ pub fn makeLiveHTMLCollection(c: *qjs.JSContext, root_js: qjs.JSValue, selector:
         \\      if(p===Symbol.toStringTag)return'HTMLCollection';
         \\      var r=_q(),len=r.length;
         \\      if(p==='length')return len;
-        \\      if(p==='item')return function(i){return i>=0&&i<len?r[i]:null;};
+        \\      if(p==='item')return function(i){i=i>>>0;return i<len?r[i]:null;};
         \\      if(p==='namedItem')return function(n){for(var i=0;i<len;i++){var e=r[i];if(e.id===n||e.name===n)return e;}return null;};
         \\      if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield r[i];};
         \\      if(typeof p==='string'&&!isNaN(p)){var i=+p;return i>=0&&i<len?r[i]:undefined;}
@@ -1759,27 +1760,17 @@ pub fn documentGetElementsByName(
     const args = argv orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
-
-    // Build CSS selector [name="..."]
-    var selector_buf: [270]u8 = undefined;
     const name = s.ptr[0..s.len];
-    const prefix = "[name=\"";
-    const suffix = "\"]";
-    if (prefix.len + name.len + suffix.len > selector_buf.len) return quickjs.JS_NULL();
-    @memcpy(selector_buf[0..prefix.len], prefix);
-    @memcpy(selector_buf[prefix.len .. prefix.len + name.len], name);
-    @memcpy(selector_buf[prefix.len + name.len .. prefix.len + name.len + suffix.len], suffix);
-    const selector = selector_buf[0 .. prefix.len + name.len + suffix.len];
 
     // Return a live NodeList via Proxy that re-queries on access
     const live_js =
-        \\(function(sel){
-        \\  function _q(){try{var r=document.querySelectorAll(sel),a=[];for(var i=0;i<r.length;i++){var ns=r[i].namespaceURI;if(!ns||ns==='http://www.w3.org/1999/xhtml')a.push(r[i]);}return a;}catch(e){return[];}}
+        \\(function(name){
+        \\  function _q(){try{var r=document.querySelectorAll('[name]'),a=[];for(var i=0;i<r.length;i++){var ns=r[i].namespaceURI;if((!ns||ns==='http://www.w3.org/1999/xhtml')&&r[i].getAttribute('name')===name)a.push(r[i]);}return a;}catch(e){return[];}}
         \\  return new Proxy({},{
         \\    get:function(t,p){
         \\      var r=Array.from(_q()),len=r.length;
         \\      if(p==='length')return len;
-        \\      if(p==='item')return function(i){return i>=0&&i<len?r[i]:null;};
+        \\      if(p==='item')return function(i){i=i>>>0;return i<len?r[i]:null;};
         \\      if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield r[i];};
         \\      if(p===Symbol.toStringTag)return'NodeList';
         \\      if(typeof p==='string'&&/^\d+$/.test(p)){var i=p>>>0;return i<len?r[i]:undefined;}
@@ -1808,9 +1799,9 @@ pub fn documentGetElementsByName(
     const fn_val = qjs.JS_Eval(c, live_js, live_js.len, "<gbn>", qjs.JS_EVAL_TYPE_GLOBAL);
     if (quickjs.JS_IsException(fn_val)) return quickjs.JS_NULL();
     defer qjs.JS_FreeValue(c, fn_val);
-    const sel_str = qjs.JS_NewStringLen(c, selector.ptr, selector.len);
-    defer qjs.JS_FreeValue(c, sel_str);
-    var call_args = [1]qjs.JSValue{sel_str};
+    const name_str = qjs.JS_NewStringLen(c, name.ptr, name.len);
+    defer qjs.JS_FreeValue(c, name_str);
+    var call_args = [1]qjs.JSValue{name_str};
     return qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &call_args);
 }
 
@@ -2178,28 +2169,24 @@ pub fn documentGetTitle(
     var len: usize = 0;
     const ptr = lxb_dom_node_text_content(title_node, &len);
     if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
-    // HTML spec: strip and collapse whitespace
-    var buf: [4096]u8 = undefined;
-    var pos: usize = 0;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.heap.page_allocator);
     var in_space = true; // trim leading
     for (ptr.?[0..len]) |ch| {
         if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0C) {
-            if (!in_space and pos < buf.len) {
-                buf[pos] = ' ';
-                pos += 1;
+            if (!in_space) {
+                out.append(std.heap.page_allocator, ' ') catch return qjs.JS_NewStringLen(c, "", 0);
                 in_space = true;
             }
         } else {
-            if (pos < buf.len) {
-                buf[pos] = ch;
-                pos += 1;
-            }
+            out.append(std.heap.page_allocator, ch) catch return qjs.JS_NewStringLen(c, "", 0);
             in_space = false;
         }
     }
     // trim trailing space
-    if (pos > 0 and buf[pos - 1] == ' ') pos -= 1;
-    return qjs.JS_NewStringLen(c, &buf, pos);
+    if (out.items.len > 0 and out.items[out.items.len - 1] == ' ') _ = out.pop();
+    const ptr_out = if (out.items.len == 0) "" else out.items.ptr;
+    return qjs.JS_NewStringLen(c, ptr_out, out.items.len);
 }
 
 pub fn documentSetTitle(
