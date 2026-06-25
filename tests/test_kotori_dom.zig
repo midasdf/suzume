@@ -3420,6 +3420,7 @@ test "CSSStyleDeclaration.item index converts with ToUint32" {
 }
 
 test "KotoriRuntime CSSOM item index converts with ToUint32" {
+    kotori.io.io = std.testing.io;
     const html = "<html><body></body></html>";
     const doc = lxb_html_document_create() orelse return error.LexborFailed;
     defer _ = lxb_html_document_destroy(doc);
@@ -3448,6 +3449,7 @@ test "KotoriRuntime CSSOM item index converts with ToUint32" {
 }
 
 test "KotoriRuntime FileList item index converts with ToUint32" {
+    kotori.io.io = std.testing.io;
     const html = "<html><body></body></html>";
     const doc = lxb_html_document_create() orelse return error.LexborFailed;
     defer _ = lxb_html_document_destroy(doc);
@@ -3469,6 +3471,7 @@ test "KotoriRuntime FileList item index converts with ToUint32" {
 }
 
 test "KotoriRuntime DOMTokenList item index converts with ToUint32" {
+    kotori.io.io = std.testing.io;
     const html = "<html><body><p id=\"p\" class=\"one two\"></p><link id=\"l\" rel=\"stylesheet preload\"></body></html>";
     const doc = lxb_html_document_create() orelse return error.LexborFailed;
     defer _ = lxb_html_document_destroy(doc);

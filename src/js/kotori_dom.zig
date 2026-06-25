@@ -2300,15 +2300,6 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
             var buf: [64]u8 = undefined;
             const s = valueToString(vm, val, &buf);
             _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
-            // Mark DOM dirty for attributes that affect image loading or
-            // layout. Without this, lazy-loaded images (data-src→src swap
-            // via IntersectionObserver) never get re-collected by
-            // collectImageUrls because restylePage never runs.
-            if (std.mem.eql(u8, name, "src") or std.mem.eql(u8, name, "srcset") or
-                std.mem.eql(u8, name, "href") or std.mem.eql(u8, name, "style"))
-            {
-                setDomDirty();
-            }
             return true;
         },
         .boolean => {
