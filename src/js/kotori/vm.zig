@@ -7483,6 +7483,11 @@ pub const VM = struct {
         const prefix = kio.storage_path_prefix orelse return JsValue.null_val;
         if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
         const scope = vm.pool.get(args[0].asStringId()) orelse "";
+        // Reject scope containing path separators / traversal sequences
+        // to prevent __suzume_storage_load("foo/../../etc/passwd").
+        if (std.mem.indexOfScalar(u8, scope, '/') != null or
+            std.mem.indexOfScalar(u8, scope, '\\') != null or
+            std.mem.indexOf(u8, scope, "..") != null) return JsValue.null_val;
         var path_buf: [512]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "{s}/storage_{s}.json", .{ prefix, scope }) catch return JsValue.null_val;
         const data = kio.readFileAlloc(vm.allocator, path) orelse return JsValue.null_val;
@@ -7497,6 +7502,10 @@ pub const VM = struct {
         if (args.len < 2 or !args[0].isString() or !args[1].isString()) return JsValue.undefined_val;
         const scope = vm.pool.get(args[0].asStringId()) orelse "";
         const data = vm.pool.get(args[1].asStringId()) orelse "";
+        // Reject scope containing path separators / traversal sequences
+        if (std.mem.indexOfScalar(u8, scope, '/') != null or
+            std.mem.indexOfScalar(u8, scope, '\\') != null or
+            std.mem.indexOf(u8, scope, "..") != null) return JsValue.undefined_val;
         var path_buf: [512]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "{s}/storage_{s}.json", .{ prefix, scope }) catch return JsValue.undefined_val;
         kio.writeFile(path, data);
