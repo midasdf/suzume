@@ -207,6 +207,17 @@ pub const KotoriRuntime = struct {
         // resolve against document.URL (must run after url_polyfill_js).
         _ = self.eval(fetch_resolve_polyfill_js);
 
+        // XHR §3 — XMLHttpRequest polyfill. Many modern sites (Google,
+        // GitHub, …) call `new XMLHttpRequest()` directly, and kotori's
+        // native bindings don't include it (the QuickJS path has its own
+        // JS-level implementation in web_api.zig). This pure-JS polyfill
+        // layers on top of fetch() — same approach the QuickJS path uses —
+        // so async XHR works. Without it, `b.i.req.addEventListener(...)`
+        // throws "Cannot read properties of undefined (reading
+        // 'addEventListener')" because `b.i.req` is the undefined result of
+        // `new XMLHttpRequest()`.
+        _ = self.eval(xhr_polyfill_js);
+
         // HTML §4.6.2 — <a>/<area> URL decomposition accessors backed by
         // the native URL parser (must run after url_polyfill_js).
         _ = self.eval(hyperlink_utils_polyfill_js);
@@ -6050,6 +6061,86 @@ pub const KotoriRuntime = struct {
         \\    }catch(e){}
         \\    return _nativeFetch(u,init);
         \\  };
+        \\})();
+    ;
+
+    /// XMLHttpRequest polyfill built on fetch(). Mirrors the QuickJS-side
+    /// implementation in web_api.zig (lines 2233–2294). Async-only: sync XHR
+    /// would need a native blocking helper which kotori doesn't expose; modern
+    /// sites use async XHR, so this is enough to stop "Cannot read properties
+    /// of undefined" errors from `new XMLHttpRequest().addEventListener(...)`.
+    const xhr_polyfill_js =
+        \\(function(){
+        \\  if(typeof XMLHttpRequest!=='undefined')return;
+        \\  var STATUS_TEXT={200:'OK',201:'Created',204:'No Content',301:'Moved Permanently',302:'Found',304:'Not Modified',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable'};
+        \\  function XHR(){
+        \\    this.readyState=0;this.status=0;this.statusText='';this.responseText='';
+        \\    this.responseURL='';this.response='';this.responseType='';
+        \\    this._method='GET';this._url='';this._headers={};this._async=true;
+        \\    this.onreadystatechange=null;this.onload=null;this.onerror=null;
+        \\    this.onprogress=null;this.ontimeout=null;this.onabort=null;
+        \\    this._listeners={};this.timeout=0;this.withCredentials=false;
+        \\    this.upload={addEventListener:function(){},removeEventListener:function(){}};
+        \\  }
+        \\  XHR.UNSENT=0;XHR.OPENED=1;XHR.HEADERS_RECEIVED=2;XHR.LOADING=3;XHR.DONE=4;
+        \\  XHR.prototype.open=function(method,url,async_){
+        \\    this._method=method;this._url=url;this._async=async_!==false;
+        \\    this.readyState=1;this._fireReadyState();
+        \\  };
+        \\  XHR.prototype.setRequestHeader=function(name,value){this._headers[name]=value;};
+        \\  XHR.prototype.getResponseHeader=function(name){return this._responseHeaders?(this._responseHeaders[name.toLowerCase()]||null):null;};
+        \\  XHR.prototype.getAllResponseHeaders=function(){if(!this._responseHeaders)return'';var r='';for(var k in this._responseHeaders)r+=k+': '+this._responseHeaders[k]+'\r\n';return r;};
+        \\  XHR.prototype.send=function(body){
+        \\    var self=this;
+        \\    var opts={method:this._method,headers:this._headers};
+        \\    if(body!==undefined&&body!==null)opts.body=body;
+        \\    if(this.withCredentials)opts.credentials='include';
+        \\    fetch(this._url,opts).then(function(resp){
+        \\      self.status=resp.status;self.statusText=resp.statusText||STATUS_TEXT[resp.status]||'';
+        \\      self.responseURL=resp.url||self._url;
+        \\      self._responseHeaders={};
+        \\      if(resp.headers&&resp.headers.forEach)resp.headers.forEach(function(v,k){self._responseHeaders[k]=v;});
+        \\      self.readyState=2;self._fireReadyState();
+        \\      return resp.text();
+        \\    }).then(function(text){
+        \\      self.readyState=3;self._fireReadyState();
+        \\      self.responseText=text;
+        \\      self.response=self.responseType==='json'?(function(){try{return JSON.parse(text);}catch(e){return null;}})():text;
+        \\      self.readyState=4;self._fireReadyState();
+        \\      if(self.onload)try{self.onload({target:self,type:'load'});}catch(e){}
+        \\      self._fire('load',{target:self});
+        \\    })['catch'](function(err){
+        \\      self.readyState=4;self.status=0;self._fireReadyState();
+        \\      if(self.onerror)try{self.onerror({target:self,type:'error'});}catch(e){}
+        \\      self._fire('error',{target:self});
+        \\    });
+        \\  };
+        \\  XHR.prototype.abort=function(){
+        \\    this.readyState=4;this.status=0;
+        \\    if(this.onabort)try{this.onabort({target:this,type:'abort'});}catch(e){}
+        \\    this._fire('abort',{target:this});
+        \\  };
+        \\  XHR.prototype.addEventListener=function(type,fn){
+        \\    if(!this._listeners[type])this._listeners[type]=[];
+        \\    this._listeners[type].push(fn);
+        \\  };
+        \\  XHR.prototype.removeEventListener=function(type,fn){
+        \\    if(!this._listeners[type])return;
+        \\    this._listeners[type]=this._listeners[type].filter(function(f){return f!==fn;});
+        \\  };
+        \\  XHR.prototype._fire=function(type,evt){
+        \\    if(!this._listeners[type])return;
+        \\    for(var i=0;i<this._listeners[type].length;i++){
+        \\      try{this._listeners[type][i](evt);}catch(e){}
+        \\    }
+        \\  };
+        \\  XHR.prototype._fireReadyState=function(){
+        \\    if(this.onreadystatechange)try{this.onreadystatechange({target:this});}catch(e){}
+        \\    this._fire('readystatechange',{target:this});
+        \\  };
+        \\  XHR.prototype.overrideMimeType=function(){};
+        \\  XHR.prototype.dispatchEvent=function(e){this._fire(e.type,e);};
+        \\  globalThis.XMLHttpRequest=XHR;
         \\})();
     ;
 

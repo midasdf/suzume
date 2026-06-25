@@ -42,6 +42,12 @@ pub const VM = struct {
     globals: std.AutoArrayHashMapUnmanaged(StringId, JsValue) = .{},
     allocator: std.mem.Allocator,
     pool: *StringPool,
+    /// The global `this` binding (window / globalThis). Set by initBuiltins
+    /// and used as the top-level script's `this` value. Browsers bind `this`
+    /// to the window object at the top level of an inline <script>; without
+    /// this, sites that do `this.gbar_ = {...}` throw
+    /// "Cannot set properties of undefined (setting 'gbar_')".
+    global_this_val: JsValue = JsValue.undefined_val,
     // Heap tracking for cleanup
     objects: std.ArrayListUnmanaged(*JsObject) = .empty,
     upvalue_cells: std.ArrayListUnmanaged(*UpvalueCell) = .empty,
@@ -274,8 +280,10 @@ pub const VM = struct {
             const obj = thrown.asJsObject();
             const name_id = self.pool.intern("name") catch null;
             const msg_id = self.pool.intern("message") catch null;
+            const stack_id = self.pool.intern("stack") catch null;
             const name_val: ?JsValue = if (name_id) |id| obj.getProperty(id) else null;
             const msg_val: ?JsValue = if (msg_id) |id| obj.getProperty(id) else null;
+            const stack_val: ?JsValue = if (stack_id) |id| obj.getProperty(id) else null;
             const name_str = if (name_val != null and name_val.?.isString())
                 (self.pool.get(name_val.?.asStringId()) orelse "Error")
             else
@@ -285,6 +293,10 @@ pub const VM = struct {
             else
                 "";
             std.debug.print("[kotori] Uncaught {s}: {s}\n", .{ name_str, msg_str });
+            if (stack_val != null and stack_val.?.isString()) {
+                const s = self.pool.get(stack_val.?.asStringId()) orelse "";
+                if (s.len > 0) std.debug.print("[kotori] stack: {s}\n", .{s});
+            }
             return;
         }
         var buf: [64]u8 = undefined;
@@ -300,6 +312,10 @@ pub const VM = struct {
             .ip = 0,
             .base_sp = 0,
             .upvalues = &.{},
+            // Browsers bind `this` to the window object at the top level of an
+            // inline <script>. Without this, scripts that do `this.gbar_=...`
+            // throw "Cannot set properties of undefined (setting 'gbar_')".
+            .this_val = self.global_this_val,
         };
         self.frame_count = 1;
         self.ensureStackCapacity(bc.local_count);
@@ -3832,6 +3848,7 @@ pub const VM = struct {
         // leaving add_completion_callback and tests unregistered.
         const global_this = try self.createObj(.{ .obj_type = .window_proxy });
         const global_this_val = JsValue.initObject(global_this);
+        self.global_this_val = global_this_val;
         try self.globals.put(self.allocator, try self.pool.intern("globalThis"), global_this_val);
         try self.globals.put(self.allocator, try self.pool.intern("self"), global_this_val);
         try self.globals.put(self.allocator, try self.pool.intern("window"), global_this_val);

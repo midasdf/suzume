@@ -1317,6 +1317,11 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.globals.put(vm.allocator, self_id, JsValue.initObject(win_obj));
     const globalthis_id = try vm.pool.intern("globalThis");
     try vm.globals.put(vm.allocator, globalthis_id, JsValue.initObject(win_obj));
+    // Sync the VM's top-level `this` binding to the fully-wired window object
+    // so that `this` inside an inline <script> resolves to the same object
+    // that has addEventListener / getComputedStyle / etc. (Browsers bind `this`
+    // to the window object at script top level.)
+    vm.global_this_val = JsValue.initObject(win_obj);
     // window.parent / window.top / window.frames — self-referential for top-level window
     const win_val = JsValue.initObject(win_obj);
     const parent_id = try vm.pool.intern("parent");
