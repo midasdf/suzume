@@ -218,6 +218,13 @@ pub const KotoriRuntime = struct {
         // `new XMLHttpRequest()`.
         _ = self.eval(xhr_polyfill_js);
 
+        // Navigator / Performance / Screen polyfills. kotori has no native
+        // bindings for these; without navigator.userAgent Wikipedia's JS
+        // throws "Cannot read properties of undefined (reading 'match')",
+        // and without performance.timing Bing throws
+        // "Cannot read properties of undefined (reading 'navigationStart')".
+        _ = self.eval(navigator_performance_polyfill_js);
+
         // HTML §4.6.2 — <a>/<area> URL decomposition accessors backed by
         // the native URL parser (must run after url_polyfill_js).
         _ = self.eval(hyperlink_utils_polyfill_js);
@@ -6144,7 +6151,79 @@ pub const KotoriRuntime = struct {
         \\})();
     ;
 
-    /// DOM §2.7 Event.prototype.returnValue accessor + legacy
+    /// navigator / performance / screen polyfills. Many sites read
+    /// navigator.userAgent at init (Wikipedia's mw.config) and
+    /// performance.timing.navigationStart (Bing analytics). Without these
+    /// globals the site scripts throw TypeError on undefined property access
+    /// and skip important DOM setup. Mirrors the QuickJS-side globals from
+    /// web_api.zig:1898-1990.
+    const navigator_performance_polyfill_js =
+        \\(function(){
+        \\  if(typeof navigator==='undefined'){
+        \\    var nav={userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',platform:'Linux x86_64',language:'ja',languages:['ja','en'],vendor:'',appName:'Netscape',appVersion:'5.0 (Linux)',product:'Gecko',onLine:true,cookieEnabled:true,maxTouchPoints:0,hardwareConcurrency:4,doNotTrack:null};
+        \\    nav.geolocation={getCurrentPosition:function(){},watchPosition:function(){return 0;},clearWatch:function(){}};
+        \\    nav.sendBeacon=function(){return true;};
+        \\    globalThis.navigator=nav;
+        \\  }
+        \\  if(typeof performance!=='undefined'){
+        \\    var origin=Date.now();
+        \\    if(typeof performance.timeOrigin==='undefined')performance.timeOrigin=origin;
+        \\    if(typeof performance.getEntries!=='function')performance.getEntries=function(){return [];};
+        \\    if(typeof performance.getEntriesByName!=='function')performance.getEntriesByName=function(){return [];};
+        \\    if(typeof performance.getEntriesByType!=='function')performance.getEntriesByType=function(){return [];};
+        \\    if(typeof performance.mark!=='function')performance.mark=function(){};
+        \\    if(typeof performance.measure!=='function')performance.measure=function(){};
+        \\    if(typeof performance.clearMarks!=='function')performance.clearMarks=function(){};
+        \\    if(typeof performance.clearMeasures!=='function')performance.clearMeasures=function(){};
+        \\    if(!performance.timing){
+        \\      var timing={};
+        \\      timing.navigationStart=origin;
+        \\      timing.unloadEventStart=0;
+        \\      timing.unloadEventEnd=0;
+        \\      timing.redirectStart=0;
+        \\      timing.redirectEnd=0;
+        \\      timing.fetchStart=origin;
+        \\      timing.domainLookupStart=origin;
+        \\      timing.domainLookupEnd=origin;
+        \\      timing.connectStart=origin;
+        \\      timing.connectEnd=origin;
+        \\      timing.secureConnectionStart=0;
+        \\      timing.requestStart=origin;
+        \\      timing.responseStart=origin;
+        \\      timing.responseEnd=origin;
+        \\      timing.domLoading=origin;
+        \\      timing.domInteractive=origin;
+        \\      timing.domContentLoadedEventStart=origin;
+        \\      timing.domContentLoadedEventEnd=origin;
+        \\      timing.domComplete=origin;
+        \\      timing.loadEventStart=origin;
+        \\      timing.loadEventEnd=origin;
+        \\      performance.timing=timing;
+        \\    }
+        \\    if(!performance.navigation)performance.navigation={type:0,redirectCount:0};
+        \\    if(!performance.memory)performance.memory={usedJSHeapSize:0,totalJSHeapSize:0,jsHeapSizeLimit:0};
+        \\  }
+        \\  if(typeof screen==='undefined'){
+        \\    globalThis.screen={width:1280,height:800,availWidth:1280,availHeight:800,colorDepth:24,pixelDepth:24,orientation:{type:'landscape-primary',angle:0}};
+        \\  }
+        \\  if(typeof matchMedia==='undefined'){
+        \\    globalThis.matchMedia=function(q){return{matches:false,media:q,onchange:null,addListener:function(){},removeListener:function(){},addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return true;}};};
+        \\  }
+        \\  if(typeof requestAnimationFrame==='undefined'){
+        \\    globalThis.requestAnimationFrame=function(cb){return setTimeout(function(){cb(Date.now());},16);};
+        \\    globalThis.cancelAnimationFrame=function(id){clearTimeout(id);};
+        \\  }
+        \\  if(typeof Promise==='undefined'||typeof Promise.allSettled==='undefined'){
+        \\    if(typeof Promise!=='undefined'){
+        \\      Promise.allSettled=function(iter){return Promise.all(iter.map(function(p){return Promise.resolve(p).then(function(v){return{status:'fulfilled',value:v};},function(e){return{status:'rejected',reason:e};});}));};
+        \\      Promise.any=function(iter){return new Promise(function(resolve,reject){var pending=0;var errors=[];iter.forEach(function(p,i){pending++;Promise.resolve(p).then(function(v){resolve(v);},function(e){errors[i]=e;if(--pending===0)reject(new AggregateError(errors));});});});};
+        \\    }
+        \\  }
+        \\  if(typeof AggregateError==='undefined'){
+        \\    globalThis.AggregateError=function(errors,message){var e=new Error(message);e.errors=errors;return e;};
+        \\  }
+        \\})();
+    ;
     /// srcElement alias for target (DOM §2.6.2).
     ///
     /// returnValue: getter returns `!defaultPrevented`; setter calls
