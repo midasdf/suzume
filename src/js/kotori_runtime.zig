@@ -6242,14 +6242,16 @@ pub const KotoriRuntime = struct {
         \\      }
         \\      function evalMQ(mq){
         \\        if(!mq||mq==='all'||mq==='screen')return true;
-        \\        if(mq==='print'||mq==='only print')return false;
         \\        var neg=false;
         \\        if(mq.indexOf('not ')===0){neg=true;mq=mq.slice(4).trim();}
         \\        if(mq.indexOf('only ')===0){mq=mq.slice(5).trim();}
+        \\        // After stripping not/only, check media type
+        \\        if(mq==='print')return neg; // not print → true on screen
+        \\        if(mq==='all'||mq==='screen')return !neg;
         \\        // Strip leading media type
         \\        if(mq.indexOf('screen and ')===0)mq=mq.slice(11);
         \\        else if(mq.indexOf('all and ')===0)mq=mq.slice(8);
-        \\        else if(mq==='screen'||mq==='all')return !neg;
+        \\        else if(mq.indexOf('print and ')===0){mq=mq.slice(10);neg=!neg;} // not print and (...) → negate features
         \\        // Split on ' and ' to get individual feature conditions
         \\        var conds=mq.split(' and ');
         \\        var allMatch=true;
@@ -6276,15 +6278,21 @@ pub const KotoriRuntime = struct {
         \\        if(f.indexOf('any-hover')>=0)return f.indexOf('hover')>=0;
         \\        // orientation: landscape (default for wide screens)
         \\        if(f.indexOf('orientation')>=0)return f.indexOf('landscape')>=0;
-        \\        // min-width / max-width / width
-        \\        var wm=f.match(/min-width\s*:\s*(\d+)/);if(wm&&1280>=parseInt(wm[1]))return true;
-        \\        wm=f.match(/max-width\s*:\s*(\d+)/);if(wm&&1280<=parseInt(wm[1]))return true;
-        \\        wm=f.match(/min-height\s*:\s*(\d+)/);if(wm&&800>=parseInt(wm[1]))return true;
-        \\        wm=f.match(/max-height\s*:\s*(\d+)/);if(wm&&800<=parseInt(wm[1]))return true;
-        \\        if(f.match(/^\d+px$/))return true; // bare width
+        \\        // min-width / max-width / min-height / max-height
+        \\        // Return the comparison result directly so failed checks return false
+        \\        var wm=f.match(/min-width\s*:\s*(\d+)/);if(wm)return 1280>=parseInt(wm[1]);
+        \\        wm=f.match(/max-width\s*:\s*(\d+)/);if(wm)return 1280<=parseInt(wm[1]);
+        \\        wm=f.match(/min-height\s*:\s*(\d+)/);if(wm)return 800>=parseInt(wm[1]);
+        \\        wm=f.match(/max-height\s*:\s*(\d+)/);if(wm)return 800<=parseInt(wm[1]);
+        \\        // MQ Level 4 range syntax: width >= 400px, width <= 999px
+        \\        var rm=f.match(/width\s*(>=|<=|>|<|=)\s*(\d+)/);if(rm){var v=parseInt(rm[2]);var op=rm[1];if(op==='>=')return 1280>=v;if(op==='<=')return 1280<=v;if(op==='>')return 1280>v;if(op==='<')return 1280<v;return 1280===v;}
+        \\        rm=f.match(/height\s*(>=|<=|>|<|=)\s*(\d+)/);if(rm){var v=parseInt(rm[2]);var op=rm[1];if(op==='>=')return 800>=v;if(op==='<=')return 800<=v;if(op==='>')return 800>v;if(op==='<')return 800<v;return 800===v;}
+        \\        if(f.match(/^\d+px$/))return true; // bare width (matches anything)
         \\        // color / resolution — always true (we have color and resolution)
         \\        if(f.indexOf('color')>=0||f.indexOf('resolution')>=0)return true;
-        \\        // Unknown feature — default true (avoid breaking sites)
+        \\        // Unknown feature — default true (avoid breaking sites that use
+        \\        // exotic features we don't support; pragmatic choice over spec
+        \\        // correctness which would return false)
         \\        return true;
         \\      }
         \\      return{matches:m,media:q,onchange:null,addListener:function(){},removeListener:function(){},addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return true;}};
