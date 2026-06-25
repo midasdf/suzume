@@ -360,6 +360,15 @@ fn sanitizeBoxGeometry(box: *Box) void {
             return @max(@min(v, max_dim), -max_dim);
         }
     }.f;
+    // Log non-finite values so layout bugs are visible (Oracle: clamping
+    // silently masks the root cause). Only log once per box to avoid spam.
+    if (!std.math.isFinite(box.content.x) or !std.math.isFinite(box.content.y) or
+        !std.math.isFinite(box.content.width) or !std.math.isFinite(box.content.height))
+    {
+        std.debug.print("[layout] non-finite geometry clamped: content=({d},{d},{d}x{d})\n", .{
+            box.content.x, box.content.y, box.content.width, box.content.height,
+        });
+    }
     box.content.x = safe(box.content.x);
     box.content.y = safe(box.content.y);
     box.content.width = @max(safe(box.content.width), 0);
@@ -1849,6 +1858,21 @@ pub fn main(init: std.process.Init) !void {
         }
         http_client.setCookieFile(cp);
         std.debug.print("Cookie file: {s}\n", .{cp});
+    }
+
+    // Set up kotori Web Storage path prefix (same directory as cookies)
+    // so localStorage/sessionStorage persist across navigations via
+    // file-backed JSON storage.
+    {
+        const home = env.get("HOME") orelse "";
+        if (home.len > 0) {
+            const storage_dir = std.fmt.allocPrint(allocator, "{s}/.local/share/suzume", .{home}) catch null;
+            if (storage_dir) |sd| {
+                kotori.io.storage_path_prefix = sd;
+                // Note: intentionally not freed — kio keeps the pointer
+                // for the lifetime of the process.
+            }
+        }
     }
 
     // Share HTTP client with fetch() API so cookies are shared

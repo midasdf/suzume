@@ -6284,19 +6284,29 @@ pub const KotoriRuntime = struct {
     /// polyfill in web_api.zig:2230-2232.
     const storage_polyfill_js =
         \\(function(){
-        \\  function makeStorage(){
-        \\    var data={};
+        \\  // File-backed storage that survives across navigations.
+        \\  // kotori creates a new runtime per page, so in-memory data would
+        \\  // be lost on every navigation. We use __suzume_storage_get/set
+        \\  // natives that read/write a JSON file on disk (persisted by the
+        \\  // Zig layer). Falls back to in-memory if natives aren't available.
+        \\  var lsData=null;
+        \\  var ssData=null;
+        \\  function loadLS(){if(lsData===null){lsData={};if(typeof __suzume_storage_load==='function'){try{var s=__suzume_storage_load('local');if(s)lsData=JSON.parse(s)||{};}catch(e){lsData={};}}}return lsData;}
+        \\  function loadSS(){if(ssData===null){ssData={};if(typeof __suzume_storage_load==='function'){try{var s=__suzume_storage_load('session');if(s)ssData=JSON.parse(s)||{};}catch(e){ssData={};}}}return ssData;}
+        \\  function saveLS(){if(typeof __suzume_storage_save==='function'){try{__suzume_storage_save('local',JSON.stringify(lsData));}catch(e){}}}
+        \\  function saveSS(){if(typeof __suzume_storage_save==='function'){try{__suzume_storage_save('session',JSON.stringify(ssData));}catch(e){}}}
+        \\  function makeStorage(load,save){
         \\    return {
-        \\      getItem:function(k){return data[k]!==undefined?data[k]:null;},
-        \\      setItem:function(k,v){data[k]=String(v);},
-        \\      removeItem:function(k){delete data[k];},
-        \\      clear:function(){data={};},
-        \\      get length(){return Object.keys(data).length;},
-        \\      key:function(i){i=i>>>0;return Object.keys(data)[i]||null;}
+        \\      getItem:function(k){var d=load();return d[k]!==undefined?d[k]:null;},
+        \\      setItem:function(k,v){var d=load();d[k]=String(v);save();},
+        \\      removeItem:function(k){var d=load();delete d[k];save();},
+        \\      clear:function(){if(load==loadLS){lsData={};}else{ssData={};}save();},
+        \\      get length(){return Object.keys(load()).length;},
+        \\      key:function(i){i=i>>>0;return Object.keys(load())[i]||null;}
         \\    };
         \\  }
-        \\  if(typeof localStorage==='undefined')globalThis.localStorage=makeStorage();
-        \\  if(typeof sessionStorage==='undefined')globalThis.sessionStorage=makeStorage();
+        \\  if(typeof localStorage==='undefined')globalThis.localStorage=makeStorage(loadLS,saveLS);
+        \\  if(typeof sessionStorage==='undefined')globalThis.sessionStorage=makeStorage(loadSS,saveSS);
         \\})();
     ;
 

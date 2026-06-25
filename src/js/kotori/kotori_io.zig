@@ -60,3 +60,48 @@ pub var wpt_mode: bool = false;
 /// Set to true after an "ALERT: RESULT:" line has been emitted. The
 /// main event loop checks this each iteration to break out and exit.
 pub var wpt_result_sent: bool = false;
+
+/// Storage directory path prefix (e.g. "~/.local/share/suzume/").
+/// Set by main.zig at startup. The native storage functions in vm.zig
+/// read/write files at "{prefix}/storage_{scope}.json" so localStorage
+/// and sessionStorage persist across navigations.
+pub var storage_path_prefix: ?[]const u8 = null;
+
+// ── File-backed Web Storage helpers ──────────────────────────────
+//
+// kotori's localStorage/sessionStorage polyfill needs to read/write
+// JSON files so data persists across navigations (each navigation
+// creates a fresh KotoriRuntime, so in-memory JS storage would be
+// lost). These thin wrappers exist because the kotori module cannot
+// import src/env.zig — it goes through kio instead.
+
+/// Read a file into an allocated buffer. Returns null if the file
+/// doesn't exist or can't be read. Caller frees with `allocator`.
+pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
+    const file = std.Io.Dir.cwd().openFile(ioOrPanic(), path, .{}) catch return null;
+    defer file.close(ioOrPanic());
+    var buf: [4096]u8 = undefined;
+    var r = file.reader(ioOrPanic(), &buf);
+    var list: std.ArrayListUnmanaged(u8) = .empty;
+    defer list.deinit(allocator);
+    while (true) {
+        const n = r.interface.readSliceShort(buf[0..]) catch return null;
+        if (n == 0) break;
+        list.appendSlice(allocator, buf[0..n]) catch return null;
+    }
+    return list.toOwnedSlice(allocator) catch null;
+}
+
+/// Write `data` to `path`, creating the file (and parent directories)
+/// if needed. Returns void — caller checks for success implicitly.
+pub fn writeFile(path: []const u8, data: []const u8) void {
+    // Ensure parent dir exists
+    if (std.mem.lastIndexOf(u8, path, "/")) |dir_end| {
+        std.Io.Dir.cwd().createDirPath(ioOrPanic(), path[0..dir_end]) catch {};
+    }
+    const file = std.Io.Dir.cwd().createFile(ioOrPanic(), path, .{ .truncate = true }) catch return;
+    defer file.close(ioOrPanic());
+    var buf: [4096]u8 = undefined;
+    var w = file.writer(ioOrPanic(), &buf);
+    w.interface.writeAll(data) catch {};
+}

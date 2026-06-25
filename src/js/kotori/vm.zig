@@ -3597,6 +3597,14 @@ pub const VM = struct {
             try self.globals.put(self.allocator, fetch_id, JsValue.initObject(fetch_obj));
         }
 
+        // ── Web Storage natives (file-backed persistence) ──
+        {
+            const sl_fn = try self.createNamedNativeFn("__suzume_storage_load", &nativeStorageLoad, 1);
+            try self.globals.put(self.allocator, try self.pool.intern("__suzume_storage_load"), JsValue.initObject(sl_fn));
+            const ss_fn = try self.createNamedNativeFn("__suzume_storage_save", &nativeStorageSave, 2);
+            try self.globals.put(self.allocator, try self.pool.intern("__suzume_storage_save"), JsValue.initObject(ss_fn));
+        }
+
         // ── Date ──
         {
             const date_proto = try self.createObj(.{});
@@ -7468,6 +7476,31 @@ pub const VM = struct {
     fn nativePerformanceNow(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
         const ts = kio.nowMs();
         return JsValue.initNumber(@floatFromInt(ts));
+    }
+
+    fn nativeStorageLoad(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const prefix = kio.storage_path_prefix orelse return JsValue.null_val;
+        if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+        const scope = vm.pool.get(args[0].asStringId()) orelse "";
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/storage_{s}.json", .{ prefix, scope }) catch return JsValue.null_val;
+        const data = kio.readFileAlloc(vm.allocator, path) orelse return JsValue.null_val;
+        defer vm.allocator.free(data);
+        const sid = try vm.pool.intern(data);
+        return JsValue.initString(sid);
+    }
+
+    fn nativeStorageSave(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const prefix = kio.storage_path_prefix orelse return JsValue.undefined_val;
+        if (args.len < 2 or !args[0].isString() or !args[1].isString()) return JsValue.undefined_val;
+        const scope = vm.pool.get(args[0].asStringId()) orelse "";
+        const data = vm.pool.get(args[1].asStringId()) orelse "";
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/storage_{s}.json", .{ prefix, scope }) catch return JsValue.undefined_val;
+        kio.writeFile(path, data);
+        return JsValue.undefined_val;
     }
 
     // ── Array immutable methods (ES2023) ────────────────────────────
