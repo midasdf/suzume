@@ -232,6 +232,14 @@ pub const KotoriRuntime = struct {
         // the setter is a no-op (we don't persist cookies in kotori).
         _ = self.eval(document_cookie_polyfill_js);
 
+        // localStorage / sessionStorage polyfill. kotori has no Web Storage
+        // API; without it, sites like Cloudflare throw
+        // "Cannot read properties of undefined (reading 'getItem')". Pure-JS
+        // in-memory implementation (data doesn't persist across navigations
+        // — kotori doesn't have a persistent storage layer, but within a
+        // single page session this is correct behavior).
+        _ = self.eval(storage_polyfill_js);
+
         // HTML §4.6.2 — <a>/<area> URL decomposition accessors backed by
         // the native URL parser (must run after url_polyfill_js).
         _ = self.eval(hyperlink_utils_polyfill_js);
@@ -6243,6 +6251,28 @@ pub const KotoriRuntime = struct {
         \\  if(typeof document!=='undefined'&&!document.cookie&&document.cookie!==null&&document.cookie!==''){
         \\    Object.defineProperty(document,'cookie',{get:function(){return '';},set:function(){},configurable:true});
         \\  }
+        \\})();
+    ;
+
+    /// localStorage / sessionStorage polyfill. In-memory implementation
+    /// (data doesn't persist across page reloads in kotori, but within a
+    /// single page session the API is correct). Mirrors the QuickJS-side
+    /// polyfill in web_api.zig:2230-2232.
+    const storage_polyfill_js =
+        \\(function(){
+        \\  function makeStorage(){
+        \\    var data={};
+        \\    return {
+        \\      getItem:function(k){return data[k]!==undefined?data[k]:null;},
+        \\      setItem:function(k,v){data[k]=String(v);},
+        \\      removeItem:function(k){delete data[k];},
+        \\      clear:function(){data={};},
+        \\      get length(){return Object.keys(data).length;},
+        \\      key:function(i){i=i>>>0;return Object.keys(data)[i]||null;}
+        \\    };
+        \\  }
+        \\  if(typeof localStorage==='undefined')globalThis.localStorage=makeStorage();
+        \\  if(typeof sessionStorage==='undefined')globalThis.sessionStorage=makeStorage();
         \\})();
     ;
     /// srcElement alias for target (DOM §2.6.2).
