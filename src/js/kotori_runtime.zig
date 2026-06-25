@@ -225,6 +225,13 @@ pub const KotoriRuntime = struct {
         // "Cannot read properties of undefined (reading 'navigationStart')".
         _ = self.eval(navigator_performance_polyfill_js);
 
+        // document.cookie polyfill — Bing and other sites read
+        // document.cookie.indexOf(...) for analytics. Without this, cookie is
+        // null and the script throws "Cannot read properties of null (reading
+        // 'indexOf')". A read-only stub returns empty string (no cookies);
+        // the setter is a no-op (we don't persist cookies in kotori).
+        _ = self.eval(document_cookie_polyfill_js);
+
         // HTML §4.6.2 — <a>/<area> URL decomposition accessors backed by
         // the native URL parser (must run after url_polyfill_js).
         _ = self.eval(hyperlink_utils_polyfill_js);
@@ -6221,6 +6228,20 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  if(typeof AggregateError==='undefined'){
         \\    globalThis.AggregateError=function(errors,message){var e=new Error(message);e.errors=errors;return e;};
+        \\  }
+        \\})();
+    ;
+
+    /// document.cookie polyfill. Many sites read document.cookie for
+    /// analytics / feature detection (Bing: `document.cookie.indexOf(...)`).
+    /// Without this, document.cookie is null and the script throws
+    /// "Cannot read properties of null (reading 'indexOf')". Read-only stub
+    /// returns empty string; setter is a no-op (kotori doesn't persist
+    /// cookies — that's handled at the HTTP client level via cookies.txt).
+    const document_cookie_polyfill_js =
+        \\(function(){
+        \\  if(typeof document!=='undefined'&&!document.cookie&&document.cookie!==null&&document.cookie!==''){
+        \\    Object.defineProperty(document,'cookie',{get:function(){return '';},set:function(){},configurable:true});
         \\  }
         \\})();
     ;
