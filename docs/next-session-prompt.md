@@ -119,7 +119,7 @@ url-constructor: 864→873、url-origin: 402→405。
 
 ### 既知の残課題（Waves 210-217 で発見、未着手）
 - **DOMException.prototype の branding check**: `new URLSearchParams(DOMException.prototype)` が TypeError を投げない
-- **lone surrogate を Object key にした場合の FFFD 置換**: kotori VM の文字列表現の根本問題
+- ~~**lone surrogate を Object key にした場合の FFFD 置換**~~ **解決済み(2026-07-03)**: 調査の結果「文字列表現の根本問題」は誤診。内部表現は既に事実上WTF-8で、StringPool/parser/連結/比較/Object key round-trip/spread は全て正しくlone surrogateを保持する（回帰テスト4本を tests/test_kotori_vm.zig「WTF-8:」プレフィックスで追加、全pass）。唯一の実バグは `codePointAt` が厳格 `std.unicode.utf8Decode` でlone surrogateを拒否して undefined を返すことで、仕様どおりcode unit値を返すフォールバックを実装済み(vm.zig nativeStringCodePointAt)。「3個のFFFD」は端末など外部の厳格UTF-8デコーダがWTF-8バイト列を表示する際の見え方で、kotori内部では発生しない。
 - **url-constructor の残り**: `http://./` (dot host without base)、`http://../` (double-dot host without base)、`sc://:/` (empty host with port) — host parser の境界ケース
   - **Wave 219/221 で教訓（2回リバート）**: leading/consecutive dot rejection の単純削除も、all-dots-only のターゲット修正も、両方 79.9%→55.8% の大幅回帰を引き起こす。回帰の根本原因は `domainToAscii` が all-dot 入力（"." や ".."）をどう処理するかにある可能性が高い（空文字列を返して cascade failure？）。次セッションでは `idna.zig domainToAscii` に all-dot 入力テストを追加し、戻り値を確認してから host.zig 側の修正を再度試すこと。
 - **IdnaTestV2 残り**: ~545 subtests。C1/C2 (ZWJ/ZWNJ) チェック、bidi ルール等
@@ -172,9 +172,8 @@ urlencoded-parser: 30→35、url-searchparams: 3→4 (100%)。
 ### 既知の残課題（Waves 210-216 で発見、未着手）
 - **DOMException.prototype の branding check**: `new URLSearchParams(DOMException.prototype)` が
   TypeError を投げない。WebIDL の branding check 実装が必要（ポリフィルでは困難）。
-- **lone surrogate を Object key にした場合の FFFD 置換**: `\uD835x` を
-  Object key にすると、kotori は WTF-8 で保存するが、それを String 化する
-  際に3個の FFFD になる（仕様は1個）。kotori VM の文字列表現の根本問題。
+- ~~**lone surrogate を Object key にした場合の FFFD 置換**~~ 解決済み(2026-07-03)、
+  上の「既知の残課題」の同項目を参照（実バグは codePointAt のみ、修正済み）。
 - **url-constructor の残り**: `http://example\t.` (tab in host)、`http://f:`
   (f: scheme without port)、`http://./` (dot host without base) — host parser
   の tab/改行 strip + opaque host 処理の境界ケース
