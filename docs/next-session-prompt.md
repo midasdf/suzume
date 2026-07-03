@@ -54,7 +54,11 @@ WHATWG URL §3.5 違反（empty labels は validation error で failure では�
   - C1/C2 残り5: Virama (V) joining type は実装済み（Wave 223）だが、
     一部の Indic virama code point が virama_codepoints に未収録。完全解決には
     DerivedJoiningType.txt の全 V code point 追加が必要
-  - bidi ルール (V3/V5) 未実装
+  - ~~bidi ルール (V3/V5) 未実装~~ **実装済み(2026-07-04)**: RFC 5893 CheckBidi を
+    idna.zig に実装(tools/gen_bidi_class.py で bidi_class.zig を生成、ユニットテスト8本)。
+    ただし IdnaTestV2 スコアは 2483/2671 のまま(fail diff ゼロ) — 現状は不完全な
+    マッピングテーブルが bidi ケースを別理由 reject で偶然マスクしているため。
+    残り188 fail の実体: virama リスト不足(ZWJ V context)、A4_2 長さ検証、xn-- P4。
 - **dom/events 残り141 fail**: event-global 残り3 (shadow tree 内の window.event)、
   Body-FrameSet-Event-Handlers 12 fail/36 pass (content attribute → new Function 反映は部分実装済み、Forward to Window が未完了)、
   Event-dispatch-throwing、non-cancelable-when-passive、focus-event 等
@@ -122,7 +126,10 @@ url-constructor: 864→873、url-origin: 402→405。
 - ~~**lone surrogate を Object key にした場合の FFFD 置換**~~ **解決済み(2026-07-03)**: 調査の結果「文字列表現の根本問題」は誤診。内部表現は既に事実上WTF-8で、StringPool/parser/連結/比較/Object key round-trip/spread は全て正しくlone surrogateを保持する（回帰テスト4本を tests/test_kotori_vm.zig「WTF-8:」プレフィックスで追加、全pass）。唯一の実バグは `codePointAt` が厳格 `std.unicode.utf8Decode` でlone surrogateを拒否して undefined を返すことで、仕様どおりcode unit値を返すフォールバックを実装済み(vm.zig nativeStringCodePointAt)。「3個のFFFD」は端末など外部の厳格UTF-8デコーダがWTF-8バイト列を表示する際の見え方で、kotori内部では発生しない。
 - **url-constructor の残り**: `http://./` (dot host without base)、`http://../` (double-dot host without base)、`sc://:/` (empty host with port) — host parser の境界ケース
   - **Wave 219/221 で教訓（2回リバート）**: leading/consecutive dot rejection の単純削除も、all-dots-only のターゲット修正も、両方 79.9%→55.8% の大幅回帰を引き起こす。回帰の根本原因は `domainToAscii` が all-dot 入力（"." や ".."）をどう処理するかにある可能性が高い（空文字列を返して cascade failure？）。次セッションでは `idna.zig domainToAscii` に all-dot 入力テストを追加し、戻り値を確認してから host.zig 側の修正を再度試すこと。
-- **IdnaTestV2 残り**: ~545 subtests。C1/C2 (ZWJ/ZWNJ) チェック、bidi ルール等
+- **IdnaTestV2 残り**: 188 subtests(2026-07-04 実測)。bidi は実装済み(上記)。
+  実体は (1) virama_codepoints に U+094D/U+0DCA 等の Indic virama 不足(ZWJ V context、
+  例 `a्‍b`・`ශ්‍රී`)、(2) A4_2 長さ検証(be_strict=false では通すべき)、(3) xn-- ACE
+  ラベルの P4 検証(decode+再検証で throw すべきものが通る)
   - **Wave 220 で調査未完**: HTTPサーバー不安定で失敗パターン分析できず。
   - **Wave 223 で分析完了**: C1=410, C2=400, V3=365, V6=701, A4_2=346。
     C1/C2 は CheckJoiners ルール（UTS #46 §4.2 step 3）未実装が原因。
