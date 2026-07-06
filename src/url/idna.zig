@@ -10,6 +10,7 @@ const nfc = @import("nfc.zig");
 const punycode = @import("punycode.zig");
 const joining_type = @import("joining_type.zig");
 const bidi_class = @import("bidi_class.zig");
+const combining_mark = @import("combining_mark.zig");
 
 /// Convert a domain to its ASCII representation (ACE form).
 /// Returns null on failure (invalid domain).
@@ -174,119 +175,55 @@ pub fn domainToUnicode(allocator: Allocator, domain: []const u8) ![]u8 {
     return result.toOwnedSlice(allocator);
 }
 
-/// Check if a code point is a combining mark (General_Category Mn or Me).
-/// Used by processLabel to reject labels starting with a combining mark
-/// (UTS #46 §4.2 leading-mark rule, IdnaTestV2 V6 cases).
-/// This is a coarse check covering the most common Mn/Me ranges; a complete
-/// implementation would consult UnicodeData.txt General_Category.
-fn isCombiningMark(cp: u21) bool {
-    // Major Mn/Me ranges (representative, not exhaustive — covers the code
-    // points that appear in IdnaTestV2 V6 leading-mark failures).
-    return switch (cp) {
-        // Combining Diacritical Marks
-        0x0300...0x036F,
-        // Combining Diacritical Marks Supplement
-        0x1DC0...0x1DFF,
-        // Combining Diacritical Marks for Symbols
-        0x20D0...0x20FF,
-        // Variation Selectors (Mn)
-        0xFE00...0xFE0F,
-        // Combining Half Marks
-        0xFE20...0xFE2F,
-        => true,
-        else => blk: {
-            // Per-script Mn ranges (broad coverage for Indic, Arabic, etc.)
-            // Arabic/Syriac combining marks
-            if (cp >= 0x064B and cp <= 0x065F) break :blk true;
-            if (cp == 0x0670) break :blk true;
-            if (cp >= 0x06D6 and cp <= 0x06DC) break :blk true;
-            if (cp >= 0x06DF and cp <= 0x06E4) break :blk true;
-            if (cp >= 0x06E7 and cp <= 0x06E8) break :blk true;
-            if (cp >= 0x06EA and cp <= 0x06ED) break :blk true;
-            if (cp >= 0x0730 and cp <= 0x074A) break :blk true;
-            if (cp >= 0x07EB and cp <= 0x07F3) break :blk true;
-            if (cp >= 0x0816 and cp <= 0x0819) break :blk true;
-            if (cp >= 0x081B and cp <= 0x0823) break :blk true;
-            if (cp >= 0x0825 and cp <= 0x0827) break :blk true;
-            if (cp >= 0x0829 and cp <= 0x082D) break :blk true;
-            if (cp >= 0x0859 and cp <= 0x085B) break :blk true;
-            if (cp >= 0x08D3 and cp <= 0x08E1) break :blk true;
-            if (cp >= 0x08E3 and cp <= 0x0903) break :blk true;
-            // Devanagari / Bengali / Gurmukhi / Gujarati / Oriya / Tamil etc. matras
-            if (cp >= 0x0900 and cp <= 0x094F) break :blk true; // Devanagari (broad — includes nukta/matras)
-            if (cp >= 0x0951 and cp <= 0x0957) break :blk true;
-            if (cp >= 0x0962 and cp <= 0x0963) break :blk true;
-            if (cp >= 0x0981 and cp <= 0x0983) break :blk true;
-            if (cp >= 0x09BC and cp <= 0x09C4) break :blk true;
-            if (cp >= 0x09CB and cp <= 0x09CE) break :blk true;
-            if (cp >= 0x09D7 and cp <= 0x09D7) break :blk true;
-            if (cp >= 0x09E2 and cp <= 0x09E3) break :blk true;
-            // Tamil (0x0BCx)
-            if (cp >= 0x0BC0 and cp <= 0x0BC2) break :blk true;
-            if (cp >= 0x0BC6 and cp <= 0x0BC8) break :blk true;
-            if (cp >= 0x0BCA and cp <= 0x0BCC) break :blk true;
-            if (cp == 0x0BD7) break :blk true;
-            break :blk false;
-        },
-    };
-}
-
 /// UTS #46 §4.2 CheckJoiners: validate ZWNJ (U+200C) and ZWJ (U+200D) placement.
 /// Returns true if all ZWNJ/ZWJ are in valid contexts, false if any violates
 /// the joiner rules (C1 for ZWNJ, C2 for ZWJ).
 ///
-/// Rules (UTS #46 §4.2 step 3, using Joining_Type property):
-///   ZWNJ at position i is valid if:
-///     - The preceding non-Transparent code point has Joining_Type L, D, or V; OR
-///     - There is a following non-Transparent code point (i+1 < len after
-///       skipping T) and it has Joining_Type R, D, or V.
+/// Rules (RFC 5892 Appendix A, CONTEXTJ — referenced by UTS #46 §4.2 step 3):
+///   ZWNJ (A.1) at position i is valid if:
+///     - Canonical_Combining_Class(label[i-1]) == Virama (ccc=9); OR
+///     - The regex (L|D)(T)*ZWNJ(T)*(R|D) matches: preceding non-Transparent
+///       code point has Joining_Type L or D, AND following non-Transparent
+///       code point has Joining_Type R or D.
 ///     Otherwise: C1 violation.
-///   ZWJ at position i is valid if:
-///     - There is a following non-Transparent code point and it has
-///       Joining_Type R, D, or V.
+///   ZWJ (A.2) at position i is valid ONLY if:
+///     - Canonical_Combining_Class(label[i-1]) == Virama (ccc=9).
 ///     Otherwise: C2 violation.
 ///
-/// "V" (Virama) Joining_Type covers Indic viramas (U+094D etc.) per
-/// DerivedJoiningType.txt. ZWNJ is valid after L, D, or V; ZWJ is valid
-/// before R, D, or V.
+/// Note: the ccc=9 check is on the IMMEDIATELY preceding code point (no
+/// Transparent skipping) — that is what "Before(cp)" means in RFC 5892.
 fn checkJoiners(label: []const u21) bool {
     for (label, 0..) |cp, i| {
         if (cp == 0x200C) {
-            // ZWNJ — C1 check
-            // Find preceding non-Transparent code point
-            var j: usize = i;
-            while (j > 0) {
-                j -= 1;
-                const pt = joining_type.joiningType(label[j]);
-                if (pt == .transparent) continue;
-                if (pt == .left or pt == .dual or pt == .virama) break; // valid: L, D, or V
-                // R, U, C, join_causing → not valid for ZWNJ preceding
-                j = 0; // mark as "no valid preceding"
-                break;
-            }
-            const prev_valid = (j > 0 or (i > 0 and blk: {
-                const pt = joining_type.joiningType(label[i - 1]);
-                break :blk pt == .left or pt == .dual or pt == .virama;
-            }));
-
-            if (prev_valid) continue;
-
-            // Check following non-Transparent code point
-            if (followingJoiningType(label, i + 1)) |ft| {
-                if (ft == .right or ft == .dual or ft == .virama) continue; // valid: R, D, or V
-            }
-
+            // ZWNJ — C1
+            if (i > 0 and joining_type.isVirama(label[i - 1])) continue;
+            const pt = precedingJoiningType(label, i);
+            const ft = followingJoiningType(label, i + 1);
+            if (pt != null and ft != null and
+                (pt.? == .left or pt.? == .dual) and
+                (ft.? == .right or ft.? == .dual)) continue;
             return false; // C1 violation
         }
         if (cp == 0x200D) {
-            // ZWJ — C2 check: must be followed by R, D, or V (non-Transparent)
-            if (followingJoiningType(label, i + 1)) |ft| {
-                if (ft == .right or ft == .dual or ft == .virama) continue; // valid
-            }
+            // ZWJ — C2
+            if (i > 0 and joining_type.isVirama(label[i - 1])) continue;
             return false; // C2 violation
         }
     }
     return true;
+}
+
+/// Find the last non-Transparent code point before `pos`, returning its
+/// Joining_Type, or null if none (start of label).
+fn precedingJoiningType(label: []const u21, pos: usize) ?joining_type.JoiningType {
+    var j: usize = pos;
+    while (j > 0) {
+        j -= 1;
+        const pt = joining_type.joiningType(label[j]);
+        if (pt == .transparent) continue;
+        return pt;
+    }
+    return null;
 }
 
 /// Find the first non-Transparent code point at or after `start`, returning
@@ -375,7 +312,7 @@ fn processLabel(allocator: Allocator, label: []const u21, be_strict: bool) !?[]u
     // UTS #46 §4.2: a label must not start with a combining mark
     // (General_Category Mn or Me). IdnaTestV2 V6 cases like "̈c.d" (label
     // starting with U+0308 COMBINING DIAERESIS) must be rejected.
-    if (isCombiningMark(label[0])) return null;
+    if (combining_mark.isCombiningMark(label[0])) return null;
 
     // Check if label is pure ASCII
     var has_non_ascii = false;
@@ -600,4 +537,50 @@ test "bidi: AN in LTR label fails (rule 5)" {
     // "a٠.א" — bidi domain; LTR label contains AN U+0660 → invalid
     const result = try domainToAscii(alloc, "a\xd9\xa0.\xd7\x90", false);
     try std.testing.expect(result == null);
+}
+
+// ── CheckJoiners (RFC 5892 Appendix A CONTEXTJ) tests ──
+
+test "joiners: ZWJ after virama is valid (A.2)" {
+    const alloc = std.testing.allocator;
+    // क + ् (U+094D virama) + ZWJ + ष — valid Devanagari conjunct
+    const result = try domainToAscii(alloc, "\xe0\xa4\x95\xe0\xa5\x8d\xe2\x80\x8d\xe0\xa4\xb7", false);
+    try std.testing.expect(result != null);
+    alloc.free(result.?);
+}
+
+test "joiners: ZWJ between Latin fails (C2)" {
+    const alloc = std.testing.allocator;
+    const result = try domainToAscii(alloc, "a\xe2\x80\x8db", false);
+    try std.testing.expect(result == null);
+}
+
+test "joiners: ZWNJ after virama is valid (A.1 branch 1)" {
+    const alloc = std.testing.allocator;
+    // क + ् + ZWNJ + ष
+    const result = try domainToAscii(alloc, "\xe0\xa4\x95\xe0\xa5\x8d\xe2\x80\x8c\xe0\xa4\xb7", false);
+    try std.testing.expect(result != null);
+    alloc.free(result.?);
+}
+
+test "joiners: ZWNJ between Latin fails (C1)" {
+    const alloc = std.testing.allocator;
+    const result = try domainToAscii(alloc, "a\xe2\x80\x8cb", false);
+    try std.testing.expect(result == null);
+}
+
+test "joiners: ZWNJ in Arabic dual-join context is valid (A.1 regex)" {
+    const alloc = std.testing.allocator;
+    // ب (BEH, D) + ZWNJ + ب (BEH, D) — matches (L|D)(T)*ZWNJ(T)*(R|D)
+    const result = try domainToAscii(alloc, "\xd8\xa8\xe2\x80\x8c\xd8\xa8", false);
+    try std.testing.expect(result != null);
+    alloc.free(result.?);
+}
+
+test "joiners: Sinhala al-lakuna (ccc=9) before ZWJ is valid" {
+    const alloc = std.testing.allocator;
+    // ශ + ් (U+0DCA) + ZWJ + ර + ී — "shri" conjunct
+    const result = try domainToAscii(alloc, "\xe0\xb7\x81\xe0\xb7\x8a\xe2\x80\x8d\xe0\xb6\xbb\xe0\xb7\x93", false);
+    try std.testing.expect(result != null);
+    alloc.free(result.?);
 }
