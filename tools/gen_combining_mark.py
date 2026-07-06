@@ -3,7 +3,7 @@
 
 Usage: python3 tools/gen_combining_mark.py tools/UnicodeData.txt > src/url/combining_mark.zig
 
-Emits sorted ranges of code points with General_Category Mn or Me, used by
+Emits sorted ranges of code points with General_Category Mn, Mc, or Me, used by
 UTS #46 §4.2 step 2 (label must not begin with a combining mark).
 """
 import sys
@@ -20,11 +20,11 @@ def main():
         cp, name, gc = rows[i]
         if name.endswith(", First>"):
             last = rows[i + 1][0]
-            if gc in ("Mn", "Me"):
+            if gc in ("Mn", "Mc", "Me"):
                 cps.extend(range(cp, last + 1))
             i += 2
             continue
-        if gc in ("Mn", "Me"):
+        if gc in ("Mn", "Mc", "Me"):
             cps.append(cp)
         i += 1
     # collapse to ranges
@@ -42,7 +42,7 @@ def main():
         print(f"    .{{ 0x{a:04X}, 0x{b:04X} }},")
     print("};")
     print("""
-/// True if cp has General_Category Mn or Me (combining mark).
+/// True if cp has General_Category Mn, Mc, or Me (combining mark).
 pub fn isCombiningMark(cp: u21) bool {
     var lo: usize = 0;
     var hi: usize = ranges.len;

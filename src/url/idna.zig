@@ -323,7 +323,15 @@ fn processLabel(allocator: Allocator, label: []const u21, be_strict: bool) !?[]u
         }
     }
 
+    // UTS #46 §4.2 step 1 / IdnaTestV2 P4: a label that begins with "xn--"
+    // (after mapping, which lowercases ASCII) must be pure ASCII punycode.
+    // "xn--a-ä" is a hard failure, not something to re-encode.
+    const starts_xn = label.len >= 4 and
+        label[0] == 'x' and label[1] == 'n' and label[2] == '-' and label[3] == '-';
+
     if (has_non_ascii) {
+        if (starts_xn) return null; // P4: non-ASCII in an ACE-prefixed label
+
         // UTS #46 §4.2 CheckJoiners: validate ZWNJ (U+200C) and ZWJ (U+200D)
         // placement before punycode encoding. A violation is a hard failure
         // (IdnaTestV2 C1/C2 expect throw). Pure-ASCII labels skip this check
@@ -379,8 +387,10 @@ fn validateAceLabel(label: []const u8) bool {
 fn validateAsciiLabel(label: []const u8) bool {
     if (label.len == 0) return true;
 
-    // Max label length: 63 bytes
-    if (label.len > 63) return false;
+    // No length check: WHATWG URL uses IDNA with VerifyDnsLength=false
+    // (IdnaTestV2 A4_1/A4_2 cases are "(ignored)" — over-63-byte labels and
+    // over-253-byte domains must SUCCEED). Length limits apply only in
+    // strict mode (UTS #46 §4.3), which the URL parser never uses.
 
     // WHATWG URL §3.5: leading/trailing hyphens are "validation errors"
     // (warnings), NOT failures. The URL parser accepts domains like "xn--"
@@ -468,12 +478,15 @@ test "domainToUnicode plain ASCII passthrough" {
     try std.testing.expectEqualStrings("example.com", result);
 }
 
-test "domainToAscii label too long fails" {
+test "domainToAscii long label succeeds (VerifyDnsLength=false)" {
     const alloc = std.testing.allocator;
-    // 64 characters label — exceeds 63 byte limit
+    // 64-character label: exceeds the DNS 63-byte limit, but WHATWG URL
+    // runs IDNA with VerifyDnsLength=false, so this must be accepted
+    // (IdnaTestV2 A4_2 "(ignored)").
     const long_label = "a" ** 64 ++ ".com";
     const result = try domainToAscii(alloc, long_label, false);
-    try std.testing.expect(result == null);
+    try std.testing.expect(result != null);
+    alloc.free(result.?);
 }
 
 // ── CheckBidi (RFC 5893) tests — cases mirror IdnaTestV2 V3 patterns ──
