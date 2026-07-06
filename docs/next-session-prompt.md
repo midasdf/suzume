@@ -6,10 +6,18 @@ TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
 
 このrepoの暗黙ルール。以下を守らないと過去に実際に回帰・時間損失が起きている。
 
-**現在地(2026-07-01 Wave 225 時点):**
-- url WPT: 6186/7211 (85.8%)、dom/events: 297 (69.7%)、url-constructor/url-setters: 100%
-- kotori unit: **1036/1036 pass / 0 fail / 0 crash** がベースライン(2026-07-03 再検証)。
+**現在地(2026-07-06 Wave 229 時点):**
+- url WPT: **6395/7223 (88.5%)**。**IdnaTestV2 2671/2671 (100%)**、url-origin 413/413 (100%)、
+  url-constructor 893/893、url-setters 279/279。
+- url 残りfail 4ファイル: failure.html、urlencoded-parser(Request/Response.formData未実装、fetch API依存)、
+  urlsearchparams-constructor(WebIDL branding check)、idlharness(ハーネス依存)。
+- kotori unit: **1040/1040 pass / 0 fail / 0 crash** がベースライン(2026-07-06、WTF-8テスト4本込み)。
   これを1つでも割ったらリグレッション — 「新機能でN個増えたから差し引きプラス」は不可。
+- Unicodeデータは **17.0**(Wave 228で tools/*.txt 更新+全テーブル再生成済み。
+  WPTのIdnaTestV2はUnicode 17生成なので、テーブル世代を16に戻すと3件failが再発する)。
+- IdnaTestV2は完了。CONTEXTJ(RFC 5892)/先頭結合記号(Mn+Mc+Me)/VerifyDnsLength=false/
+  xn-- P4検証は Wave 226-228 で実装済み — 再調査不要。dot-host地雷も解消済み
+  (domainToAscii は "."/".." を素通しする、実測確認済み)。
 
 **ワークフロー(交渉不可):**
 1. 変更は「Wave NNN」連番コミット。1 Wave = 1論点。
