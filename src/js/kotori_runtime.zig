@@ -2908,12 +2908,26 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  Object.setPrototypeOf(CSSStyleRule.prototype,_CSSGroupingRuleBase.prototype);
         \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{
-        \\    get:function(){return this._sel;},
-        \\    set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=c;}catch(e){}},
+        \\    get:function(){
+        \\      // Normalize on read too — rules parsed from stylesheets may have
+        \\      // comment whitespace in _sel that wasn't normalized at parse time.
+        \\      return this._sel.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\s+([is])\]/g,function(m,g1){return ' '+g1+']';}).replace(/\s+/g,' ').trim();
+        \\    },
+        \\    set:function(v){
+        \\      var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+        \\      c=c.replace(/\s+([is])\]/g,function(m,g1){return ' '+g1+']';});
+        \\      try{document.querySelector(c);this._sel=c;}catch(e){}
+        \\    },
         \\    enumerable:true,configurable:true
         \\  });
         \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{
-        \\    get:function(){return this._sel+' { '+this._body+' }';},
+        \\    get:function(){
+        \\      // Normalize _sel for cssText output too (handles rules parsed
+        \\      // from stylesheets where _sel wasn't normalized at parse time).
+        \\      var s=this._sel;
+        \\      s=s.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\s+([is])\]/g,function(m,g1){return ' '+g1+']';}).replace(/\s+/g,' ').trim();
+        \\      return s+' { '+this._body+' }';
+        \\    },
         \\    enumerable:true,configurable:true
         \\  });
         \\  // style: [SameObject,PutForwards=cssText] — getter returns same proxy, setter forwards to cssText
@@ -5679,13 +5693,12 @@ pub const KotoriRuntime = struct {
             var inner = (url_parser.parse(allocator, inner_str, null) catch null) orelse
                 return allocator.dupe(u8, "null");
             defer inner.deinit();
-            // Guard against blob:blob:... recursion: inner must be special.
-            const inner_special = std.mem.eql(u8, inner.scheme, "http") or
-                std.mem.eql(u8, inner.scheme, "https") or
-                std.mem.eql(u8, inner.scheme, "ws") or
-                std.mem.eql(u8, inner.scheme, "wss") or
-                std.mem.eql(u8, inner.scheme, "ftp");
-            if (!inner_special) return allocator.dupe(u8, "null");
+            // URL Standard §4.8 blob: only an http(s) inner URL contributes
+            // its origin; everything else (ftp/ws/wss/file/blob:blob:...)
+            // is an opaque origin ("null").
+            const inner_http = std.mem.eql(u8, inner.scheme, "http") or
+                std.mem.eql(u8, inner.scheme, "https");
+            if (!inner_http) return allocator.dupe(u8, "null");
             return inner.serializeOrigin(allocator);
         }
         return allocator.dupe(u8, "null");
@@ -5860,7 +5873,62 @@ pub const KotoriRuntime = struct {
     const url_polyfill_js =
         \\(function(){
         \\  if(typeof globalThis==='undefined')return;
-        \\  function percentDecode(s){try{return decodeURIComponent(s);}catch(e){var out='';for(var i=0;i<s.length;i++){if(s.charAt(i)==='%'&&i+2<s.length){var h=s.substring(i+1,i+3);if(/^[0-9A-Fa-f]{2}$/.test(h)){out+=decodeURIComponent(s.substring(i,i+3));i+=2;continue;}}out+=s.charAt(i);}return out;}}
+        \\  // WHATWG URL §5.1 form-urlencoded decoder. Reused by _refillSP when
+        \\  // URL.search is set. (Full implementation lives in
+        \\  // url_search_params_polyfill_js; this local copy avoids cross-IIFE
+        \\  // ordering issues.)
+        \\  function formDecode(s){
+        \\    var n=s.length,bytes=[];
+        \\    var i=0;
+        \\    while(i<n){
+        \\      var c=s.charCodeAt(i);
+        \\      if(c===0x2B){bytes.push(0x20);i++;continue;}
+        \\      if(c===0x25&&i+2<n){
+        \\        var h1=s.charCodeAt(i+1),h2=s.charCodeAt(i+2);
+        \\        var d1=(h1>=0x30&&h1<=0x39)?h1-0x30:(h1>=0x41&&h1<=0x46)?h1-0x37:(h1>=0x61&&h1<=0x66)?h1-0x57:-1;
+        \\        var d2=(h2>=0x30&&h2<=0x39)?h2-0x30:(h2>=0x41&&h2<=0x46)?h2-0x37:(h2>=0x61&&h2<=0x66)?h2-0x57:-1;
+        \\        if(d1>=0&&d2>=0){bytes.push((d1<<4)|d2);i+=3;continue;}
+        \\      }
+        \\      var cp=c;
+        \\      if(c>=0xD800&&c<=0xDBFF&&i+1<n){
+        \\        var lo=s.charCodeAt(i+1);
+        \\        if(lo>=0xDC00&&lo<=0xDFFF){cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);i++;}
+        \\      }
+        \\      if(cp<0x80){bytes.push(cp);}
+        \\      else if(cp<0x800){bytes.push(0xC0|(cp>>6),0x80|(cp&0x3F));}
+        \\      else if(cp<0x10000){bytes.push(0xE0|(cp>>12),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      else{bytes.push(0xF0|(cp>>18),0x80|((cp>>12)&0x3F),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      i++;
+        \\    }
+        \\    var out='',p=0,L=bytes.length;
+        \\    while(p<L){
+        \\      var b0=bytes[p++];
+        \\      if(b0<0x80){out+=String.fromCharCode(b0);continue;}
+        \\      var seqlen=0,mask=0x80;
+        \\      while(mask&b0){seqlen++;mask>>=1;}
+        \\      seqlen-=1;
+        \\      if(seqlen<1||seqlen>3){out+='\uFFFD';continue;}
+        \\      if(p+seqlen>L){out+='\uFFFD';continue;}
+        \\      if(b0===0xED&&seqlen===2&&(bytes[p]>=0xA0&&bytes[p]<=0xBF)){
+        \\        out+=String.fromCharCode(0xD800+((bytes[p]-0xA0)<<6)|(bytes[p+1]&0x3F));
+        \\        p+=2;continue;
+        \\      }
+        \\      var ok=true,cp=b0&(0x7F>>seqlen);
+        \\      for(var k=0;k<seqlen;k++){
+        \\        var cb=bytes[p+k];
+        \\        if(cb<0x80||cb>0xBF){ok=false;break;}
+        \\        cp=(cp<<6)|(cb&0x3F);
+        \\      }
+        \\      if(!ok){out+='\uFFFD';continue;}
+        \\      var mincp=[0,0x80,0x800,0x10000][seqlen];
+        \\      if(cp<mincp){out+='\uFFFD';continue;}
+        \\      if(cp>=0xD800&&cp<=0xDFFF){out+='\uFFFD';continue;}
+        \\      p+=seqlen;
+        \\      if(cp<0x10000)out+=String.fromCharCode(cp);
+        \\      else out+=String.fromCharCode(0xD800+((cp-0x10000)>>10),0xDC00+((cp-0x10000)&0x3FF));
+        \\    }
+        \\    return out;
+        \\  }
         \\  // Native-backed parse: full WHATWG basic URL parser. Returns a
         \\  // stub for invalid input so location getters degrade gracefully.
         \\  function parseURL(url){
@@ -5895,7 +5963,7 @@ pub const KotoriRuntime = struct {
         \\        var n,val;
         \\        if(eq>=0){n=pairs[i].substring(0,eq);val=pairs[i].substring(eq+1);}
         \\        else{n=pairs[i];val='';}
-        \\        sp._e.push([percentDecode(n.replace(/\\+/g,' ')),percentDecode(val.replace(/\\+/g,' '))]);
+        \\        sp._e.push([formDecode(n),formDecode(val)]);
         \\      }
         \\    }
         \\  }
@@ -5925,7 +5993,10 @@ pub const KotoriRuntime = struct {
         \\  _def('searchParams',function(){
         \\    if(this._sp)return this._sp;
         \\    var self=this;
-        \\    var sp=new URLSearchParams(this._p.query||'');
+        \\    // Pass the full search (incl. leading '?') so URLSearchParams strips
+        \\    // exactly one '?'. For '??a=b' the query becomes '?a=b' which
+        \\    // percent-encodes the '?' to '%3F' on toString — matching browsers.
+        \\    var sp=new URLSearchParams(this._p.search||'');
         \\    sp._updateURL=function(){_set(self,'search',sp.toString());};
         \\    this._sp=sp;
         \\    return sp;
@@ -6301,6 +6372,10 @@ pub const KotoriRuntime = struct {
         \\  if(typeof requestAnimationFrame==='undefined'){
         \\    globalThis.requestAnimationFrame=function(cb){return setTimeout(function(){cb(Date.now());},16);};
         \\    globalThis.cancelAnimationFrame=function(id){clearTimeout(id);};
+        \\  }
+        \\  if(typeof requestIdleCallback==='undefined'){
+        \\    globalThis.requestIdleCallback=function(cb){var id=setTimeout(function(){cb({timeRemaining:function(){return 50;},didTimeout:false});},1);return id;};
+        \\    globalThis.cancelIdleCallback=function(id){clearTimeout(id);};
         \\  }
         \\  if(typeof Promise==='undefined'||typeof Promise.allSettled==='undefined'){
         \\    if(typeof Promise!=='undefined'){
@@ -7175,6 +7250,18 @@ pub const KotoriRuntime = struct {
         \\  try{if(typeof HTMLFrameSetElement!=='undefined')protos.push(HTMLFrameSetElement.prototype);}catch(e){}
         \\  function makeGetter(name){
         \\    return function(){
+        \\      // HTML §8.1.5.1: if the content attribute is set, compile it
+        \\      // to a function via new Function(body) and return it.
+        \\      // Also forward to window (HTML §8.1.5.4 body/frameset forward).
+        \\      if(this && typeof this.getAttribute==='function' && this.hasAttribute(name)){
+        \\        var body=this.getAttribute(name);
+        \\        try{
+        \\          var fn=new Function(body);
+        \\          globalThis[name]=fn;
+        \\          return fn;
+        \\        }catch(e){ return null; }
+        \\      }
+        \\      // Otherwise return the window-level IDL attribute.
         \\      var v=globalThis[name];
         \\      return (typeof v==='function')?v:null;
         \\    };
@@ -7375,7 +7462,79 @@ pub const KotoriRuntime = struct {
         \\(function(){
         \\  "use strict";
         \\  if(typeof URLSearchParams!=='undefined'&&URLSearchParams.prototype&&URLSearchParams.prototype.sort)return;
-        \\  function percentDecode(s){try{return decodeURIComponent(s);}catch(e){var out='';for(var i=0;i<s.length;i++){if(s.charAt(i)==='%'&&i+2<s.length){var h=s.substring(i+1,i+3);if(/^[0-9A-Fa-f]{2}$/.test(h)){out+=decodeURIComponent(s.substring(i,i+3));i+=2;continue;}}out+=s.charAt(i);}return out;}}
+        \\  // WHATWG URL §5.1 application/x-www-form-urlencoded decoder.
+        \\  // Step 1: turn input string into a byte sequence:
+        \\  //   '+' -> 0x20; '%XX' (both hex) -> byte 0xXX; otherwise UTF-8
+        \\  //   encode the current code unit (lone surrogates → WTF-8 bytes).
+        \\  // Step 2: decode the byte sequence as UTF-8 with replacement:
+        \\  //   - well-formed multi-byte → code point
+        \\  //   - invalid/lone continuation/overlong/truncated → one U+FFFD per
+        \\  //     error (encoder-error-replacement mode)
+        \\  //   - WTF-8 lone surrogates (0xED 0xA0..0xBF 0x80..0xBF) preserved
+        \\  //     as lone surrogate code units (so `\uD800` round-trips).
+        \\  function formDecode(s){
+        \\    var n=s.length,bytes=[];
+        \\    var i=0;
+        \\    while(i<n){
+        \\      var c=s.charCodeAt(i);
+        \\      if(c===0x2B){bytes.push(0x20);i++;continue;}
+        \\      if(c===0x25&&i+2<n){
+        \\        var h1=s.charCodeAt(i+1),h2=s.charCodeAt(i+2);
+        \\        var d1=(h1>=0x30&&h1<=0x39)?h1-0x30:(h1>=0x41&&h1<=0x46)?h1-0x37:(h1>=0x61&&h1<=0x66)?h1-0x57:-1;
+        \\        var d2=(h2>=0x30&&h2<=0x39)?h2-0x30:(h2>=0x41&&h2<=0x46)?h2-0x37:(h2>=0x61&&h2<=0x66)?h2-0x57:-1;
+        \\        if(d1>=0&&d2>=0){bytes.push((d1<<4)|d2);i+=3;continue;}
+        \\      }
+        \\      // UTF-8 encode the code unit (handles BMP + surrogate pairs).
+        \\      // Lone surrogates use WTF-8 (3-byte form matching UTF-8 of the
+        \\      // surrogate code unit itself), so they round-trip below.
+        \\      var cp=c;
+        \\      if(c>=0xD800&&c<=0xDBFF&&i+1<n){
+        \\        var lo=s.charCodeAt(i+1);
+        \\        if(lo>=0xDC00&&lo<=0xDFFF){cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);i++;}
+        \\      }
+        \\      if(cp<0x80){bytes.push(cp);}
+        \\      else if(cp<0x800){bytes.push(0xC0|(cp>>6),0x80|(cp&0x3F));}
+        \\      else if(cp<0x10000){bytes.push(0xE0|(cp>>12),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      else{bytes.push(0xF0|(cp>>18),0x80|((cp>>12)&0x3F),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      i++;
+        \\    }
+        \\    // Decode bytes as UTF-8 with replacement + WTF-8 lone surrogates.
+        \\    var out='',p=0,L=bytes.length;
+        \\    while(p<L){
+        \\      var b0=bytes[p++];
+        \\      if(b0<0x80){out+=String.fromCharCode(b0);continue;}
+        \\      // Count leading 1-bits to get sequence length (1 = 0xC0..0xDF, etc.)
+        \\      var seqlen=0,mask=0x80;
+        \\      while(mask&b0){seqlen++;mask>>=1;}
+        \\      seqlen-=1; // leading 1-bit count minus the first byte
+        \\      if(seqlen<1||seqlen>3){out+='\uFFFD';continue;}
+        \\      // Need seqlen continuation bytes, each in 0x80..0xBF
+        \\      if(p+seqlen>L){out+='\uFFFD';continue;}
+        \\      // WTF-8 lone surrogate: 0xED 0xA0..0xBF 0x80..0xBF
+        \\      if(b0===0xED&&seqlen===2&&(bytes[p]>=0xA0&&bytes[p]<=0xBF)){
+        \\        // Emit the lone high surrogate code unit directly.
+        \\        out+=String.fromCharCode(0xD800+((bytes[p]-0xA0)<<6)|(bytes[p+1]&0x3F));
+        \\        p+=2;continue;
+        \\      }
+        \\      // Validate continuation bytes
+        \\      var ok=true,cp=b0&(0x7F>>seqlen);
+        \\      for(var k=0;k<seqlen;k++){
+        \\        var cb=bytes[p+k];
+        \\        if(cb<0x80||cb>0xBF){ok=false;break;}
+        \\        cp=(cp<<6)|(cb&0x3F);
+        \\      }
+        \\      if(!ok){out+='\uFFFD';continue;}
+        \\      // Reject overlong encodings
+        \\      var mincp=[0,0x80,0x800,0x10000][seqlen];
+        \\      if(cp<mincp){out+='\uFFFD';continue;}
+        \\      // Reject surrogates (U+D800..U+DFFF) — handled via WTF-8 above
+        \\      if(cp>=0xD800&&cp<=0xDFFF){out+='\uFFFD';continue;}
+        \\      p+=seqlen;
+        \\      if(cp<0x10000)out+=String.fromCharCode(cp);
+        \\      else out+=String.fromCharCode(0xD800+((cp-0x10000)>>10),0xDC00+((cp-0x10000)&0x3FF));
+        \\    }
+        \\    return out;
+        \\  }
         \\  function cuAt(s,pos){var cp=s.charCodeAt(pos);return cp>=0x10000?0xD800+((cp-0x10000)>>10):pos<s.length?cp:-1;}
         \\  function cuLen(s){var l=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);l+=c>=0x10000?2:1;}return l;}
         \\  function URLSearchParams(init){
@@ -7391,25 +7550,89 @@ pub const KotoriRuntime = struct {
         \\          var n,v;
         \\          if(eq>=0){n=pairs[i].substring(0,eq);v=pairs[i].substring(eq+1);}
         \\          else{n=pairs[i];v='';}
-        \\          var replP=function(t){return t.split('+').join(' ');};
-        \\          this._e.push([percentDecode(replP(n)),percentDecode(replP(v))]);
+        \\          this._e.push([formDecode(n),formDecode(v)]);
         \\        }
         \\      }
-        \\    }else if(Array.isArray(init)){for(var i=0;i<init.length;i++)this._e.push([String(init[i][0]),String(init[i][1])]);}
-        \\    else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
+        \\    }else if(Array.isArray(init)){
+        \\      for(var i=0;i<init.length;i++){
+        \\        var p=init[i];
+        \\        if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');
+        \\        this._e.push([String(p[0]),String(p[1])]);
+        \\      }
+        \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&typeof init[Symbol.iterator]==='function'){
+        \\      // Spec: if init has a [Symbol.iterator], use it (covers custom
+        \\      // iterators on URLSearchParams instances, generators, etc.).
+        \\      // Must run BEFORE the _entries/entries branches because a
+        \\      // URLSearchParams instance also has entries() on its prototype.
+        \\      var it=init[Symbol.iterator](),r;
+        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([String(p[0]),String(p[1])]);}
+        \\    }else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
         \\    else if(init&&typeof init.entries==='function'){
         \\      var it=init.entries();
         \\      var r=it.next?it.next():null;
         \\      while(r&&!r.done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);r=it.next?it.next():null;}
-        \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&init[Symbol.iterator]){
-        \\      var it=init[Symbol.iterator](),r;
-        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length<2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([String(p[0]),String(p[1])]);}
         \\    }else if(typeof init==='object'||typeof init==='function'){
         \\      var keys=Object.keys(init);
         \\      for(var i=0;i<keys.length;i++)this._e.push([String(keys[i]),String(init[keys[i]])]);
         \\    }
         \\  }
-        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).replace(/%20/g,'+').replace(/%2A/g,'*')+'='+encodeURIComponent(p[1]).replace(/%20/g,'+').replace(/%2A/g,'*');}).join('&');};
+        \\  function formEncode(s){
+        \\    var out='';
+        \\    for(var i=0;i<s.length;i++){
+        \\      var c=s.charCodeAt(i);
+        \\      if(c>=0xD800&&c<=0xDBFF){
+        \\        // High surrogate — peek at next code unit. If it's a low
+        \\        // surrogate (0xDC00-0xDFFF), combine into an astral code
+        \\        // point and encode as 4-byte UTF-8. If NOT (lone high
+        \\        // surrogate, or end-of-string), encode the raw code unit
+        \\        // as 3-byte WTF-8 — matches WHATWG percent-encode-after-encoding
+        \\        // which encodes lone surrogates as their WTF-8 bytes.
+        \\        if(i+1<s.length){
+        \\          var lo=s.charCodeAt(i+1);
+        \\          if(lo>=0xDC00&&lo<=0xDFFF){
+        \\            i++;
+        \\            var cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);
+        \\            out+='%'+(0xF0|((cp>>18)&0x07)).toString(16).toUpperCase();
+        \\            out+='%'+(0x80|((cp>>12)&0x3F)).toString(16).toUpperCase();
+        \\            out+='%'+(0x80|((cp>>6)&0x3F)).toString(16).toUpperCase();
+        \\            out+='%'+(0x80|(cp&0x3F)).toString(16).toUpperCase();
+        \\            continue;
+        \\          }
+        \\        }
+        \\        // Lone high surrogate — 3-byte WTF-8.
+        \\        out+='%'+(0xE0|((c>>12)&0x0F)).toString(16).toUpperCase();
+        \\        out+='%'+(0x80|((c>>6)&0x3F)).toString(16).toUpperCase();
+        \\        out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\      }else if(c>=0xDC00&&c<=0xDFFF){
+        \\        // Lone low surrogate — encode as 3-byte UTF-8 for the raw
+        \\        // code unit (matches WHATWG percent-encode-after-encoding
+        \\        // which encodes lone surrogates as their WTF-8 bytes).
+        \\        out+='%'+(0xE0|((c>>12)&0x0F)).toString(16).toUpperCase();
+        \\        out+='%'+(0x80|((c>>6)&0x3F)).toString(16).toUpperCase();
+        \\        out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\      }else if(c>=0x80){
+        \\        // Non-ASCII BMP — encode as 2 or 3-byte UTF-8 percent-encoded
+        \\        if(c>=0x800){
+        \\          out+='%'+(0xE0|((c>>12)&0x0F)).toString(16).toUpperCase();
+        \\          out+='%'+(0x80|((c>>6)&0x3F)).toString(16).toUpperCase();
+        \\          out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\        }else{
+        \\          out+='%'+(0xC0|((c>>6)&0x1F)).toString(16).toUpperCase();
+        \\          out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\        }
+        \\      }else if(c===0x20){
+        \\        out+='+';
+        \\      }else if(c===0x2A||c===0x2D||c===0x2E||(c>=0x30&&c<=0x39)||(c>=0x41&&c<=0x5A)||c===0x5F||(c>=0x61&&c<=0x7A)){
+        \\        // form_urlencoded safe set: * - . 0-9 A-Z _ a-z
+        \\        out+=s.charAt(i);
+        \\      }else{
+        \\        // Everything else (including ! ~ ' ( ) etc.) must be percent-encoded
+        \\        out+='%'+(c>>4).toString(16).toUpperCase()+(c&0x0F).toString(16).toUpperCase();
+        \\      }
+        \\    }
+        \\    return out;
+        \\  }
+        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return formEncode(p[0])+'='+formEncode(p[1]);}).join('&');};
         \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
         \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);if(this._updateURL)this._updateURL();};
         \\  URLSearchParams.prototype["delete"]=function(n,v){
@@ -8569,6 +8792,48 @@ pub const KotoriRuntime = struct {
         if (self.pool.intern("href")) |k| {
             loc_obj.setProperty(self.allocator, k, JsValue.initString(url_sid)) catch {};
         } else |_| {}
+    }
+
+    /// Wave 208c: Inject actual viewport dimensions into the kotori VM so the
+    /// `screen` polyfill and `innerWidth`/`innerHeight`/`outerWidth`/`outerHeight`
+    /// return real values instead of hardcoded 1280×800. Called from main.zig
+    /// after window resize or initial layout, mirroring web_api.setViewportSize.
+    pub fn setViewportSize(self: *KotoriRuntime, content_w: u32, content_h: u32) void {
+        const chrome_h: u32 = 36 + 28 + 24; // url_bar + tab_bar + status_bar
+        const outer_w: u32 = content_w;
+        const outer_h: u32 = content_h + chrome_h;
+
+        // Update the `screen` object if it exists (created by the polyfill).
+        const screen_sid = self.pool.intern("screen") catch return;
+        const screen_val = self.vm.globals.get(screen_sid) orelse return;
+        if (!screen_val.isObject()) return;
+        const screen_obj = screen_val.asJsObject();
+
+        const w_sid = self.pool.intern("width") catch return;
+        const h_sid = self.pool.intern("height") catch return;
+        const aw_sid = self.pool.intern("availWidth") catch return;
+        const ah_sid = self.pool.intern("availHeight") catch return;
+
+        screen_obj.setProperty(self.allocator, w_sid, JsValue.initNumber(@floatFromInt(outer_w))) catch {};
+        screen_obj.setProperty(self.allocator, h_sid, JsValue.initNumber(@floatFromInt(outer_h))) catch {};
+        screen_obj.setProperty(self.allocator, aw_sid, JsValue.initNumber(@floatFromInt(content_w))) catch {};
+        screen_obj.setProperty(self.allocator, ah_sid, JsValue.initNumber(@floatFromInt(content_h))) catch {};
+
+        // Also set innerWidth/innerHeight/outerWidth/outerHeight on window.
+        const window_sid = self.pool.intern("window") catch return;
+        const window_val = self.vm.globals.get(window_sid) orelse return;
+        if (!window_val.isObject()) return;
+        const window_obj = window_val.asJsObject();
+
+        const iw_sid = self.pool.intern("innerWidth") catch return;
+        const ih_sid = self.pool.intern("innerHeight") catch return;
+        const ow_sid = self.pool.intern("outerWidth") catch return;
+        const oh_sid = self.pool.intern("outerHeight") catch return;
+
+        window_obj.setProperty(self.allocator, iw_sid, JsValue.initNumber(@floatFromInt(content_w))) catch {};
+        window_obj.setProperty(self.allocator, ih_sid, JsValue.initNumber(@floatFromInt(content_h))) catch {};
+        window_obj.setProperty(self.allocator, ow_sid, JsValue.initNumber(@floatFromInt(outer_w))) catch {};
+        window_obj.setProperty(self.allocator, oh_sid, JsValue.initNumber(@floatFromInt(outer_h))) catch {};
     }
 
     /// Evaluate a JS source string. Returns the result or error message.
