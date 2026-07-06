@@ -2,6 +2,36 @@
 
 TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
 
+## READ FIRST — 前提ゼロで来たモデルへ(2026-07-06 更新)
+
+このrepoの暗黙ルール。以下を守らないと過去に実際に回帰・時間損失が起きている。
+
+**現在地(2026-07-01 Wave 225 時点):**
+- url WPT: 6186/7211 (85.8%)、dom/events: 297 (69.7%)、url-constructor/url-setters: 100%
+- kotori unit: **1036/1036 pass / 0 fail / 0 crash** がベースライン(2026-07-03 再検証)。
+  これを1つでも割ったらリグレッション — 「新機能でN個増えたから差し引きプラス」は不可。
+
+**ワークフロー(交渉不可):**
+1. 変更は「Wave NNN」連番コミット。1 Wave = 1論点。
+2. コミット条件: `zig build test` 全パス + 対象WPTファイルのbefore/after数値をこの文書に記録。
+3. セッション末にこの文書を更新(古い「前回セッション成果」は下に押し下げ、数値は実測のみ書く。推測値を書かない)。
+4. git identity は repo-local `midasdf <midasdf@users.noreply.github.com>`。
+
+**ビルド・実行の罠:**
+- 実機/WPT計測は `zig build -Doptimize=ReleaseSafe`。ReleaseFast は @intCast UB リスクで**禁止**(~/.claude/skills/zig-gotchas 参照)。Debug は激遅で計測に使えない。
+- WPT環境: `/tmp/wpt` は再起動で消える → `./tests/wpt/run_wpt_parallel.sh setup`。Xvfb `:98` + `python3 -m http.server 9876`(in /tmp/wpt)が前提。run_wpt.sh で一度ラッパー生成してから parallel(再生成は `rm url/*.any.html`)。
+- `zig build test-kotori` 末尾の `failed command:` + SIGABRT は zig 0.16 test_runner の shutdown race で**無害**(テスト結果には影響なし、直実行で exit 0 確認済み)。これを「テスト失敗」と誤診しないこと。
+
+**地雷(過去に踏んで回帰した):**
+- **host.zig の dot-host 修正は2回リバートされた。** leading/consecutive dot rejection の単純削除も all-dots ターゲット修正も 79.9%→55.8% の大回帰を起こす。原因は endsInNumber / parseIpv4Number / domainToAscii の連鎖。再挑戦するなら**先に** `idna.zig domainToAscii` に all-dot 入力("." "..")のユニットテストを足して戻り値を確認してから host.zig を触る(本文書の該当節参照)。
+- IdnaTestV2 の残り188 fail は「bidi未実装」ではない(bidi は2026-07-04実装済み)。実体は virama リスト不足 / A4_2 長さ検証 / xn-- P4。過去の分析を読まずに bidi を再実装しない。
+- kotori の interface prototype は freeze される — ポリフィル拡張は kotori_dom.zig `unfrozen_html_protos` に追加してから。
+- lone surrogate 問題は解決済み(2026-07-03、誤診記録あり)。「FFFDが3個出る」報告は外部デコーダの表示問題。再調査しない。
+
+**判断済み(再提案しない):**
+- JS エンジンは kotori がデフォルト(QuickJS はフォールバック)。ネイティブ実装優先、ポリフィルは暫定。
+- 引き継ぎはこの文書が唯一の正 — メモリや別ファイルに複製しない。
+
 ## 前回セッション成果（2026-07-01、Waves 218-225 url-constructor 100% + host parser spec準拠 + CheckJoiners + joining_type fixes + passive-by-default + window.event + Function ctor + smoke test）
 
 url エリア WPT: **79.9% → 85.8%** (5764→6186 subtests, +422)。
