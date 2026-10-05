@@ -146,7 +146,7 @@ pub fn generateHomePage(allocator: std.mem.Allocator) ?[]u8 {
         \\<p><a href="https://text.npr.org">NPR Text</a></p>
         \\<p><a href="suzume://bookmarks">Bookmarks</a></p>
         \\<p><a href="suzume://history">History</a></p>
-        \\<p>Ctrl+L: URL bar / Ctrl+T: new tab / Ctrl+F: find / Ctrl+D: bookmark</p>
+        \\<p>Ctrl/Command+L: URL bar / Ctrl/Command+T: new tab / Ctrl/Command+F: find / Ctrl/Command+D: bookmark</p>
         \\</body></html>
     ) catch return null;
 

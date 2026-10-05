@@ -96,9 +96,7 @@ jobs:
             src/platform/cocoa.m tests/cocoa_smoke.m \
             -framework Cocoa -framework CoreGraphics -framework CoreText -o /tmp/cocoa-smoke
           /tmp/cocoa-smoke
-          profile="$(mktemp -d)"
-          HOME="$profile" zig-out/Suzume.app/Contents/MacOS/suzume \
-            --gui-smoke /tmp/suzume-gui.png about:blank
+          python3 tests/macos_browser_smoke.py
       - uses: actions/upload-artifact@v4
         with:
           name: Suzume-macos-${{ env.SUZUME_ARCH }}

@@ -91,7 +91,9 @@ key/modifier translation, IME commits, CoreText paths, clipboard, resize and qui
 It is not a complete end-to-end test of browser navigation or a human IME session.
 The `--gui-smoke OUTPUT.png URL` browser option runs eight event-loop iterations,
 captures the actual painted browser chrome/content, saves its session and exits.
-CI runs it against `about:blank` with an isolated HOME directory.
+`python3 tests/macos_browser_smoke.py` checks both explicit `about:blank` and a
+fresh-profile launch without a URL. It verifies that the default homepage is
+actually loaded and its title/session saved. Each case uses an isolated HOME.
 
 Manual browser fixture:
 

@@ -2059,6 +2059,22 @@ pub fn main(init: std.process.Init) !void {
         @intCast(@max(0, chrome.contentHeight(surface.height))),
     );
 
+    // First launch has no saved session or explicit URL. Load the configured
+    // homepage instead of leaving a tab with no document and an empty URL bar.
+    if (initial_url == null and webdriver_port == null) {
+        var startup_repaint = true;
+        applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &startup_repaint);
+        if (activePageState(&tab_mgr, &page_states)) |pg| {
+            if (pg.doc) |*doc| {
+                if (extractTitle(doc)) |title| tab_mgr.updateActiveTitle(title);
+                if (current_url) |url| {
+                    const entry = allocator.dupe(u8, url) catch null;
+                    if (entry) |owned| history.append(allocator, owned) catch allocator.free(owned);
+                }
+            }
+        }
+    }
+
     // If initial URL provided, navigate to it
     if (initial_url) |url| {
         url_input.setText(url);

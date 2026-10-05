@@ -33,6 +33,8 @@
 - Fixed CJK fallback: HarfBuzz clusters are byte offsets, not codepoints. Fallback
   measurement and drawing now use the actual glyph advance consistently.
 - about:blank now produces a local document instead of a failed curl request.
+  Fresh-profile startup also loads the configured homepage instead of leaving
+  the first tab without a document; title and initial history are populated.
 - Application/zip packaging recursively embeds non-system dylibs, rewrites load
   paths, and ad-hoc signs/verifies the bundle. Apple's notarization is separate.
 - Build requirements corrected to Zig 0.16.x, matching existing source APIs.
@@ -58,7 +60,7 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
 - AppKit smoke test: actual color/orientation presentation, input/modifiers, IME
   callback commits, CoreText font files, clipboard, resize and quit lifecycle.
 - Packaged browser screenshots of a local Japanese/form/link fixture and
-  about:blank, plus the full-GUI event-loop smoke mode.
+  about:blank, plus full-GUI fresh-profile/default-homepage smoke tests.
 
 The local stripped bundle is approximately **10 MiB**, including six embedded
 dylibs; its zip is approximately **3.7 MiB**. These are build-artifact sizes, not memory
