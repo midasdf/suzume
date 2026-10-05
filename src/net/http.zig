@@ -2,7 +2,20 @@ const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("curl/curl.h");
+    @cInclude("stdlib.h");
 });
+
+// 0 = uninitialized, 1 = initializing, 2 = ready, 3 = failed.
+var curl_init_state = std.atomic.Value(u8).init(0);
+
+fn initCurl() !void {
+    if (curl_init_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null) {
+        const rc = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
+        curl_init_state.store(if (rc == c.CURLE_OK) 2 else 3, .release);
+    }
+    while (curl_init_state.load(.acquire) == 1) std.atomic.spinLoopHint();
+    if (curl_init_state.load(.acquire) != 2) return error.CurlGlobalInitFailed;
+}
 
 const ua_string = "Mozilla/5.0 (X11; Linux " ++ @tagName(builtin.cpu.arch) ++ ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
@@ -48,6 +61,15 @@ const HeaderContext = struct {
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
     allocator: std.mem.Allocator,
+    cache_allowed: bool = true,
+    received_cookie: bool = false,
+
+    fn deinit(self: *HeaderContext) void {
+        if (self.etag) |value| self.allocator.free(value);
+        if (self.last_modified) |value| self.allocator.free(value);
+        self.etag = null;
+        self.last_modified = null;
+    }
 };
 
 fn headerCallback(data: [*c]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
@@ -55,10 +77,33 @@ fn headerCallback(data: [*c]u8, size: usize, nmemb: usize, userdata: *anyopaque)
     const ctx: *HeaderContext = @ptrCast(@alignCast(userdata));
     const line = data[0..total];
 
+    // Redirects and interim responses must not contribute final-response metadata.
+    if (std.mem.startsWith(u8, line, "HTTP/")) {
+        ctx.deinit();
+        ctx.cache_allowed = !ctx.received_cookie;
+    }
+    // Conservatively avoid caching responses whose representation depends on
+    // request headers/cookies, or which explicitly prohibit storage.
+    if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
+        const name = line[0..colon];
+        const value = std.mem.trim(u8, line[colon + 1 ..], " \t\r\n");
+        if (std.ascii.eqlIgnoreCase(name, "vary") or std.ascii.eqlIgnoreCase(name, "set-cookie")) {
+            ctx.cache_allowed = false;
+            if (std.ascii.eqlIgnoreCase(name, "set-cookie")) ctx.received_cookie = true;
+        } else if (std.ascii.eqlIgnoreCase(name, "cache-control")) {
+            var directives = std.mem.splitScalar(u8, value, ',');
+            while (directives.next()) |directive| {
+                const token = std.mem.trim(u8, directive, " \t");
+                if (std.ascii.eqlIgnoreCase(token, "no-store")) ctx.cache_allowed = false;
+            }
+        }
+    }
+
     // Parse "ETag: ..." header
     if (total > 6 and eqlIgnoreCaseN(line[0..5], "etag:")) {
         const val = std.mem.trim(u8, line[5..], " \t\r\n");
         if (val.len > 0) {
+            if (ctx.etag) |old| ctx.allocator.free(old);
             ctx.etag = ctx.allocator.dupe(u8, val) catch null;
         }
     }
@@ -66,6 +111,7 @@ fn headerCallback(data: [*c]u8, size: usize, nmemb: usize, userdata: *anyopaque)
     if (total > 15 and eqlIgnoreCaseN(line[0..14], "last-modified:")) {
         const val = std.mem.trim(u8, line[14..], " \t\r\n");
         if (val.len > 0) {
+            if (ctx.last_modified) |old| ctx.allocator.free(old);
             ctx.last_modified = ctx.allocator.dupe(u8, val) catch null;
         }
     }
@@ -101,13 +147,12 @@ pub const HttpClient = struct {
     cache_allocator: std.mem.Allocator = std.heap.c_allocator,
 
     pub fn init() !HttpClient {
-        const global_rc = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
-        if (global_rc != c.CURLE_OK) return error.CurlGlobalInitFailed;
+        try initCurl();
 
         const handle = c.curl_easy_init() orelse return error.CurlEasyInitFailed;
 
         // Enable HTTP/2 with fallback to HTTP/1.1
-        _ = c.curl_easy_setopt(handle, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_2TLS);
+        _ = c.curl_easy_setopt(handle, c.CURLOPT_HTTP_VERSION, @as(c_long, c.CURL_HTTP_VERSION_2TLS));
 
         // Enable curl's in-memory cookie engine (handles Set-Cookie automatically)
         _ = c.curl_easy_setopt(handle, c.CURLOPT_COOKIEFILE, @as([*c]const u8, ""));
@@ -122,6 +167,8 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_COOKIEFILE, path.ptr);
         // Save cookies to file on cleanup
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_COOKIEJAR, path.ptr);
+        // Load now so cache eligibility sees persisted cookies before transfer.
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_COOKIELIST, @as([*c]const u8, "RELOAD"));
     }
 
     /// Get all cookies for a given domain in "name=value; name2=value2" format.
@@ -254,7 +301,67 @@ pub const HttpClient = struct {
     pub fn deinit(self: *HttpClient) void {
         self.flushCookies();
         c.curl_easy_cleanup(self.handle);
-        c.curl_global_cleanup();
+        self.clearCache();
+        // Other clients (including image workers) may still be using libcurl.
+        // Keep its process-wide state alive until process exit.
+    }
+
+    pub const max_cache_bytes = 8 * 1024 * 1024;
+    pub const max_cache_entries = 128;
+
+    fn removeCache(self: *HttpClient, url: []const u8) void {
+        if (self.cache.fetchRemove(url)) |old| {
+            var entry = old.value;
+            entry.deinit(self.cache_allocator);
+            self.cache_allocator.free(old.key);
+        }
+    }
+
+    fn clearCache(self: *HttpClient) void {
+        var it = self.cache.iterator();
+        while (it.next()) |item| {
+            item.value_ptr.deinit(self.cache_allocator);
+            self.cache_allocator.free(item.key_ptr.*);
+        }
+        self.cache.deinit(self.cache_allocator);
+        self.cache = .{};
+    }
+
+    fn cacheBytes(self: *HttpClient) usize {
+        var total: usize = 0;
+        var it = self.cache.iterator();
+        while (it.next()) |item| {
+            const entry = item.value_ptr;
+            total += item.key_ptr.len + entry.body.len + entry.content_type.len + entry.etag.len + entry.last_modified.len;
+        }
+        return total;
+    }
+
+    fn storeCache(self: *HttpClient, url: []const u8, body: []const u8, ct: []const u8, etag: []const u8, lm: []const u8) !void {
+        self.removeCache(url);
+        const bytes = url.len + body.len + ct.len + etag.len + lm.len;
+        if (bytes > max_cache_bytes) return;
+        // Coarse eviction keeps bookkeeping small on 512 MB devices.
+        if (self.cache.count() >= max_cache_entries or self.cacheBytes() > max_cache_bytes - bytes) {
+            self.clearCache();
+        }
+        const ca = self.cache_allocator;
+        const key = try ca.dupe(u8, url);
+        errdefer ca.free(key);
+        const cached_body = try ca.dupe(u8, body);
+        errdefer ca.free(cached_body);
+        const cached_ct = if (ct.len > 0) try ca.dupe(u8, ct) else "";
+        errdefer if (cached_ct.len > 0) ca.free(cached_ct);
+        const cached_etag = if (etag.len > 0) try ca.dupe(u8, etag) else "";
+        errdefer if (cached_etag.len > 0) ca.free(cached_etag);
+        const cached_lm = if (lm.len > 0) try ca.dupe(u8, lm) else "";
+        errdefer if (cached_lm.len > 0) ca.free(cached_lm);
+        try self.cache.put(ca, key, .{
+            .body = cached_body,
+            .content_type = cached_ct,
+            .etag = cached_etag,
+            .last_modified = cached_lm,
+        });
     }
 
     pub fn get(self: *HttpClient, allocator: std.mem.Allocator, url: [:0]const u8) !Response {
@@ -283,11 +390,12 @@ pub const HttpClient = struct {
 
         // Header capture context
         var hdr_ctx = HeaderContext{ .allocator = allocator };
+        defer hdr_ctx.deinit();
 
         // Reset handle for reuse
         c.curl_easy_reset(self.handle);
 
-        self.setCommonOpts(url, &wctx, opts.timeout_secs, true);
+        self.setCommonOpts(url, &wctx, opts.timeout_secs);
 
         // Set header callback to capture ETag/Last-Modified
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HEADERFUNCTION, @as(?*const fn ([*c]u8, usize, usize, *anyopaque) callconv(.c) usize, &headerCallback));
@@ -308,18 +416,23 @@ pub const HttpClient = struct {
 
         if (opts.headers) |headers| {
             for (headers) |hdr| {
-                const header_str = std.fmt.allocPrint(allocator, "{s}: {s}", .{ hdr[0], hdr[1] }) catch continue;
+                const header_str = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ hdr[0], hdr[1] });
                 defer allocator.free(header_str);
-                const header_z = allocator.allocSentinel(u8, header_str.len, 0) catch continue;
+                const header_z = try allocator.allocSentinel(u8, header_str.len, 0);
                 defer allocator.free(header_z);
                 @memcpy(header_z, header_str);
-                header_list = c.curl_slist_append(header_list, header_z.ptr);
+                header_list = c.curl_slist_append(header_list, header_z.ptr) orelse return error.OutOfMemory;
             }
         }
 
         // Add conditional headers from cache (only for GET requests)
-        const is_get = opts.method == null and opts.body == null;
-        if (is_get) {
+        const is_get = (opts.method == null or std.ascii.eqlIgnoreCase(opts.method.?, "GET")) and opts.body == null;
+        // URL-only cache keys cannot safely represent authenticated/custom requests.
+        var cookies: ?*c.struct_curl_slist = null;
+        const cookie_rc = c.curl_easy_getinfo(self.handle, c.CURLINFO_COOKIELIST, &cookies);
+        const cacheable_request = is_get and opts.headers == null and cookie_rc == c.CURLE_OK and cookies == null;
+        c.curl_slist_free_all(cookies);
+        if (cacheable_request) {
             if (self.cache.get(url)) |cached| {
                 if (cached.etag.len > 0) {
                     const h = allocator.allocSentinel(u8, "If-None-Match: ".len + cached.etag.len, 0) catch null;
@@ -327,7 +440,7 @@ pub const HttpClient = struct {
                         defer allocator.free(hz);
                         @memcpy(hz[0.."If-None-Match: ".len], "If-None-Match: ");
                         @memcpy(hz["If-None-Match: ".len..], cached.etag);
-                        header_list = c.curl_slist_append(header_list, hz.ptr);
+                        header_list = c.curl_slist_append(header_list, hz.ptr) orelse return error.OutOfMemory;
                     }
                 }
                 if (cached.last_modified.len > 0) {
@@ -336,7 +449,7 @@ pub const HttpClient = struct {
                         defer allocator.free(hz);
                         @memcpy(hz[0.."If-Modified-Since: ".len], "If-Modified-Since: ");
                         @memcpy(hz["If-Modified-Since: ".len..], cached.last_modified);
-                        header_list = c.curl_slist_append(header_list, hz.ptr);
+                        header_list = c.curl_slist_append(header_list, hz.ptr) orelse return error.OutOfMemory;
                     }
                 }
             }
@@ -346,25 +459,9 @@ pub const HttpClient = struct {
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HTTPHEADER, hl);
         }
 
-        var rc = c.curl_easy_perform(self.handle);
-
-        // SSL CA cert verification failure — retry with peer verification disabled
-        if (rc == c.CURLE_SSL_CACERT or rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_SSL_CERTPROBLEM) {
-            std.log.warn("SSL certificate verification failed for {s}, retrying without CA verification", .{url});
-            wctx.buffer.clearRetainingCapacity();
-            c.curl_easy_reset(self.handle);
-            self.setCommonOpts(url, &wctx, opts.timeout_secs, false);
-            if (opts.method) |method| {
-                _ = c.curl_easy_setopt(self.handle, c.CURLOPT_CUSTOMREQUEST, method.ptr);
-            }
-            if (opts.body) |body| {
-                _ = c.curl_easy_setopt(self.handle, c.CURLOPT_POSTFIELDS, body.ptr);
-                _ = c.curl_easy_setopt(self.handle, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len)));
-            }
-            if (header_list) |hl| {
-                _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HTTPHEADER, hl);
-            }
-            rc = c.curl_easy_perform(self.handle);
+        const rc = c.curl_easy_perform(self.handle);
+        if (rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_SSL_CERTPROBLEM) {
+            return error.CertificateVerificationFailed;
         }
 
         if (rc != c.CURLE_OK) {
@@ -375,14 +472,13 @@ pub const HttpClient = struct {
         _ = c.curl_easy_getinfo(self.handle, c.CURLINFO_RESPONSE_CODE, &status_code);
 
         // Handle 304 Not Modified — return cached body
-        if (status_code == 304 and is_get) {
-            wctx.buffer.deinit(allocator);
-            if (hdr_ctx.etag) |e| allocator.free(e);
-            if (hdr_ctx.last_modified) |lm| allocator.free(lm);
+        if (status_code == 304 and cacheable_request) {
             if (self.cache.get(url)) |cached| {
                 const body_copy = try allocator.dupe(u8, cached.body);
+                errdefer allocator.free(body_copy);
                 const ct_copy = if (cached.content_type.len > 0) try allocator.dupe(u8, cached.content_type) else @as([]const u8, "");
-                std.debug.print("[HTTP cache] 304 Not Modified: {s}\n", .{url});
+                wctx.buffer.deinit(allocator);
+                if (!hdr_ctx.cache_allowed) self.removeCache(url);
                 return Response{
                     .status_code = 200, // Present as 200 to callers
                     .body = body_copy,
@@ -403,43 +499,23 @@ pub const HttpClient = struct {
             content_type = ct_owned;
         }
 
+        errdefer if (content_type.len > 0) allocator.free(content_type);
         const body = try wctx.buffer.toOwnedSlice(allocator);
 
         // Store in cache if response has ETag or Last-Modified (only for GET 200)
-        if (is_get and status_code == 200 and (hdr_ctx.etag != null or hdr_ctx.last_modified != null)) {
-            const ca = self.cache_allocator;
-            // Remove old entry if exists
-            if (self.cache.fetchRemove(url)) |old| {
-                var entry = old.value;
-                entry.deinit(ca);
-                ca.free(old.key);
-            }
-            // Store new entry (copy to cache allocator)
-            const url_key = ca.dupe(u8, url) catch null;
-            if (url_key) |key| {
-                const cache_body = ca.dupe(u8, body) catch null;
-                const cache_ct = if (content_type.len > 0) (ca.dupe(u8, content_type) catch null) else @as(?[]u8, null);
-                const cache_etag = if (hdr_ctx.etag) |e| (ca.dupe(u8, e) catch null) else @as(?[]u8, null);
-                const cache_lm = if (hdr_ctx.last_modified) |lm| (ca.dupe(u8, lm) catch null) else @as(?[]u8, null);
-                if (cache_body) |cb| {
-                    self.cache.put(ca, key, .{
-                        .etag = cache_etag orelse "",
-                        .last_modified = cache_lm orelse "",
-                        .body = cb,
-                        .content_type = cache_ct orelse "",
-                    }) catch {};
-                    std.debug.print("[HTTP cache] Stored: {s} (etag={s}, lm={s})\n", .{
-                        url,
-                        cache_etag orelse "none",
-                        cache_lm orelse "none",
-                    });
-                }
-            }
+        if (cacheable_request and status_code == 200 and hdr_ctx.cache_allowed and
+            (hdr_ctx.etag != null or hdr_ctx.last_modified != null))
+        {
+            self.storeCache(url, body, content_type, hdr_ctx.etag orelse "", hdr_ctx.last_modified orelse "") catch {};
+        } else if (status_code != 304) {
+            self.removeCache(url);
         }
 
         // Transfer captured headers to response
         const resp_etag = hdr_ctx.etag orelse "";
         const resp_lm = hdr_ctx.last_modified orelse "";
+        hdr_ctx.etag = null;
+        hdr_ctx.last_modified = null;
 
         return Response{
             .status_code = @intCast(status_code),
@@ -451,20 +527,146 @@ pub const HttpClient = struct {
         };
     }
 
-    fn setCommonOpts(self: *HttpClient, url: [:0]const u8, wctx: *WriteContext, timeout_secs: c_long, verify_peer: bool) void {
+    fn setCommonOpts(self: *HttpClient, url: [:0]const u8, wctx: *WriteContext, timeout_secs: c_long) void {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_URL, url.ptr);
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEFUNCTION, @as(?*const fn ([*c]u8, usize, usize, *anyopaque) callconv(.c) usize, &writeCallback));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(wctx)));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, if (verify_peer) 1 else 0));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HTTP_VERSION, @as(c_long, c.CURL_HTTP_VERSION_2TLS));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_ACCEPT_ENCODING, @as([*c]const u8, ""));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_NOSIGNAL, @as(c_long, 1));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_MAXREDIRS, @as(c_long, 20));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_REDIR_PROTOCOLS_STR, @as([*c]const u8, "http,https"));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, ua_string.ptr);
         // Re-enable cookie engine after reset (reset clears all options)
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_COOKIEFILE, @as([*c]const u8, ""));
         if (self.cookie_file) |cf| {
-            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_COOKIEFILE, cf.ptr);
+            // reset retains the in-memory cookie engine. Do not re-read the jar
+            // on every resource fetch (which can resurrect stale cookie values).
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_COOKIEJAR, cf.ptr);
         }
     }
 };
+
+fn testHeader(ctx: *HeaderContext, line: []const u8) void {
+    const consumed = headerCallback(@constCast(line.ptr), 1, line.len, ctx);
+    std.debug.assert(consumed == line.len);
+}
+
+test "response headers replace duplicates and reset across redirects" {
+    var ctx = HeaderContext{ .allocator = std.testing.allocator };
+    defer ctx.deinit();
+    testHeader(&ctx, "HTTP/1.1 302 Found\r\n");
+    testHeader(&ctx, "ETag: old\r\n");
+    testHeader(&ctx, "ETag: newer\r\n");
+    testHeader(&ctx, "Last-Modified: yesterday\r\n");
+    testHeader(&ctx, "Cache-Control: no-store\r\n");
+    try std.testing.expectEqualStrings("newer", ctx.etag.?);
+    testHeader(&ctx, "HTTP/2 200\r\n");
+    try std.testing.expect(ctx.etag == null and ctx.last_modified == null);
+    try std.testing.expect(ctx.cache_allowed);
+    testHeader(&ctx, "Last-Modified: today\r\n");
+    testHeader(&ctx, "Last-Modified: tomorrow\r\n");
+    try std.testing.expectEqualStrings("tomorrow", ctx.last_modified.?);
+}
+
+test "cache refuses no-store, varying and cookie responses" {
+    const lines = [_][]const u8{
+        "Cache-Control: public, NO-STORE\r\n",
+        "Vary: Accept-Language\r\n",
+        "Set-Cookie: session=secret\r\n",
+    };
+    for (lines) |line| {
+        var ctx = HeaderContext{ .allocator = std.testing.allocator };
+        defer ctx.deinit();
+        testHeader(&ctx, line);
+        try std.testing.expect(!ctx.cache_allowed);
+    }
+    var redirect = HeaderContext{ .allocator = std.testing.allocator };
+    defer redirect.deinit();
+    testHeader(&redirect, "HTTP/1.1 302 Found\r\n");
+    testHeader(&redirect, "Set-Cookie: session=secret\r\n");
+    testHeader(&redirect, "HTTP/2 200\r\n");
+    try std.testing.expect(!redirect.cache_allowed);
+}
+
+test "cache owns copies, replaces entries and releases all memory" {
+    var client = HttpClient{ .handle = undefined, .cache_allocator = std.testing.allocator };
+    defer client.clearCache();
+    try client.storeCache("https://example.com", "first", "text/html", "v1", "");
+    try client.storeCache("https://example.com", "second", "text/plain", "v2", "today");
+    try std.testing.expectEqual(@as(u32, 1), client.cache.count());
+    try std.testing.expectEqualStrings("second", client.cache.get("https://example.com").?.body);
+    client.removeCache("https://example.com");
+    try std.testing.expectEqual(@as(usize, 0), client.cacheBytes());
+}
+
+test "cache enforces byte and entry budgets" {
+    var client = HttpClient{ .handle = undefined, .cache_allocator = std.testing.allocator };
+    defer client.clearCache();
+    for (0..HttpClient.max_cache_entries + 1) |i| {
+        var buf: [32]u8 = undefined;
+        const key = try std.fmt.bufPrint(&buf, "url-{d}", .{i});
+        try client.storeCache(key, "body", "", "tag", "");
+        try std.testing.expect(client.cache.count() <= HttpClient.max_cache_entries);
+    }
+    const large = try std.testing.allocator.alloc(u8, HttpClient.max_cache_bytes / 2);
+    defer std.testing.allocator.free(large);
+    @memset(large, 'x');
+    try client.storeCache("a", large, "", "tag", "");
+    try client.storeCache("b", large, "", "tag", "");
+    try std.testing.expect(client.cacheBytes() <= HttpClient.max_cache_bytes);
+    try std.testing.expect(client.cache.get("a") == null);
+    const oversized = try std.testing.allocator.alloc(u8, HttpClient.max_cache_bytes);
+    defer std.testing.allocator.free(oversized);
+    try client.storeCache("b", oversized, "", "tag", "");
+    try std.testing.expect(client.cache.get("b") == null);
+}
+
+fn testCacheAllocation(allocator: std.mem.Allocator) !void {
+    var client = HttpClient{ .handle = undefined, .cache_allocator = allocator };
+    defer client.clearCache();
+    try client.storeCache("url", "body", "text/plain", "tag", "today");
+}
+
+test "cache rolls back every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testCacheAllocation, .{});
+}
+
+test "local HTTP integration: compression, revalidation, redirects, POST, TLS" {
+    const origin_ptr = c.getenv("SUZUME_TEST_ORIGIN");
+    if (origin_ptr == null) return error.SkipZigTest;
+    const origin = std.mem.span(origin_ptr);
+    const allocator = std.testing.allocator;
+    var client = try HttpClient.init();
+    client.cache_allocator = allocator;
+    defer client.deinit();
+    const routes = [_][]const u8{ "/gzip", "/etag", "/etag", "/redirect", "/no-store", "/vary", "/cookie", "/etag" };
+    var cookie_seen = false;
+    for (routes) |route| {
+        const url = try std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ origin, route }, 0);
+        defer allocator.free(url);
+        var response = try client.get(allocator, url);
+        defer response.deinit();
+        try std.testing.expectEqual(@as(u32, 200), response.status_code);
+        try std.testing.expectEqualStrings("hello browser", response.body);
+        if (std.mem.eql(u8, route, "/cookie")) cookie_seen = true;
+        if (cookie_seen or std.mem.eql(u8, route, "/redirect") or std.mem.eql(u8, route, "/no-store") or std.mem.eql(u8, route, "/vary")) {
+            try std.testing.expect(client.cache.get(url) == null);
+        }
+    }
+    const post_url = try std.fmt.allocPrintSentinel(allocator, "{s}/echo", .{origin}, 0);
+    defer allocator.free(post_url);
+    var posted = try client.request(allocator, post_url, .{ .method = "POST", .body = "a\x00b" });
+    defer posted.deinit();
+    try std.testing.expectEqualStrings("a\x00b", posted.body);
+    const tls_ptr = c.getenv("SUZUME_TEST_TLS_URL");
+    if (tls_ptr == null) return error.SkipZigTest;
+    const tls_url = std.mem.span(tls_ptr);
+    const tls_z = try allocator.dupeZ(u8, tls_url);
+    defer allocator.free(tls_z);
+    try std.testing.expectError(error.CertificateVerificationFailed, client.get(allocator, tls_z));
+}
