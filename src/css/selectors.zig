@@ -208,7 +208,11 @@ pub const Specificity = struct {
     c: u16 = 0, // type selectors, pseudo-elements
 
     pub fn toU32(self: Specificity) u32 {
-        return (@as(u32, self.a) << 20) | (@as(u32, self.b & 0x3FF) << 10) | @as(u32, self.c & 0x3FF);
+        // Clamp to the representation's limits; masking wraps high counts to
+        // zero and lets a more specific selector lose to a less specific one.
+        return (@as(u32, @min(self.a, 0xFFF)) << 20) |
+            (@as(u32, @min(self.b, 0x3FF)) << 10) |
+            @as(u32, @min(self.c, 0x3FF));
     }
 
     pub fn order(a_spec: Specificity, b_spec: Specificity) std.math.Order {
@@ -335,10 +339,22 @@ const SelectorParser = struct {
             const at_end = (i == inner.len);
             const c: u8 = if (at_end) ',' else inner[i];
             if (!at_end) {
-                if (c == '(') { paren_depth += 1; continue; }
-                if (c == ')') { if (paren_depth > 0) paren_depth -= 1; continue; }
-                if (c == '[') { bracket_depth += 1; continue; }
-                if (c == ']') { if (bracket_depth > 0) bracket_depth -= 1; continue; }
+                if (c == '(') {
+                    paren_depth += 1;
+                    continue;
+                }
+                if (c == ')') {
+                    if (paren_depth > 0) paren_depth -= 1;
+                    continue;
+                }
+                if (c == '[') {
+                    bracket_depth += 1;
+                    continue;
+                }
+                if (c == ']') {
+                    if (bracket_depth > 0) bracket_depth -= 1;
+                    continue;
+                }
                 if (c != ',' or paren_depth > 0 or bracket_depth > 0) continue;
             }
             // We have a token from start..i
@@ -771,8 +787,12 @@ pub fn parseSelector(source: []const u8, allocator: std.mem.Allocator) ?ParsedSe
 }
 
 pub fn parseSelectorList(source: []const u8, allocator: std.mem.Allocator) []ParsedSelector {
-    var selectors = std.ArrayList(ParsedSelector).init(allocator);
-    errdefer selectors.deinit();
+    var selectors: std.ArrayList(ParsedSelector) = .empty;
+    var transferred = false;
+    defer {
+        if (!transferred) for (selectors.items) |*selector| selector.deinit(allocator);
+        selectors.deinit(allocator);
+    }
 
     // Split by comma
     var start: usize = 0;
@@ -790,7 +810,11 @@ pub fn parseSelectorList(source: []const u8, allocator: std.mem.Allocator) []Par
             const segment = std.mem.trim(u8, source[start..i], " \t\r\n");
             if (segment.len > 0) {
                 if (parseSelector(segment, allocator)) |sel| {
-                    selectors.append(sel) catch {};
+                    selectors.append(allocator, sel) catch {
+                        var owned = sel;
+                        owned.deinit(allocator);
+                        return &.{};
+                    };
                 }
             }
             start = i + 1;
@@ -801,11 +825,17 @@ pub fn parseSelectorList(source: []const u8, allocator: std.mem.Allocator) []Par
     const segment = std.mem.trim(u8, source[start..], " \t\r\n");
     if (segment.len > 0) {
         if (parseSelector(segment, allocator)) |sel| {
-            selectors.append(sel) catch {};
+            selectors.append(allocator, sel) catch {
+                var owned = sel;
+                owned.deinit(allocator);
+                return &.{};
+            };
         }
     }
 
-    return selectors.toOwnedSlice() catch &.{};
+    const result = selectors.toOwnedSlice(allocator) catch return &.{};
+    transferred = true;
+    return result;
 }
 
 // ── Selector Matching ────────────────────────────────────────────────
@@ -1672,11 +1702,26 @@ fn matchInnerSimple(sel: []const u8, element: ElementAdapter) bool {
                 var op: AttributeOp = .equals;
                 if (eq_pos > 0) {
                     switch (attr_content[eq_pos - 1]) {
-                        '^' => { name_end = eq_pos - 1; op = .starts_with; },
-                        '$' => { name_end = eq_pos - 1; op = .ends_with; },
-                        '*' => { name_end = eq_pos - 1; op = .contains; },
-                        '~' => { name_end = eq_pos - 1; op = .contains_word; },
-                        '|' => { name_end = eq_pos - 1; op = .starts_with_dash; },
+                        '^' => {
+                            name_end = eq_pos - 1;
+                            op = .starts_with;
+                        },
+                        '$' => {
+                            name_end = eq_pos - 1;
+                            op = .ends_with;
+                        },
+                        '*' => {
+                            name_end = eq_pos - 1;
+                            op = .contains;
+                        },
+                        '~' => {
+                            name_end = eq_pos - 1;
+                            op = .contains_word;
+                        },
+                        '|' => {
+                            name_end = eq_pos - 1;
+                            op = .starts_with_dash;
+                        },
                         else => {},
                     }
                 }

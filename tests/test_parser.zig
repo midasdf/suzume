@@ -1,7 +1,30 @@
 const std = @import("std");
 const css_engine = @import("css");
-const Parser = css_engine.parser.Parser;
 const ast = css_engine.ast;
+
+// Match production ownership: Parser borrows an arena; its deinit is a no-op.
+// Keep the arena at a stable address while the returned AST is inspected.
+const Parser = struct {
+    arena: *std.heap.ArenaAllocator,
+    inner: css_engine.parser.Parser,
+
+    fn init(source: []const u8, allocator: std.mem.Allocator) @This() {
+        const arena = allocator.create(std.heap.ArenaAllocator) catch @panic("test arena allocation failed");
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        return .{ .arena = arena, .inner = css_engine.parser.Parser.init(source, arena.allocator()) };
+    }
+
+    fn parse(self: *@This()) !ast.Stylesheet {
+        return self.inner.parse();
+    }
+
+    fn deinit(self: *@This()) void {
+        self.inner.deinit();
+        const allocator = self.arena.child_allocator;
+        self.arena.deinit();
+        allocator.destroy(self.arena);
+    }
+};
 
 test "parse simple rule" {
     const css = "div { color: red; }";
@@ -234,11 +257,11 @@ test "source order increments" {
 }
 
 test "skip unknown at-rule with block" {
-    const css = "@supports (display: grid) { .grid { display: grid; } } div { color: red; }";
+    const css = "@unknown (display: grid) { .grid { display: grid; } } div { color: red; }";
     var parser = Parser.init(css, std.testing.allocator);
     defer parser.deinit();
     const stylesheet = try parser.parse();
-    // @supports is skipped, div rule is parsed.
+    // Unknown blocks are skipped; @supports is a supported rule type.
     try std.testing.expectEqual(@as(usize, 1), stylesheet.rules.len);
     try std.testing.expectEqualStrings("div", std.mem.trim(u8, stylesheet.rules[0].style.selectors[0].source, " \t\r\n"));
 }
@@ -354,4 +377,110 @@ test "nesting: :has() with nested &" {
     const nested_sel = stylesheet.rules[1].style.selectors[0].source;
     try std.testing.expect(std.mem.indexOf(u8, nested_sel, "#outer:has(.test)") != null);
     try std.testing.expect(std.mem.indexOf(u8, nested_sel, "#subject") != null);
+}
+
+test "nesting: parent and descendants retain increasing cascade order" {
+    var parser = Parser.init(".outer { color: red; & { color: blue; &.active { color: green; } } }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 3), sheet.rules.len);
+    for (sheet.rules, 0..) |rule, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(index)), rule.style.source_order);
+    }
+}
+
+test "nesting: declarations after children keep their later precedence" {
+    var parser = Parser.init(".a { color: red; & { color: blue; } color: green; & { color: black; } color: white; }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 5), sheet.rules.len);
+    const colors = [_][]const u8{ "red", "blue", "green", "black", "white" };
+    for (sheet.rules, 0..) |rule, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(index)), rule.style.source_order);
+        try std.testing.expectEqualStrings(".a", rule.style.selectors[0].source);
+        try std.testing.expectEqualStrings(colors[index], rule.style.declarations[0].value_raw);
+    }
+}
+
+test "nesting: compound type and ID selectors are not declarations" {
+    var parser = Parser.init(".parent { button.active { color: red; } button:hover { color: blue; } #child { color: green; } }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 4), sheet.rules.len);
+    const selectors = [_][]const u8{ ".parent button.active", ".parent button:hover", ".parent #child" };
+    for (selectors, 0..) |selector, index| {
+        try std.testing.expectEqualStrings(selector, sheet.rules[index + 1].style.selectors[0].source);
+    }
+}
+
+test "nesting: each child inherits the entire parent selector list" {
+    var parser = Parser.init(".a, #b { .child, &.active { color: red; } }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 2), sheet.rules.len);
+    const children = sheet.rules[1].style.selectors;
+    try std.testing.expectEqual(@as(usize, 2), children.len);
+    try std.testing.expectEqualStrings(":is(.a, #b) .child", children[0].source);
+    try std.testing.expectEqualStrings(":is(.a, #b).active", children[1].source);
+    var parsed = css_engine.selectors.parseSelector(children[1].source, std.testing.allocator) orelse return error.ParseFailed;
+    defer parsed.deinit(std.testing.allocator);
+    try std.testing.expectEqual(css_engine.selectors.Specificity{ .a = 1, .b = 1, .c = 0 }, parsed.specificity);
+}
+
+test "nesting: quoted ampersands are not nesting selectors" {
+    var parser = Parser.init(".parent { [data-value='&'] { color: red; } &[data-value='&'] { color: blue; } }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 3), sheet.rules.len);
+    try std.testing.expectEqualStrings(".parent [data-value='&']", sheet.rules[1].style.selectors[0].source);
+    try std.testing.expectEqualStrings(".parent[data-value='&']", sheet.rules[2].style.selectors[0].source);
+}
+
+test "selector lists preserve quoted brackets and escaped commas" {
+    var parser = Parser.init("[data-value='] ,'], .a\\,b, :is(.c, .d) { color: red; }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 1), sheet.rules.len);
+    const selectors = sheet.rules[0].style.selectors;
+    try std.testing.expectEqual(@as(usize, 3), selectors.len);
+    try std.testing.expectEqualStrings("[data-value='] ,']", selectors[0].source);
+    try std.testing.expectEqualStrings(".a\\,b", selectors[1].source);
+    try std.testing.expectEqualStrings(":is(.c, .d)", selectors[2].source);
+}
+
+test "nesting: media rule lists retain nested style rules" {
+    var parser = Parser.init("@media screen { .a { color: red; &.active { color: blue; } } }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 1), sheet.rules.len);
+    const rules = sheet.rules[0].media.rules;
+    try std.testing.expectEqual(@as(usize, 2), rules.len);
+    try std.testing.expectEqualStrings(".a.active", rules[1].style.selectors[0].source);
+    try std.testing.expect(rules[0].style.source_order < rules[1].style.source_order);
+}
+
+test "nesting: conditional groups inherit selectors and bare declarations" {
+    var parser = Parser.init(".a { @media screen { color: red; &.active { color: blue; } color: green; } color: black; } .unrelated { color: white; }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 4), sheet.rules.len);
+    const rules = sheet.rules[1].media.rules;
+    try std.testing.expectEqual(@as(usize, 3), rules.len);
+    try std.testing.expectEqualStrings(".a", rules[0].style.selectors[0].source);
+    try std.testing.expectEqualStrings(".a.active", rules[1].style.selectors[0].source);
+    try std.testing.expectEqualStrings(".a", rules[2].style.selectors[0].source);
+    try std.testing.expectEqualStrings("green", rules[2].style.declarations[0].value_raw);
+    try std.testing.expect(rules[2].style.source_order < sheet.rules[2].style.source_order);
+    try std.testing.expectEqualStrings(".unrelated", sheet.rules[3].style.selectors[0].source);
+}
+
+test "nesting: inner conditional groups use the immediate parent" {
+    var parser = Parser.init(".a { &.active { @media screen { color: red; & > span { color: blue; } } } }", std.testing.allocator);
+    defer parser.deinit();
+    const sheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 3), sheet.rules.len);
+    const rules = sheet.rules[2].media.rules;
+    try std.testing.expectEqual(@as(usize, 2), rules.len);
+    try std.testing.expectEqualStrings(".a.active", rules[0].style.selectors[0].source);
+    try std.testing.expectEqualStrings(".a.active > span", rules[1].style.selectors[0].source);
 }

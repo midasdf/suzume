@@ -335,7 +335,7 @@ fn parseHslFunc(text: []const u8) ?values.Color {
     }
     const rgb = hslToRgb(vals[0], vals[1], vals[2]);
     const alpha: u8 = if (count >= 4)
-        @intFromFloat(std.math.clamp(if (alpha_is_pct) vals[3] * 255.0 else vals[3] * 255.0, 0.0, 255.0))
+        @intFromFloat(@round(std.math.clamp(if (alpha_is_pct) vals[3] * 255.0 else vals[3] * 255.0, 0.0, 255.0)))
     else
         255;
     return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b, .a = alpha };

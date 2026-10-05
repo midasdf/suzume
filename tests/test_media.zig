@@ -55,9 +55,9 @@ test "comma is OR" {
     try std.testing.expect(!media.evaluateMediaQuery("print, (min-width: 2000px)", 1024, 768));
 }
 
-test "prefers-color-scheme: dark is true" {
-    try std.testing.expect(media.evaluateMediaQuery("(prefers-color-scheme: dark)", 1024, 768));
-    try std.testing.expect(!media.evaluateMediaQuery("(prefers-color-scheme: light)", 1024, 768));
+test "default document color scheme is light" {
+    try std.testing.expect(!media.evaluateMediaQuery("(prefers-color-scheme: dark)", 1024, 768));
+    try std.testing.expect(media.evaluateMediaQuery("(prefers-color-scheme: light)", 1024, 768));
 }
 
 test "only prefix treated same as without" {

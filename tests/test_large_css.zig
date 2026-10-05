@@ -10,17 +10,22 @@ test "parse large CSS without crash" {
     var css_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer css_buf.deinit(alloc);
     for (0..160) |i| {
-        try css_buf.writer(alloc).print(
+        var line: [128]u8 = undefined;
+        const rule = try std.fmt.bufPrint(
+            &line,
             ".item-{d} {{ margin: {d}px; padding: 1px 2px; color: red; }}\n",
             .{ i, i % 16 },
         );
+        try css_buf.appendSlice(alloc, rule);
     }
     const css_text = css_buf.items;
 
     std.debug.print("\nCSS size: {d} bytes\n", .{css_text.len});
 
     // Parse
-    var p = parser_mod.Parser.init(css_text, alloc);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    var p = parser_mod.Parser.init(css_text, arena.allocator());
     defer p.deinit();
     const sheet = try p.parse();
     std.debug.print("Parsed {d} rules\n", .{sheet.rules.len});
@@ -52,7 +57,8 @@ test "parse large CSS without crash" {
             const trimmed = std.mem.trim(u8, sel.source, " \t\r\n");
             if (selectors.parseSelector(trimmed, alloc)) |parsed| {
                 selector_count += 1;
-                alloc.free(parsed.components);
+                var owned = parsed;
+                owned.deinit(alloc);
             }
         }
     }

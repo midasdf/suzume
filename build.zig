@@ -781,19 +781,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const test_style_decl_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_style_decl.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_style_decl_mod.addImport("style_decl", style_decl_src_mod);
-
     const test_large_css_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_large_css.zig"),
         .target = target,
         .optimize = optimize,
     });
     test_large_css_mod.addImport("css", css_mod);
+
+    const test_cascade_priority_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_cascade_priority.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_cascade_priority_mod.addImport("css", css_mod);
 
     // Tests in separately imported modules are not discovered by a root's
     // comptime imports. Run each test file as a root instead of passing 0 tests.
@@ -806,8 +806,9 @@ pub fn build(b: *std.Build) void {
         test_selectors_mod,
         test_media_mod,
         test_variables_mod,
-        test_style_decl_mod,
+        style_decl_src_mod,
         test_large_css_mod,
+        test_cascade_priority_mod,
     }) |module| {
         const css_tests = b.addTest(.{ .root_module = module });
         const run_css_tests = b.addRunArtifact(css_tests);

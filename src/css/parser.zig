@@ -12,6 +12,7 @@ pub const Parser = struct {
     allocator: std.mem.Allocator,
     source_order: u32,
     peeked: ?Token,
+    nesting_parent: ?[]const u8 = null,
 
     pub fn init(source: []const u8, backing_allocator: std.mem.Allocator) Parser {
         return .{
@@ -81,13 +82,6 @@ pub const Parser = struct {
 
     const ParseError = std.mem.Allocator.Error;
 
-    fn parseRule(self: *Parser, first_token: Token) ParseError!?ast.Rule {
-        if (first_token.type == .at_keyword) {
-            return self.parseAtRule(first_token);
-        }
-        return self.parseStyleRule(first_token);
-    }
-
     fn parseRuleWithNesting(self: *Parser, first_token: Token, rules: *std.ArrayList(ast.Rule)) ParseError!?ast.Rule {
         if (first_token.type == .at_keyword) {
             return self.parseAtRule(first_token);
@@ -95,11 +89,7 @@ pub const Parser = struct {
         return self.parseStyleRuleInner(first_token, rules);
     }
 
-    fn parseStyleRule(self: *Parser, first_token: Token) ParseError!?ast.Rule {
-        return self.parseStyleRuleInner(first_token, null);
-    }
-
-    fn parseStyleRuleInner(self: *Parser, first_token: Token, parent_rules: ?*std.ArrayList(ast.Rule)) ParseError!?ast.Rule {
+    fn parseStyleRuleInner(self: *Parser, first_token: Token, parent_rules: *std.ArrayList(ast.Rule)) ParseError!?ast.Rule {
         const sel_start = first_token.start;
         var sel_end = first_token.start + first_token.len;
 
@@ -115,18 +105,24 @@ pub const Parser = struct {
             return null;
         }
 
-        const selector_text = self.sourceSlice(sel_start, sel_end);
+        const selector_text = std.mem.trim(u8, self.sourceSlice(sel_start, sel_end), " \t\r\n");
         const selectors = try self.splitSelectors(selector_text);
 
-        // Parse declarations and nested rules
-        const result = try self.parseDeclarationsAndNestedRules(selector_text, parent_rules);
-
+        // Reserve the parent's order before parsing its descendants. Collect
+        // children locally so the stylesheet also emits parent before children.
+        const source_order = self.source_order;
         self.source_order += 1;
-        return .{ .style = .{
+        var nested_rules: std.ArrayList(ast.Rule) = .empty;
+        defer nested_rules.deinit(self.alloc());
+        const result = try self.parseDeclarationsAndNestedRules(selector_text, &nested_rules);
+        const rule = ast.Rule{ .style = .{
             .selectors = selectors,
             .declarations = result,
-            .source_order = self.source_order - 1,
+            .source_order = source_order,
         } };
+        try parent_rules.append(self.alloc(), rule);
+        try parent_rules.appendSlice(self.alloc(), nested_rules.items);
+        return null;
     }
 
     /// Parse a declaration block that may contain CSS nesting.
@@ -135,12 +131,12 @@ pub const Parser = struct {
     fn parseDeclarationsAndNestedRules(
         self: *Parser,
         parent_selector: []const u8,
-        parent_rules: ?*std.ArrayList(ast.Rule),
+        parent_rules: *std.ArrayList(ast.Rule),
     ) ParseError![]ast.Declaration {
         const a = self.alloc();
         var declarations: std.ArrayList(ast.Declaration) = .empty;
-        // Temporary list for nested rules found at this level
-        var nested_rules: std.ArrayList(ast.Rule) = .empty;
+        defer declarations.deinit(a);
+        var initial: ?[]ast.Declaration = null;
 
         while (true) {
             const t = self.skipWhitespace();
@@ -148,34 +144,29 @@ pub const Parser = struct {
                 .close_curly, .eof => break,
                 .semicolon => continue,
                 .ident => {
-                    // Could be a declaration or a nested rule (e.g., "div { ... }")
-                    // Peek ahead: if next non-whitespace is '{', it's a nested rule
-                    // If next non-whitespace is ':', it's a declaration
-                    const peek = self.peekAfterWhitespace();
-                    if (peek.type == .open_curly) {
-                        // Nested rule: tag selector (e.g., "div { ... }")
+                    if (self.hasNestedBlock(t)) {
+                        try self.saveDeclarationSegment(parent_selector, &declarations, &initial, parent_rules);
                         if (try self.parseNestedRule(t, parent_selector, parent_rules)) |rule| {
-                            try nested_rules.append(a, rule);
+                            try parent_rules.append(a, rule);
                         }
-                    } else {
-                        // Regular declaration
-                        if (try self.parseDeclaration(t)) |decl| {
-                            try declarations.append(a, decl);
-                        }
+                    } else if (try self.parseDeclaration(t)) |decl| {
+                        try declarations.append(a, decl);
                     }
                 },
                 .at_keyword => {
-                    // Nested at-rule (e.g., @media inside a style rule)
+                    try self.saveDeclarationSegment(parent_selector, &declarations, &initial, parent_rules);
+                    const previous_parent = self.nesting_parent;
+                    self.nesting_parent = parent_selector;
+                    defer self.nesting_parent = previous_parent;
                     if (try self.parseAtRule(t)) |rule| {
-                        try nested_rules.append(a, rule);
+                        try parent_rules.append(a, rule);
                     }
                 },
                 else => {
-                    // Check for nested rule selectors: ., #, &, [, :, >, +, ~, *
-                    const text = t.text(self.source);
-                    if (isNestedSelectorStart(t.type, text)) {
+                    if (isNestedSelectorStart(t.type, t.text(self.source))) {
+                        try self.saveDeclarationSegment(parent_selector, &declarations, &initial, parent_rules);
                         if (try self.parseNestedRule(t, parent_selector, parent_rules)) |rule| {
-                            try nested_rules.append(a, rule);
+                            try parent_rules.append(a, rule);
                         }
                     } else {
                         self.skipToRecoveryPoint();
@@ -184,16 +175,34 @@ pub const Parser = struct {
             }
         }
 
-        // Emit nested rules to the parent collector
-        if (nested_rules.items.len > 0) {
-            if (parent_rules) |pr| {
-                for (nested_rules.items) |rule| {
-                    try pr.append(a, rule);
-                }
-            }
+        if (initial != null) {
+            try self.saveDeclarationSegment(parent_selector, &declarations, &initial, parent_rules);
+            return initial.?;
         }
-
         return try declarations.toOwnedSlice(a);
+    }
+
+    // Declarations after a nested rule form a later rule with the same selector.
+    // Folding them into the initial parent rule would reverse cascade precedence.
+    fn saveDeclarationSegment(
+        self: *Parser,
+        parent_selector: []const u8,
+        declarations: *std.ArrayList(ast.Declaration),
+        initial: *?[]ast.Declaration,
+        rules: *std.ArrayList(ast.Rule),
+    ) ParseError!void {
+        const segment = try declarations.toOwnedSlice(self.alloc());
+        if (initial.* == null) {
+            initial.* = segment;
+        } else if (segment.len > 0) {
+            const order = self.source_order;
+            self.source_order += 1;
+            try rules.append(self.alloc(), .{ .style = .{
+                .selectors = try self.splitSelectors(parent_selector),
+                .declarations = segment,
+                .source_order = order,
+            } });
+        }
     }
 
     /// Check if a token looks like the start of a nested selector
@@ -206,6 +215,7 @@ pub const Parser = struct {
                 };
             }
         }
+        if (token_type == .hash) return true; // #id
         if (token_type == .colon) return true; // :hover, ::before
         if (token_type == .open_bracket) return true; // [attr]
         return false;
@@ -213,7 +223,7 @@ pub const Parser = struct {
 
     /// Parse a nested rule: collect selector tokens until '{', then parse body.
     /// Prepend parent selector to create the full selector.
-    fn parseNestedRule(self: *Parser, first_token: Token, parent_selector: []const u8, output_rules: ?*std.ArrayList(ast.Rule)) ParseError!?ast.Rule {
+    fn parseNestedRule(self: *Parser, first_token: Token, parent_selector: []const u8, output_rules: *std.ArrayList(ast.Rule)) ParseError!?ast.Rule {
         const a = self.alloc();
         const sel_start = first_token.start;
         var sel_end = first_token.start + first_token.len;
@@ -233,62 +243,85 @@ pub const Parser = struct {
         // Build combined selector: replace & with parent, or prepend "parent "
         const combined = try self.combineSelectors(parent_selector, nested_sel, a);
 
-        // Recursively parse declarations + deeper nesting using combined selector
-        const declarations = try self.parseDeclarationsAndNestedRules(combined, output_rules);
-
-        const selectors = try self.splitSelectors(combined);
-
+        const source_order = self.source_order;
         self.source_order += 1;
-        return .{ .style = .{
+        var deeper_rules: std.ArrayList(ast.Rule) = .empty;
+        defer deeper_rules.deinit(a);
+        const declarations = try self.parseDeclarationsAndNestedRules(combined, &deeper_rules);
+        const selectors = try self.splitSelectors(combined);
+        const rule = ast.Rule{ .style = .{
             .selectors = selectors,
             .declarations = declarations,
-            .source_order = self.source_order - 1,
+            .source_order = source_order,
         } };
+        try output_rules.append(a, rule);
+        try output_rules.appendSlice(a, deeper_rules.items);
+        return null;
     }
 
     /// Combine parent and nested selectors.
     /// If nested selector contains '&', replace it with parent.
     /// Otherwise, prepend "parent " (descendant combinator).
     fn combineSelectors(self: *Parser, parent: []const u8, nested: []const u8, a: std.mem.Allocator) ParseError![]const u8 {
-        _ = self;
-        // Check if & is present
-        if (std.mem.indexOfScalar(u8, nested, '&')) |_| {
-            // Replace all occurrences of & with parent selector
-            var result: std.ArrayList(u8) = .empty;
-            var i: usize = 0;
-            while (i < nested.len) {
-                if (nested[i] == '&') {
-                    result.appendSlice(a, parent) catch return nested;
-                    i += 1;
-                } else {
-                    result.append(a, nested[i]) catch return nested;
-                    i += 1;
+        const parents = try self.splitSelectors(parent);
+        defer a.free(parents);
+        const children = try self.splitSelectors(nested);
+        defer a.free(children);
+        // A nesting selector has the maximum specificity of its parent list,
+        // just like :is(). Raw substitution would leave earlier parents unscoped.
+        const prefix = if (parents.len > 1) try std.fmt.allocPrint(a, ":is({s})", .{parent}) else parent;
+        defer if (parents.len > 1) a.free(prefix);
+        var result: std.ArrayList(u8) = .empty;
+        defer result.deinit(a);
+        for (children, 0..) |child, index| {
+            if (index > 0) try result.appendSlice(a, ", ");
+            const fragment = child.source;
+            var scanner = Tokenizer.init(fragment);
+            var copied: usize = 0;
+            var has_ampersand = false;
+            while (true) {
+                const token = scanner.next();
+                if (token.type == .eof) break;
+                // Tokenization protects quoted and escaped ampersands.
+                if (token.type == .delim and std.mem.eql(u8, token.text(fragment), "&")) {
+                    try result.appendSlice(a, fragment[copied..token.start]);
+                    try result.appendSlice(a, prefix);
+                    copied = token.start + token.len;
+                    has_ampersand = true;
                 }
             }
-            return result.toOwnedSlice(a) catch nested;
-        } else {
-            // Prepend parent as descendant
-            const combined = std.fmt.allocPrint(a, "{s} {s}", .{ parent, nested }) catch return nested;
-            return combined;
+            if (!has_ampersand) {
+                try result.appendSlice(a, prefix);
+                try result.append(a, ' ');
+            }
+            try result.appendSlice(a, fragment[copied..]);
         }
+        return try result.toOwnedSlice(a);
     }
 
-    /// Peek at the next non-whitespace token without consuming anything.
-    fn peekAfterWhitespace(self: *Parser) Token {
-        // Save current state
-        if (self.peeked) |p| {
-            return p; // already peeked, return it
+    // A nested type selector can start with an identifier followed by '.', '#'
+    // or ':' (button.active, button:hover). A one-token peek misses these.
+    fn hasNestedBlock(self: *Parser, first: Token) bool {
+        if (std.mem.startsWith(u8, first.text(self.source), "--")) return false;
+        var scanner = self.tokenizer;
+        var pending = self.peeked;
+        var depth: u32 = 0;
+        while (true) {
+            const t = if (pending) |token| blk: {
+                pending = null;
+                break :blk token;
+            } else scanner.next();
+            switch (t.type) {
+                .function, .open_paren, .open_bracket => depth += 1,
+                .close_paren, .close_bracket => if (depth > 0) {
+                    depth -= 1;
+                },
+                .open_curly => if (depth == 0) return true,
+                .semicolon, .close_curly => if (depth == 0) return false,
+                .eof => return false,
+                else => {},
+            }
         }
-        // Peek and check
-        const t = self.peekToken();
-        if (t.type == .whitespace) {
-            // Consume whitespace and peek again
-            _ = self.nextToken();
-            const next = self.peekToken();
-            // We can't put back two tokens, so we need to check
-            return next;
-        }
-        return t;
     }
 
     fn splitSelectors(self: *Parser, text: []const u8) ParseError![]ast.Selector {
@@ -299,23 +332,26 @@ pub const Parser = struct {
         var paren_depth: u32 = 0;
         var bracket_depth: u32 = 0;
 
-        for (text, 0..) |c, i| {
-            switch (c) {
-                '(' => paren_depth += 1,
-                ')' => {
+        // Strings and escaped punctuation are single tokens, so commas and
+        // brackets inside attribute values cannot split a selector list.
+        var scanner = Tokenizer.init(text);
+        while (true) {
+            const token = scanner.next();
+            switch (token.type) {
+                .eof => break,
+                .function, .open_paren => paren_depth += 1,
+                .close_paren => {
                     if (paren_depth > 0) paren_depth -= 1;
                 },
-                '[' => bracket_depth += 1,
-                ']' => {
+                .open_bracket => bracket_depth += 1,
+                .close_bracket => {
                     if (bracket_depth > 0) bracket_depth -= 1;
                 },
-                ',' => {
+                .comma => {
                     if (paren_depth == 0 and bracket_depth == 0) {
-                        const sel = std.mem.trim(u8, text[start..i], " \t\r\n");
-                        if (sel.len > 0) {
-                            try selectors.append(a, .{ .source = sel });
-                        }
-                        start = i + 1;
+                        const sel = std.mem.trim(u8, text[start..token.start], " \t\r\n");
+                        if (sel.len > 0) try selectors.append(a, .{ .source = sel });
+                        start = token.start + token.len;
                     }
                 },
                 else => {},
@@ -586,10 +622,23 @@ pub const Parser = struct {
     fn parseRuleList(self: *Parser) ParseError![]ast.Rule {
         const a = self.alloc();
         var rules: std.ArrayList(ast.Rule) = .empty;
+        if (self.nesting_parent) |parent| {
+            // Conditional groups inside a style rule inherit its selector and
+            // can contain bare declarations as well as further nested rules.
+            const order = self.source_order;
+            self.source_order += 1;
+            const declarations = try self.parseDeclarationsAndNestedRules(parent, &rules);
+            if (declarations.len > 0) try rules.insert(a, 0, .{ .style = .{
+                .selectors = try self.splitSelectors(parent),
+                .declarations = declarations,
+                .source_order = order,
+            } });
+            return try rules.toOwnedSlice(a);
+        }
         while (true) {
             const t = self.skipWhitespace();
             if (t.type == .close_curly or t.type == .eof) break;
-            if (try self.parseRule(t)) |rule| {
+            if (try self.parseRuleWithNesting(t, &rules)) |rule| {
                 try rules.append(a, rule);
             }
         }

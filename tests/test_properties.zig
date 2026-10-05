@@ -58,8 +58,8 @@ test "parse rgba()" {
     try std.testing.expectEqual(@as(u8, 255), c.r);
     try std.testing.expectEqual(@as(u8, 0), c.g);
     try std.testing.expectEqual(@as(u8, 0), c.b);
-    // 0.5 * 255 = 127.5 → 127
-    try std.testing.expectEqual(@as(u8, 127), c.a);
+    // Quantize to the nearest 8-bit alpha, not truncation.
+    try std.testing.expectEqual(@as(u8, 128), c.a);
 }
 
 test "parse hsl()" {
@@ -77,8 +77,8 @@ test "parse hsla()" {
     try std.testing.expectEqual(@as(u8, 0), c.r);
     try std.testing.expectEqual(@as(u8, 255), c.g);
     try std.testing.expectEqual(@as(u8, 0), c.b);
-    // 0.5 * 255 = 127.5 → 127
-    try std.testing.expectEqual(@as(u8, 127), c.a);
+    // hsla() and rgba() must quantize alpha identically.
+    try std.testing.expectEqual(@as(u8, 128), c.a);
 }
 
 test "parse named color: red" {

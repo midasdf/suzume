@@ -155,7 +155,7 @@ test "parse pseudo first-child" {
     defer std.testing.allocator.free(sel.components);
 
     try std.testing.expectEqual(@as(usize, 1), sel.components.len);
-    try std.testing.expectEqual(PseudoClass.first_child, sel.components[0].simple.pseudo_class);
+    try std.testing.expectEqual(PseudoClass.first_child, sel.components[0].simple.pseudo_class.pc);
     try std.testing.expectEqual(Specificity{ .a = 0, .b = 1, .c = 0 }, sel.specificity);
 }
 
@@ -164,7 +164,7 @@ test "parse pseudo last-child" {
         return error.ParseFailed;
     defer std.testing.allocator.free(sel.components);
 
-    try std.testing.expectEqual(PseudoClass.last_child, sel.components[0].simple.pseudo_class);
+    try std.testing.expectEqual(PseudoClass.last_child, sel.components[0].simple.pseudo_class.pc);
 }
 
 test "parse complex selector" {
@@ -211,7 +211,15 @@ test "specificity ordering" {
 
 test "specificity toU32" {
     const spec = Specificity{ .a = 1, .b = 2, .c = 3 };
-    try std.testing.expectEqual(@as(u32, (1 << 16) | (2 << 8) | 3), spec.toU32());
+    try std.testing.expectEqual(@as(u32, (1 << 20) | (2 << 10) | 3), spec.toU32());
+}
+
+test "specificity serialization clamps high counts instead of wrapping" {
+    const spec = Specificity{ .a = 4096, .b = 1024, .c = 1024 };
+    try std.testing.expectEqual(std.math.maxInt(u32), spec.toU32());
+    const classes = Specificity{ .b = 1024 };
+    const fewer_classes = Specificity{ .b = 1023 };
+    try std.testing.expect(classes.toU32() >= fewer_classes.toU32());
 }
 
 test "parse compound with id class and type" {
@@ -301,6 +309,10 @@ const MockElement = struct {
     const vtable = ElementAdapter.VTable{
         .tagName = tagNameFn,
         .getAttribute = getAttributeFn,
+        .hasAttribute = hasAttributeFn,
+        .isHovered = falseFn,
+        .isFocused = falseFn,
+        .hasContentChildren = hasContentChildrenFn,
         .parent = parentFn,
         .previousElementSibling = prevSibFn,
         .nextElementSibling = nextSibFn,
@@ -321,6 +333,19 @@ const MockElement = struct {
             if (std.mem.eql(u8, attr.name, name)) return attr.value;
         }
         return null;
+    }
+
+    fn hasAttributeFn(ptr: *const anyopaque, name: []const u8) bool {
+        return getAttributeFn(ptr, name) != null;
+    }
+
+    fn falseFn(_: *const anyopaque) bool {
+        return false;
+    }
+
+    fn hasContentChildrenFn(ptr: *const anyopaque) bool {
+        const self: *const MockElement = @ptrCast(@alignCast(ptr));
+        return self.first_child_el != null;
     }
 
     fn parentFn(ptr: *const anyopaque) ?ElementAdapter {

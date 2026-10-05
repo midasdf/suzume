@@ -6,7 +6,7 @@ const VarMap = variables.VarMap;
 test "simple var() resolution" {
     var vm = VarMap.init(std.testing.allocator);
     defer vm.deinit();
-    vm.set("--color", "red");
+    try vm.set("--color", "red");
 
     const result = variables.resolveVarRefs("var(--color)", &vm, std.testing.allocator).?;
     defer std.testing.allocator.free(result);
@@ -25,7 +25,7 @@ test "var() with fallback used when not found" {
 test "var() with fallback not used when found" {
     var vm = VarMap.init(std.testing.allocator);
     defer vm.deinit();
-    vm.set("--color", "green");
+    try vm.set("--color", "green");
 
     const result = variables.resolveVarRefs("var(--color, blue)", &vm, std.testing.allocator).?;
     defer std.testing.allocator.free(result);
@@ -43,7 +43,7 @@ test "no var() returns null" {
 test "var() in context of larger value" {
     var vm = VarMap.init(std.testing.allocator);
     defer vm.deinit();
-    vm.set("--size", "10px");
+    try vm.set("--size", "10px");
 
     const result = variables.resolveVarRefs("calc(var(--size) + 5px)", &vm, std.testing.allocator).?;
     defer std.testing.allocator.free(result);
@@ -53,7 +53,7 @@ test "var() in context of larger value" {
 test "nested var() in fallback" {
     var vm = VarMap.init(std.testing.allocator);
     defer vm.deinit();
-    vm.set("--fallback-color", "orange");
+    try vm.set("--fallback-color", "orange");
 
     const result = variables.resolveVarRefs("var(--primary, var(--fallback-color, pink))", &vm, std.testing.allocator).?;
     defer std.testing.allocator.free(result);
@@ -72,11 +72,11 @@ test "nested var() fallback to default" {
 test "parent chain lookup" {
     var parent = VarMap.init(std.testing.allocator);
     defer parent.deinit();
-    parent.set("--bg", "black");
+    try parent.set("--bg", "black");
 
     var child = VarMap.initWithParent(std.testing.allocator, &parent);
     defer child.deinit();
-    child.set("--fg", "white");
+    try child.set("--fg", "white");
 
     const result1 = variables.resolveVarRefs("var(--bg)", &child, std.testing.allocator).?;
     defer std.testing.allocator.free(result1);
@@ -90,11 +90,11 @@ test "parent chain lookup" {
 test "child overrides parent" {
     var parent = VarMap.init(std.testing.allocator);
     defer parent.deinit();
-    parent.set("--color", "black");
+    try parent.set("--color", "black");
 
     var child = VarMap.initWithParent(std.testing.allocator, &parent);
     defer child.deinit();
-    child.set("--color", "white");
+    try child.set("--color", "white");
 
     const result = variables.resolveVarRefs("var(--color)", &child, std.testing.allocator).?;
     defer std.testing.allocator.free(result);
@@ -104,8 +104,8 @@ test "child overrides parent" {
 test "multiple var() in one value" {
     var vm = VarMap.init(std.testing.allocator);
     defer vm.deinit();
-    vm.set("--x", "1px");
-    vm.set("--y", "2px");
+    try vm.set("--x", "1px");
+    try vm.set("--y", "2px");
 
     const result = variables.resolveVarRefs("var(--x) var(--y)", &vm, std.testing.allocator).?;
     defer std.testing.allocator.free(result);

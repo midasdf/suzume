@@ -243,11 +243,8 @@ fn isInherited(prop: PropertyId) bool {
 
 // ── Cascade priority for sorting declarations ─────────────────────────
 
-const Origin = enum(u8) {
-    ua = 0,
-    author = 1,
-    inline_ = 2,
-};
+const cascade_priority = @import("priority.zig");
+const Origin = cascade_priority.Origin;
 
 const CascadeEntry = struct {
     decl: Declaration,
@@ -256,30 +253,8 @@ const CascadeEntry = struct {
     origin: Origin,
     layer_order: u16 = UNLAYERED_KEY,
 
-    fn priority(self: CascadeEntry) u64 {
-        // Sort key: [important:1][origin:7][layer:16][specificity:32][source_order:8] = 64 bits
-        // Per CSS Cascading Level 5:
-        //   - normal flow: higher layer_order = higher priority (unlayered = 0xFFFF highest)
-        //   - !important: layer_order is REVERSED within same origin
-        //     (layer 0's !important beats layer 1's !important)
-        //   - !important: specificity is also REVERSED
-        var p: u64 = 0;
-        const source_clamped: u8 = @intCast(@min(self.source_order, 0xFF));
-        if (self.decl.important) {
-            p |= @as(u64, 1) << 63;
-            p |= @as(u64, @intFromEnum(self.origin)) << 56;
-            // Reversed layer: lower layer_order → higher priority for !important
-            p |= @as(u64, 0xFFFF -% self.layer_order) << 40;
-            // Inverted specificity: lower specificity → higher sort position → wins
-            p |= @as(u64, 0xFFFFFFFF - self.specificity) << 8;
-        } else {
-            p |= @as(u64, @intFromEnum(self.origin)) << 56;
-            // Normal layer: higher layer_order → higher priority
-            p |= @as(u64, self.layer_order) << 40;
-            p |= @as(u64, self.specificity) << 8;
-        }
-        p |= @as(u64, source_clamped);
-        return p;
+    fn priority(self: CascadeEntry) u128 {
+        return cascade_priority.key(self.decl.important, self.origin, self.layer_order, self.specificity, self.source_order);
     }
 };
 

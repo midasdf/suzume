@@ -136,11 +136,11 @@ python3 tests/http_regression.py -O ReleaseSafe
 ```
 
 Set `ZIG=/path/to/zig-0.16.0` if necessary; extra arguments are passed to `zig test`.
-The HTTP, Linux build/input, and macOS build/renderer/input checks fail on
-regressions. CSS auditing now actually runs the individual suites instead of
-silently passing zero tests; its existing failures are advisory and recorded
-in the roadmap. See [the development plan](docs/browser-roadmap.md) for
-remaining compatibility and performance work.
+The HTTP, CSS, Linux build/input, and macOS build/renderer/input checks fail on
+regressions. CSS testing now executes the actual suites (including CSSOM)
+instead of silently passing zero tests: 363 tests pass in Debug and ReleaseSafe.
+See [the development plan](docs/browser-roadmap.md) for remaining compatibility
+and performance work.
 
 ## Architecture
 

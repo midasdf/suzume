@@ -41,9 +41,10 @@ jobs:
 
       - name: Text editing tests
         run: zig build test-ui-input -Doptimize=ReleaseSafe
-      - name: CSS audit (existing suite failures, see roadmap)
-        continue-on-error: true
+      - name: CSS regression tests
         run: zig build test-css -Doptimize=ReleaseSafe
+      - name: Production DOM and CSS cascade regressions
+        run: zig build test-dom-style -Doptimize=ReleaseSafe
 
   http-regression:
     runs-on: ubuntu-24.04
@@ -85,11 +86,12 @@ jobs:
           zig build test-ui-input test-text-fallback test-surface -Doptimize=ReleaseSafe \
             -Dtarget="$arch-macos.15.0" --search-prefix "$prefix" \
             --search-prefix "$prefix/opt/curl" --search-prefix "$prefix/opt/sqlite"
-      - name: CSS audit (existing suite failures, see roadmap)
-        continue-on-error: true
+      - name: CSS regression tests
         run: |
           case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
           zig build test-css -Doptimize=ReleaseSafe -Dtarget="$arch-macos.15.0"
+      - name: Production DOM and CSS cascade regressions
+        run: zig-out/Suzume.app/Contents/MacOS/suzume --test-dom
       - name: Native window and input smoke tests
         run: |
           clang -fobjc-arc -I deps/libnsfb/include -I src/platform \

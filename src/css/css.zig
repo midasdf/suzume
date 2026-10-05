@@ -11,3 +11,4 @@ pub const variables = @import("variables.zig");
 pub const util = @import("util.zig");
 pub const computed = @import("computed.zig");
 pub const bloom = @import("bloom.zig");
+pub const priority = @import("priority.zig");

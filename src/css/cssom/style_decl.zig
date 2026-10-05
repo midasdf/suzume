@@ -966,7 +966,7 @@ test "upsertShorthand flex expands to 3 longhands" {
 
     var buf: [64]u8 = undefined;
     const result = list.getPropertyValueShorthand("flex", &buf);
-    try std.testing.expectEqualStrings("auto", result.?);
+    try std.testing.expectEqualStrings("1 1 auto", result.?);
 }
 
 test "upsertShorthand replaces prior shorthand expansion" {

@@ -42,8 +42,7 @@ pub fn main() !void {
         defer doc.deinit();
 
         const body_node = doc.body() orelse {
-            std.debug.print("FAIL: no body\n", .{});
-            return;
+            return error.MissingBody;
         };
         std.debug.print("body tag: {s}\n", .{body_node.tagName() orelse "?"});
 
@@ -72,8 +71,7 @@ pub fn main() !void {
         defer doc.deinit();
 
         const root_node = doc.root() orelse {
-            std.debug.print("FAIL: no root\n", .{});
-            return;
+            return error.MissingRoot;
         };
 
         var result = try cascade_mod.cascade(root_node, allocator, null, 720, 720);
@@ -84,12 +82,14 @@ pub fn main() !void {
         // Check body style
         if (doc.body()) |body_node| {
             if (result.getStyle(body_node)) |body_style| {
+                try std.testing.expectEqual(@as(u32, 0xffcdd6f4), body_style.color);
+                try std.testing.expectEqual(@as(u32, 0xff1e1e2e), body_style.background_color);
                 std.debug.print("body: color=0x{x:0>8} bg=0x{x:0>8}\n", .{
                     body_style.color,
                     body_style.background_color,
                 });
             } else {
-                std.debug.print("body: no style computed\n", .{});
+                return error.MissingComputedStyle;
             }
 
             // Check h1 and p children
@@ -103,7 +103,7 @@ pub fn main() !void {
                         @tagName(s.display),
                     });
                 } else {
-                    std.debug.print("  <{s}>: no style\n", .{c.tagName() orelse "?"});
+                    return error.MissingComputedStyle;
                 }
                 child = blk: {
                     var sib = c.nextSibling();
@@ -118,4 +118,32 @@ pub fn main() !void {
 
         std.debug.print("PASS: Style cascade works\n", .{});
     }
+
+    // Exercise the production parser, selector index and cascade together,
+    // not just the isolated priority-key helper.
+    try expectTargetColor(".a { color: red; &.active { color: blue; } }", 0xff0000ff);
+    try expectTargetColor(".a { color: red; & { color: blue; } color: green; }", 0xff008000);
+    try expectTargetColor("#target { color: red !important; } .a { color: blue !important; }", 0xffff0000);
+    try expectTargetColor(".a, #other { &.active { color: blue; } } .a.active { color: red; }", 0xff0000ff);
+    try expectTargetColor(".a { @media (min-width: 0px) { color: blue; } }", 0xff0000ff);
+    try expectTargetColor("@media screen { .a { &.active { color: blue; } } }", 0xff0000ff);
+
+    var large_css: std.ArrayList(u8) = .empty;
+    defer large_css.deinit(allocator);
+    for (0..300) |_| try large_css.appendSlice(allocator, ".a { color: red; }\n");
+    try large_css.appendSlice(allocator, ".a { color: blue; }");
+    try expectTargetColor(large_css.items, 0xff0000ff);
+    std.debug.print("PASS: 7 production CSS cascade regressions\n", .{});
+}
+
+fn expectTargetColor(css: []const u8, expected: u32) !void {
+    var doc = try Document.parse("<!doctype html><html><body><div id='target' class='a active'>target</div></body></html>");
+    defer doc.deinit();
+    const root = doc.root() orelse return error.MissingRoot;
+    const body = doc.body() orelse return error.MissingBody;
+    const target = body.firstElementChild() orelse return error.MissingTarget;
+    var result = try cascade_mod.cascade(root, std.heap.c_allocator, css, 720, 720);
+    defer result.deinit();
+    const style = result.getStyle(target) orelse return error.MissingComputedStyle;
+    try std.testing.expectEqual(expected, style.color);
 }

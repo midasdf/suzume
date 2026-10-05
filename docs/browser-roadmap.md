@@ -39,9 +39,20 @@
   paths, and ad-hoc signs/verifies the bundle. Apple's notarization is separate.
 - Build requirements corrected to Zig 0.16.x, matching existing source APIs.
   Linux build/input and macOS build/renderer/input CI are now blocking.
-- CSS test discovery fixed: separately imported test modules were previously
-  producing a successful zero-test run. The suites now run as individual roots.
-  Existing failures are exposed by a separate advisory CI audit, not hidden.
+
+### CSS correctness and regression coverage
+
+- CSS and CSSStyleDeclaration tests now run as actual roots, including the
+  previously undiscovered CSSOM tests. Stale Zig/API expectations were repaired;
+  parser fixtures explicitly own arenas, matching production AST ownership.
+- Fixed nesting emission/cascade order, declarations following nested rules,
+  compound type/ID selectors, parent selector lists and conditional groups.
+  Quoted/escaped punctuation no longer corrupts selector splitting/substitution.
+- Cascade keys retain all 32 source-order bits instead of capping at rule 255.
+  !important no longer reverses specificity; UA !important has correct priority.
+  Packed specificity saturates rather than wrapping, and HSL/RGB alpha use the
+  same nearest-byte quantization.
+- CSS regression checks are now blocking on Linux and macOS CI.
 
 ## Verification
 
@@ -49,11 +60,13 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
 
 - ReleaseSafe browser build and relocatable bundle generation.
 - TextInput, CJK fallback and RAM framebuffer regressions: seven tests pass.
-- Real CSS audit: 175/183 runnable tests pass, eight fail, and three other suites
-  have stale-API compilation failures. Parser tests also report 153 allocations
-  because they use the testing allocator with the current borrowed-arena parser
-  API; that report is not evidence of 153 leaks in the browser's arena-backed
-  parsing path. CSS compatibility and test/API maintenance remain unfinished.
+- CSS regression suites in Debug and ReleaseSafe: **363/363 tests pass**, with
+  testing-allocator leak checks, including 99 CSSOM tests previously not run,
+  nine new nesting/selector fixtures and cascade-priority regressions. This is
+  a regression baseline, not proof of complete CSS standards compatibility.
+- Packaged-browser DOM/CSS integration assertions pass for seven additional
+  fixtures: nesting, trailing declarations, !important specificity, parent-list
+  specificity, nested/media conditional groups and a 301-rule stylesheet.
 - Offline HTTP/TLS tests in Debug and ReleaseSafe: six tests each, including
   compression, 304 reuse, redirects, no-store/Vary, binary POST, self-signed TLS
   rejection, memory budgets and allocation-failure injection.
@@ -77,9 +90,9 @@ See [macOS instructions](macos.md) for remaining GUI limitations.
    URL-relative resources, per-tab back/forward history, reload, forms/POST,
    downloads, keyboard input, tabs, resize and error-page recovery.
 2. **Layout compatibility**: compare local CSS/flex/grid/forms/script fixtures
-   with a mainstream browser; repair the now-visible CSS audit/test ownership/API
-   failures and geometry/painting regressions before claiming modern-site
-   compatibility. Existing margin/line-layout defects remain.
+   with a mainstream browser; expand standards coverage and repair geometry/
+   painting regressions before claiming modern-site compatibility. Existing
+   margin/line-layout defects remain.
 3. **Native UX**: Retina-resolution text/layout, caret-aligned IME candidates and
    inline preedit, consistent selection across find/forms, horizontal gestures,
    native title updates, file dialogs and accessibility.
