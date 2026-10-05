@@ -1,10 +1,19 @@
 const std = @import("std");
 const fc = @import("../bindings/fontconfig.zig").c;
+const is_macos = @import("builtin").os.tag == .macos;
+extern fn suzume_cocoa_font_path(family: [*]const u8, length: c_int, buffer: [*]u8, capacity: c_int) c_int;
 
 /// Resolve a CSS font-family name to a system font file path using fontconfig.
 /// Returns a heap-allocated null-terminated path, or null if not found.
 /// Caller must free the returned slice with the allocator.
 pub fn resolve(allocator: std.mem.Allocator, family: []const u8) ?[:0]const u8 {
+    if (is_macos) {
+        if (family.len > 4096) return null;
+        var path: [4096]u8 = undefined;
+        const len = suzume_cocoa_font_path(family.ptr, @intCast(family.len), &path, path.len);
+        if (len <= 0) return null;
+        return allocator.dupeZ(u8, path[0..@intCast(len)]) catch null;
+    }
     // Create a fontconfig pattern for the family name
     const family_z = allocator.allocSentinel(u8, family.len, 0) catch return null;
     defer allocator.free(family_z);

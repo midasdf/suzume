@@ -1,6 +1,17 @@
 const std = @import("std");
 const nsfb = @import("../bindings/nsfb.zig");
 const c = nsfb.c;
+const is_macos = @import("builtin").os.tag == .macos;
+
+extern fn suzume_cocoa_create(width: c_int, height: c_int) ?*anyopaque;
+extern fn suzume_cocoa_destroy(window: *anyopaque) void;
+extern fn suzume_cocoa_present(window: *anyopaque, pixels: [*]const u8, width: c_int, height: c_int, stride: c_int) void;
+extern fn suzume_cocoa_poll(window: *anyopaque, event: *c.nsfb_event_t, timeout: c_int) bool;
+extern fn suzume_cocoa_key_text(window: *anyopaque, buffer: [*]u8, capacity: c_int) c_int;
+extern fn suzume_cocoa_cursor(shape: c_int) void;
+extern fn suzume_cocoa_composing(window: *anyopaque) bool;
+extern fn suzume_cocoa_clipboard(buffer: ?[*]u8, capacity: c_int) c_int;
+extern fn suzume_cocoa_copy(text: [*]const u8, length: c_int) void;
 
 /// Manual surface registration (constructor workaround)
 extern fn nsfb_surface_init_all() void;
@@ -34,9 +45,16 @@ pub const Surface = struct {
     width: i32,
     height: i32,
     xim_initialized: bool = false,
+    native_window: ?*anyopaque = null,
 
     /// Create and initialize an X11 window surface.
     pub fn init(width: i32, height: i32) !Surface {
+        if (is_macos) {
+            var surface = try initBackend("ram", width, height);
+            errdefer surface.deinit();
+            surface.native_window = suzume_cocoa_create(width, height) orelse return error.NativeWindowFailed;
+            return surface;
+        }
         return initBackend("x", width, height);
     }
 
@@ -114,6 +132,9 @@ pub const Surface = struct {
     }
 
     pub fn deinit(self: *Surface) void {
+        if (is_macos) {
+            if (self.native_window) |window| suzume_cocoa_destroy(window);
+        }
         _ = c.nsfb_free(self.fb);
     }
 
@@ -192,6 +213,16 @@ pub const Surface = struct {
 
     /// Flip buffer to screen (update entire surface).
     pub fn update(self: *Surface) void {
+        if (is_macos) {
+            if (self.native_window) |window| {
+                var pixels: ?[*]u8 = null;
+                var stride: c_int = 0;
+                if (c.nsfb_get_buffer(self.fb, @ptrCast(&pixels), &stride) == 0) {
+                    if (pixels) |buffer| suzume_cocoa_present(window, buffer, self.width, self.height, stride);
+                }
+                return;
+            }
+        }
         var bbox = c.nsfb_bbox_t{
             .x0 = 0,
             .y0 = 0,
@@ -203,7 +234,11 @@ pub const Surface = struct {
 
     /// Set the mouse cursor shape.
     pub fn setCursor(self: *Surface, shape: CursorShape) void {
-        nsfb_x_set_cursor_shape(self.fb, @intFromEnum(shape));
+        if (is_macos) {
+            suzume_cocoa_cursor(@intFromEnum(shape));
+        } else {
+            nsfb_x_set_cursor_shape(self.fb, @intFromEnum(shape));
+        }
     }
 
     // ── XIM (X Input Method) support ──────────────────────────────
@@ -211,6 +246,10 @@ pub const Surface = struct {
     /// Initialize XIM for this surface's X11 window.
     /// Call once after the surface is created. Returns true on success.
     pub fn initXim(self: *Surface) bool {
+        if (is_macos) {
+            self.xim_initialized = self.native_window != null;
+            return self.xim_initialized;
+        }
         const win_id = nsfb_x_get_window_id(self.fb);
         if (win_id == 0) return false;
         const result = xim_init(win_id);
@@ -225,10 +264,15 @@ pub const Surface = struct {
     /// - .filtered: key consumed by IME (skip normal handler)
     /// - .none: not handled by XIM (pass to normal handler)
     pub fn processKeyXim(self: *Surface, is_press: bool) struct { result: XimResult, text: ?[]const u8 } {
-        _ = self;
         const S = struct {
-            var storage: [128]u8 = undefined;
+            var storage: [4096]u8 = undefined;
         };
+        if (is_macos) {
+            const window = self.native_window orelse return .{ .result = .none, .text = null };
+            const len = suzume_cocoa_key_text(window, &S.storage, S.storage.len);
+            if (len > 0) return .{ .result = .text, .text = S.storage[0..@intCast(len)] };
+            return .{ .result = if (len < 0) .filtered else .none, .text = null };
+        }
         var buf: [128]u8 = undefined;
         const len = xim_process_key(
             nsfb_x_last_keycode,
@@ -248,9 +292,17 @@ pub const Surface = struct {
         return .{ .result = .none, .text = null }; // not handled
     }
 
+    pub fn isTextComposing(self: *Surface) bool {
+        if (is_macos) {
+            return if (self.native_window) |window| suzume_cocoa_composing(window) else false;
+        }
+        return true; // XIM reports composition through its filtered-key result.
+    }
+
     /// Poll for committed text from XIM (e.g., Mozc confirmed input).
     /// Call this in the main event loop to receive asynchronous commits.
     pub fn pollXimCommitted(_: *Surface) ?[]const u8 {
+        if (is_macos) return null; // AppKit commits are paired with their key event.
         const S = struct {
             var storage: [128]u8 = undefined;
         };
@@ -261,18 +313,18 @@ pub const Surface = struct {
 
     /// Notify XIM that the window gained focus.
     pub fn ximFocusIn(_: *Surface) void {
-        xim_focus_in();
+        if (!is_macos) xim_focus_in();
     }
 
     /// Notify XIM that the window lost focus.
     pub fn ximFocusOut(_: *Surface) void {
-        xim_focus_out();
+        if (!is_macos) xim_focus_out();
     }
 
     /// Clean up XIM resources.
     pub fn deinitXim(self: *Surface) void {
         if (self.xim_initialized) {
-            xim_cleanup();
+            if (!is_macos) xim_cleanup();
             self.xim_initialized = false;
         }
     }
@@ -282,10 +334,35 @@ pub const Surface = struct {
     /// Returns null if no event within timeout.
     pub fn pollEvent(self: *Surface, timeout: i32) ?c.nsfb_event_t {
         var event: c.nsfb_event_t = std.mem.zeroes(c.nsfb_event_t);
+        if (is_macos) {
+            const window = self.native_window orelse return null;
+            if (!suzume_cocoa_poll(window, &event, timeout)) return null;
+            if (event.type == c.NSFB_EVENT_RESIZE) {
+                self.resize(event.value.resize.w, event.value.resize.h) catch return null;
+            }
+            return event;
+        }
         if (c.nsfb_event(self.fb, &event, timeout)) {
             return event;
         }
         return null;
+    }
+
+    pub fn writeClipboard(_: *Surface, text: []const u8) void {
+        if (is_macos and text.len <= 1024 * 1024) suzume_cocoa_copy(text.ptr, @intCast(text.len));
+    }
+
+    pub fn readClipboard(_: *Surface, allocator: std.mem.Allocator) !?[]u8 {
+        if (!is_macos) return null;
+        const len = suzume_cocoa_clipboard(null, 0);
+        if (len <= 0 or len > 1024 * 1024) return null;
+        const text = try allocator.alloc(u8, @intCast(len));
+        const copied = suzume_cocoa_clipboard(text.ptr, len);
+        if (copied != len) {
+            allocator.free(text);
+            return null;
+        }
+        return text;
     }
 
     /// Fill a rounded rectangle with per-corner radii, using scanline fills.

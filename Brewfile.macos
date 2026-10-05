@@ -1,0 +1,7 @@
+brew "zig@0.16"
+brew "pkgconf"
+brew "curl"
+brew "sqlite"
+brew "webp"
+brew "brotli"
+brew "woff2"

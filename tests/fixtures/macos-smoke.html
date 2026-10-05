@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Suzume macOS smoke test</title>
+<style>
+body { margin: 32px; font-family: sans-serif; color: #17212b; background: #ffffff; }
+h1 { font-size: 28px; color: #167047; }
+p { font-size: 16px; line-height: 1.6; }
+input { padding: 8px; border: 1px solid #789; width: 300px; }
+.card { padding: 20px; background: #eef6f1; border: 1px solid #b8d5c4; }
+</style>
+<h1>Suzume on macOS</h1>
+<p>A native window, without X11 or Chromium.</p>
+<p>日本語の表示と入力 — テストページ</p>
+<div class="card">
+<p><a href="macos-second.html">Open the second page</a> then use Back, Forward and Reload.</p>
+<label>Text input: <input id="text" placeholder="Type or paste here"></label>
+</div>
+<p id="status">Ready.</p>
+<script>document.getElementById('text').addEventListener('input', function () { document.getElementById('status').textContent = 'Input: ' + this.value; });</script>

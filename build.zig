@@ -135,6 +135,21 @@ fn linkWoff2(exe: *std.Build.Step.Compile) void {
     }
 }
 
+fn addCocoa(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    module.addCSourceFile(.{
+        .file = b.path("src/platform/cocoa.m"),
+        .flags = &.{ "-fobjc-arc", "-fno-sanitize=undefined" },
+    });
+    if (b.sysroot orelse std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
+        module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+        module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+        module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) });
+    }
+    module.linkFramework("Cocoa", .{});
+    module.linkFramework("CoreGraphics", .{});
+    module.linkFramework("CoreText", .{});
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -231,6 +246,8 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
     exe.link_gc_sections = true;
+    exe.root_module.strip = b.option(bool, "strip", "Strip debug symbols from the browser executable") orelse false;
+    if (target.result.os.tag == .macos) exe.headerpad_max_install_names = true;
 
     // Link all static libraries
     exe.root_module.linkLibrary(lexbor_lib);
@@ -274,10 +291,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // XIM (X Input Method) helper for fcitx5/mozc Japanese input
-    exe.root_module.addCSourceFile(.{
-        .file = b.path("src/xim_helper.c"),
-        .flags = &.{"-fno-sanitize=undefined"},
-    });
+    if (target.result.os.tag == .macos) {
+        addCocoa(b, exe.root_module, target);
+    } else {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("src/xim_helper.c"),
+            .flags = &.{"-fno-sanitize=undefined"},
+        });
+    }
 
     // nsfb_x_* helpers used by XIM/cursor live in deps/libnsfb's XCB backend.
 
@@ -398,19 +419,26 @@ pub fn build(b: *std.Build) void {
     }
 
     // System libraries
-    exe.root_module.linkSystemLibrary("xcb", .{});
-    exe.root_module.linkSystemLibrary("xcb-icccm", .{});
-    exe.root_module.linkSystemLibrary("xcb-image", .{});
-    exe.root_module.linkSystemLibrary("xcb-keysyms", .{});
-    exe.root_module.linkSystemLibrary("xcb-util", .{});
-    exe.root_module.linkSystemLibrary("X11", .{});
-    exe.root_module.linkSystemLibrary("xcb-shm", .{});
-    exe.root_module.linkSystemLibrary("xcb-cursor", .{});
+    if (resolved.os.tag != .macos) {
+        exe.root_module.linkSystemLibrary("xcb", .{});
+        exe.root_module.linkSystemLibrary("xcb-icccm", .{});
+        exe.root_module.linkSystemLibrary("xcb-image", .{});
+        exe.root_module.linkSystemLibrary("xcb-keysyms", .{});
+        exe.root_module.linkSystemLibrary("xcb-util", .{});
+        exe.root_module.linkSystemLibrary("X11", .{});
+        exe.root_module.linkSystemLibrary("xcb-shm", .{});
+        exe.root_module.linkSystemLibrary("xcb-cursor", .{});
+    } else {
+        // woff2.pc also injects brotlidec; link it explicitly below only once.
+        // Duplicate LC_LOAD_DYLIB entries are rejected by modern macOS dyld.
+        exe.root_module.linkSystemLibrary("woff2dec", .{ .use_pkg_config = .no });
+        exe.root_module.linkSystemLibrary("woff2common", .{ .use_pkg_config = .no });
+    }
     exe.root_module.linkSystemLibrary("curl", .{});
     exe.root_module.linkSystemLibrary("sqlite3", .{});
     exe.root_module.linkSystemLibrary("webp", .{});
     exe.root_module.linkSystemLibrary("brotlidec", .{});
-    exe.root_module.linkSystemLibrary("fontconfig", .{});
+    if (resolved.os.tag != .macos) exe.root_module.linkSystemLibrary("fontconfig", .{});
 
     linkWoff2(exe);
 
@@ -442,6 +470,63 @@ pub fn build(b: *std.Build) void {
     const run_test_http = b.addRunArtifact(exe);
     run_test_http.step.dependOn(b.getInstallStep());
     run_test_http.addArg("--test-http");
+    const text_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test_text_fallback.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        }),
+    });
+    text_tests.root_module.addIncludePath(freetype_dep.path("include"));
+    text_tests.root_module.addIncludePath(harfbuzz_dep.path("src"));
+    text_tests.root_module.linkLibrary(freetype_lib);
+    text_tests.root_module.linkLibrary(harfbuzz_lib);
+    const test_text_step = b.step("test-text-fallback", "Run CJK font fallback regression tests");
+    test_text_step.dependOn(&b.addRunArtifact(text_tests).step);
+
+    if (target.result.os.tag == .macos) {
+        const surface_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/test_surface.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        surface_tests.root_module.addIncludePath(b.path("deps/libnsfb/include"));
+        surface_tests.root_module.addCSourceFile(.{ .file = b.path("src/nsfb_surface_init.c"), .flags = &.{} });
+        surface_tests.root_module.linkLibrary(libnsfb);
+        addCocoa(b, surface_tests.root_module, target);
+        const test_surface_step = b.step("test-surface", "Run RAM framebuffer color and resize tests");
+        test_surface_step.dependOn(&b.addRunArtifact(surface_tests).step);
+    }
+
+    const input_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test_ui_input.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    input_tests.root_module.addIncludePath(b.path("deps/libnsfb/include"));
+    const test_input_step = b.step("test-ui-input", "Run UTF-8 text editing and selection tests");
+    test_input_step.dependOn(&b.addRunArtifact(input_tests).step);
+
+    const http_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/net/http.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    http_unit_tests.root_module.link_libc = true;
+    http_unit_tests.root_module.linkSystemLibrary("curl", .{});
+    const test_http_unit_step = b.step("test-http-unit", "Run HTTP ownership and cache regression tests");
+    test_http_unit_step.dependOn(&b.addRunArtifact(http_unit_tests).step);
+
     const test_http_step = b.step("test-http", "Run HTTP smoke test");
     test_http_step.dependOn(&run_test_http.step);
     const test_integration_step = b.step("test-integration", "Run JS, DOM+JS, and HTTP smoke tests");
@@ -710,29 +795,25 @@ pub fn build(b: *std.Build) void {
     });
     test_large_css_mod.addImport("css", css_mod);
 
-    // Root test module that pulls in all CSS test modules
-    const css_all_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_css_all.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    css_all_test_mod.addImport("test_string_pool", test_string_pool_mod);
-    css_all_test_mod.addImport("test_tokenizer", test_tokenizer_mod);
-    css_all_test_mod.addImport("test_parser", test_parser_mod);
-    css_all_test_mod.addImport("test_properties", test_properties_mod);
-    css_all_test_mod.addImport("test_selectors", test_selectors_mod);
-    css_all_test_mod.addImport("test_media", test_media_mod);
-    css_all_test_mod.addImport("test_variables", test_variables_mod);
-    css_all_test_mod.addImport("test_style_decl", test_style_decl_mod);
-    css_all_test_mod.addImport("test_large_css", test_large_css_mod);
-
-    const css_tests = b.addTest(.{
-        .root_module = css_all_test_mod,
-    });
-    const run_css_tests = b.addRunArtifact(css_tests);
+    // Tests in separately imported modules are not discovered by a root's
+    // comptime imports. Run each test file as a root instead of passing 0 tests.
     const test_css_step = b.step("test-css", "Run CSS engine tests");
-    test_css_step.dependOn(&run_css_tests.step);
-    test_step.dependOn(&run_css_tests.step);
+    for ([_]*std.Build.Module{
+        test_string_pool_mod,
+        test_tokenizer_mod,
+        test_parser_mod,
+        test_properties_mod,
+        test_selectors_mod,
+        test_media_mod,
+        test_variables_mod,
+        test_style_decl_mod,
+        test_large_css_mod,
+    }) |module| {
+        const css_tests = b.addTest(.{ .root_module = module });
+        const run_css_tests = b.addRunArtifact(css_tests);
+        test_css_step.dependOn(&run_css_tests.step);
+        test_step.dependOn(&run_css_tests.step);
+    }
 
     // ── kotori JS engine tests ─────────────────────────────────
     // (kotori_mod is created above, shared with exe_mod)

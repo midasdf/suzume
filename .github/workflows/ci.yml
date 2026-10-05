@@ -20,29 +20,89 @@ jobs:
 
       - name: Install Zig
         run: |
-          curl -sL "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+          curl -fLsS "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libxcb1-dev libxcb-icccm4-dev libxcb-image0-dev \
-            libxcb-keysyms1-dev libxcb-util-dev libx11-dev \
-            libcurl4-openssl-dev libsqlite3-dev libwebp-dev \
-            libfontconfig-dev libfreetype-dev libharfbuzz-dev
+            libxcb-keysyms1-dev libxcb-util-dev libxcb-cursor-dev libx11-dev \
+            libcurl4-openssl-dev libsqlite3-dev libwebp-dev libbrotli-dev libwoff-dev \
+            libfontconfig-dev libfreetype-dev libharfbuzz-dev pkg-config
 
       - name: Format check
         continue-on-error: true
         run: zig fmt --check src/
 
       - name: Build
-        run: zig build
-        continue-on-error: true
+        run: zig build -Doptimize=ReleaseSafe
 
-      - name: Test
-        run: zig build test
+      - name: Text editing tests
+        run: zig build test-ui-input -Doptimize=ReleaseSafe
+      - name: CSS audit (existing suite failures, see roadmap)
         continue-on-error: true
+        run: zig build test-css -Doptimize=ReleaseSafe
+
+  http-regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig and HTTP test dependencies
+        run: |
+          curl -fLsS "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev python3 openssl
+      - name: Check changed Zig formatting
+        run: zig fmt --check build.zig src/net/http.zig
+      - name: Offline HTTP and TLS regressions (Debug)
+        run: python3 tests/http_regression.py
+      - name: Offline HTTP and TLS regressions (ReleaseSafe)
+        run: python3 tests/http_regression.py -O ReleaseSafe
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Zig and build dependencies
+        run: |
+          case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
+          curl -fLsS "https://ziglang.org/download/0.16.0/zig-$arch-macos-0.16.0.tar.xz" | tar -xJ
+          echo "ZIG=$PWD/zig-$arch-macos-0.16.0/zig" >> "$GITHUB_ENV"
+          echo "SUZUME_ARCH=$arch" >> "$GITHUB_ENV"
+          echo "$PWD/zig-$arch-macos-0.16.0" >> "$GITHUB_PATH"
+          brew install pkgconf curl sqlite webp brotli woff2
+      - name: Build and sign relocatable application bundle
+        run: bash scripts/build-macos.sh -j4
+      - name: Renderer and input regression tests
+        run: |
+          prefix="$(brew --prefix)"
+          case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
+          zig build test-ui-input test-text-fallback test-surface -Doptimize=ReleaseSafe \
+            -Dtarget="$arch-macos.15.0" --search-prefix "$prefix" \
+            --search-prefix "$prefix/opt/curl" --search-prefix "$prefix/opt/sqlite"
+      - name: CSS audit (existing suite failures, see roadmap)
+        continue-on-error: true
+        run: |
+          case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
+          zig build test-css -Doptimize=ReleaseSafe -Dtarget="$arch-macos.15.0"
+      - name: Native window and input smoke tests
+        run: |
+          clang -fobjc-arc -I deps/libnsfb/include -I src/platform \
+            src/platform/cocoa.m tests/cocoa_smoke.m \
+            -framework Cocoa -framework CoreGraphics -framework CoreText -o /tmp/cocoa-smoke
+          /tmp/cocoa-smoke
+          profile="$(mktemp -d)"
+          HOME="$profile" zig-out/Suzume.app/Contents/MacOS/suzume \
+            --gui-smoke /tmp/suzume-gui.png about:blank
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Suzume-macos-${{ env.SUZUME_ARCH }}
+          path: zig-out/Suzume-macos.zip
 
   security-audit:
     runs-on: ubuntu-24.04

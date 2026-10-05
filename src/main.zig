@@ -38,10 +38,11 @@ const default_window_h = chrome.default_window_h;
 const default_bg = 0xFF1e1e2e;
 
 // Font paths
-const font_cjk = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
-const font_fallback = "/usr/share/fonts/TTF/DejaVuSans.ttf";
-const font_serif = "/usr/share/fonts/TTF/DejaVuSerif.ttf";
-const font_mono = "/usr/share/fonts/TTF/DejaVuSansMono.ttf";
+const is_macos = @import("builtin").os.tag == .macos;
+const font_cjk = if (is_macos) "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc" else "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
+const font_fallback = if (is_macos) "/System/Library/Fonts/Helvetica.ttc" else "/usr/share/fonts/TTF/DejaVuSans.ttf";
+const font_serif = if (is_macos) "/System/Library/Fonts/Times.ttc" else "/usr/share/fonts/TTF/DejaVuSerif.ttf";
+const font_mono = if (is_macos) "/System/Library/Fonts/Menlo.ttc" else "/usr/share/fonts/TTF/DejaVuSansMono.ttf";
 
 const hit_test_mod = @import("hit_test.zig");
 const dom_test = @import("test_dom_style.zig");
@@ -873,9 +874,13 @@ fn navigateTo(
     // Clean up old page
     page.deinit();
 
-    // Check for internal suzume:// pages
-    if (internal_pages.isInternalUrl(url_z)) {
-        const html_owned = internal_pages.generatePage(allocator, url_z, storage) orelse {
+    // about:blank is a local document, never a network request.
+    const is_blank = std.mem.eql(u8, url_z, "about:blank");
+    if (is_blank or internal_pages.isInternalUrl(url_z)) {
+        const html_owned = (if (is_blank)
+            (allocator.dupe(u8, "<!doctype html><html><head><title>New Tab</title></head><body></body></html>") catch null)
+        else
+            internal_pages.generatePage(allocator, url_z, storage)) orelse {
             const msg = std.fmt.allocPrint(allocator, "Failed to generate internal page: {s}", .{url_z}) catch return false;
             page.error_message = msg;
             page.error_alloc = msg;
@@ -1781,6 +1786,7 @@ pub fn main(init: std.process.Init) !void {
     var run_test_js = false;
     var run_test_dom_js = false;
     var screenshot_path: ?[]const u8 = null;
+    var gui_smoke_path: ?[]const u8 = null;
     var webdriver_port: ?u16 = null;
 
     while (args.next()) |arg| {
@@ -1801,6 +1807,8 @@ pub fn main(init: std.process.Init) !void {
             kotori.io.wpt_mode = true;
         } else if (std.mem.eql(u8, arg, "--screenshot")) {
             screenshot_path = args.next();
+        } else if (std.mem.eql(u8, arg, "--gui-smoke")) {
+            gui_smoke_path = args.next() orelse return error.MissingScreenshotPath;
         } else if (std.mem.startsWith(u8, arg, "--webdriver=")) {
             webdriver_port = std.fmt.parseInt(u16, arg["--webdriver=".len..], 10) catch null;
         } else if (std.mem.eql(u8, arg, "--webdriver")) {
@@ -2388,7 +2396,12 @@ pub fn main(init: std.process.Init) !void {
 
     // Event loop
     var running = true;
+    var gui_smoke_frames: usize = 0;
     while (running) {
+        if (gui_smoke_path != null) {
+            if (gui_smoke_frames == 8) break;
+            gui_smoke_frames += 1;
+        }
         // WPT mode: exit after test result is sent.
         // Either engine (QuickJS via web_api, or kotori via kotori_io) may
         // emit the "ALERT: RESULT:" line that flips these flags.
@@ -2910,6 +2923,10 @@ pub fn main(init: std.process.Init) !void {
 
                 nsfb_c.NSFB_EVENT_KEY_DOWN => {
                     const key = event.value.keycode;
+                    const navigation_action = if (key == nsfb_c.NSFB_KEY_MOUSE_1)
+                        chrome.hitTestNavigation(mouse_x, mouse_y)
+                    else
+                        chrome.NavigationAction.none;
 
                     // Track modifier state
                     if (key == nsfb_c.NSFB_KEY_LSHIFT or key == nsfb_c.NSFB_KEY_RSHIFT) {
@@ -2931,12 +2948,41 @@ pub fn main(init: std.process.Init) !void {
                         continue;
                     }
 
-                    // Ctrl+L: focus URL bar and select all (clear for new input)
+                    // Platform shortcut modifier is Ctrl on Linux, Command on macOS.
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_a) {
+                        if (url_input.focused) url_input.selectAll() else if (focused_input_node != null) form_input.selectAll();
+                        needs_repaint = true;
+                        continue;
+                    }
+                    if (is_macos and ctrl_held and key == nsfb_c.NSFB_KEY_c) {
+                        const selected = if (url_input.focused) url_input.selectedText() else if (focused_input_node != null) form_input.selectedText() else "";
+                        if (selected.len > 0) surface.writeClipboard(selected);
+                        continue;
+                    }
+                    if (is_macos and ctrl_held and key == nsfb_c.NSFB_KEY_v) {
+                        if (surface.readClipboard(allocator) catch null) |text| {
+                            defer allocator.free(text);
+                            if (find_bar.visible) {
+                                find_bar.insertText(text);
+                            } else if (focused_input_node != null) {
+                                form_input.insertText(text);
+                                if (activePageState(&tab_mgr, &page_states)) |pg| {
+                                    if (pg.js_rt) |*js_rt| {
+                                        _ = events.dispatchEvent(js_rt.ctx, focused_input_node.?, "input");
+                                        js_rt.executePending();
+                                    }
+                                }
+                            } else if (url_input.focused) url_input.insertText(text);
+                            needs_repaint = true;
+                        }
+                        continue;
+                    }
+
+                    // Ctrl+L: focus URL bar and select all
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_l) {
                         url_input.focused = true;
-                        // Clear the URL bar so user can immediately type a new URL.
-                        // Old URL is restored on Escape.
-                        url_input.setText("");
+                        focused_input_node = null;
+                        url_input.selectAll();
                         needs_repaint = true;
                         continue;
                     }
@@ -3044,7 +3090,7 @@ pub fn main(init: std.process.Init) !void {
                     }
 
                     // Ctrl+R: reload
-                    if (ctrl_held and key == nsfb_c.NSFB_KEY_r) {
+                    if ((ctrl_held and key == nsfb_c.NSFB_KEY_r) or navigation_action == .reload) {
                         focused_input_node = null;
                         if (current_url) |url| {
                             const url_z = allocator.allocSentinel(u8, url.len, 0) catch continue;
@@ -3138,7 +3184,7 @@ pub fn main(init: std.process.Init) !void {
                     }
 
                     // Alt+Left: back
-                    if (alt_held and key == nsfb_c.NSFB_KEY_LEFT) {
+                    if ((alt_held and key == nsfb_c.NSFB_KEY_LEFT) or navigation_action == .back) {
                         focused_input_node = null;
                         if (history_pos > 0) {
                             history_pos -= 1;
@@ -3170,7 +3216,7 @@ pub fn main(init: std.process.Init) !void {
                     }
 
                     // Alt+Right: forward
-                    if (alt_held and key == nsfb_c.NSFB_KEY_RIGHT) {
+                    if ((alt_held and key == nsfb_c.NSFB_KEY_RIGHT) or navigation_action == .forward) {
                         focused_input_node = null;
                         if (history_pos + 1 < history.items.len) {
                             history_pos += 1;
@@ -3327,7 +3373,7 @@ pub fn main(init: std.process.Init) !void {
                     // when any text input is focused.
                     // Skip control keys (backspace, enter, escape, arrows, etc.)
                     // so they work normally even when Mozc is active.
-                    if (surface.xim_initialized and !ctrl_held and !alt_held) {
+                    if (surface.xim_initialized and !ctrl_held and (!alt_held or is_macos)) {
                         // Keys that never go to XIM
                         const is_nav_key = (key == nsfb_c.NSFB_KEY_BACKSPACE or
                             key == nsfb_c.NSFB_KEY_DELETE or
@@ -3343,7 +3389,7 @@ pub fn main(init: std.process.Init) !void {
                         // Enter/Escape: only send to XIM when composing (Mozc active)
                         const is_confirm_key = (key == nsfb_c.NSFB_KEY_RETURN or
                             key == nsfb_c.NSFB_KEY_ESCAPE);
-                        const is_control_key = is_nav_key or (is_confirm_key and !xim_composing);
+                        const is_control_key = (is_nav_key and !(is_macos and xim_composing)) or (is_confirm_key and !xim_composing);
                         const any_text_focused = find_bar.visible or focused_input_node != null or url_input.focused;
                         if (any_text_focused and !is_control_key) {
                             const xim_res = surface.processKeyXim(true);
@@ -3359,7 +3405,6 @@ pub fn main(init: std.process.Init) !void {
                                                 find_bar.insertText(composed);
                                             } else if (focused_input_node != null) {
                                                 form_input.insertText(composed);
-                                                std.debug.print("[input] XIM text into form: \"{s}\" total=\"{s}\"\n", .{ composed, form_input.getText() });
                                                 // Dispatch "input" event on the focused element
                                                 {
                                                     const xim_pg2 = activePageState(&tab_mgr, &page_states);
@@ -3380,7 +3425,7 @@ pub fn main(init: std.process.Init) !void {
                                 },
                                 .filtered => {
                                     // Key consumed by IME — now composing
-                                    xim_composing = true;
+                                    xim_composing = surface.isTextComposing();
                                     continue;
                                 },
                                 .none => {
@@ -3740,7 +3785,7 @@ pub fn main(init: std.process.Init) !void {
                             }
                         }
                     } else if (mouse_y < chrome.url_bar_height) {
-                        surface.setCursor(.text);
+                        surface.setCursor(if (chrome.hitTestNavigation(mouse_x, mouse_y) != .none) .pointer else .text);
                     } else {
                         surface.setCursor(.arrow);
                     }
@@ -3749,6 +3794,11 @@ pub fn main(init: std.process.Init) !void {
                 else => {},
             }
         }
+    }
+
+    if (gui_smoke_path) |path| {
+        if (!surface.dumpToPng(path)) return error.GuiSmokeScreenshotFailed;
+        std.debug.print("[gui-smoke] Painted native GUI and saved {s}\n", .{path});
     }
 
     // Save session on exit
@@ -3972,6 +4022,7 @@ fn handleClick(
 ) bool {
     // Click in URL bar?
     if (my < chrome.url_bar_height) {
+        if (!url_input.focused) url_input.selectAll();
         url_input.focused = true;
         focused_input_node.* = null; // unfocus form input
         needs_repaint.* = true;

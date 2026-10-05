@@ -20,6 +20,9 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
     const common_cflags = &[_][]const u8{
         "-D_BSD_SOURCE",
         "-D_DEFAULT_SOURCE",
+        // POSIX feature macros hide Darwin endian definitions otherwise, causing
+        // upstream plot.h to mistake little endian for big endian (0 == 0).
+        "-D_DARWIN_C_SOURCE",
         "-D_POSIX_C_SOURCE=200112L",
         "-DNSFB_NEED_HINTS_ALLOC",
         "-DNSFB_NEED_ICCCM_API_PREFIX",
@@ -40,7 +43,8 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
         }),
     });
 
-    lib.step.dependOn(&applyLibNsfbXimPatch(b).step);
+    const macos = target.result.os.tag == .macos;
+    if (!macos) lib.step.dependOn(&applyLibNsfbXimPatch(b).step);
 
     lib.root_module.addCSourceFiles(.{
         .root = b.path("deps/libnsfb"),
@@ -64,8 +68,12 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
             // Surface
             "src/surface/surface.c",
             "src/surface/ram.c",
-            "src/surface/x.c",
         },
+        .flags = common_cflags,
+    });
+
+    if (!macos) lib.root_module.addCSourceFile(.{
+        .file = b.path("deps/libnsfb/src/surface/x.c"),
         .flags = common_cflags,
     });
 
@@ -75,7 +83,7 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
 
     // System xcb include paths for compilation (headers only)
     // Actual library linking is done by the final executable
-    lib.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    if (!macos) lib.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
 
     return lib;
 }

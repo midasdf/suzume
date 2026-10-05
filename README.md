@@ -1,14 +1,16 @@
 # suzume
 
-[![Zig](https://img.shields.io/badge/Zig-0.15+-f7a41d?logo=zig&logoColor=white)](https://ziglang.org)
+[![Zig](https://img.shields.io/badge/Zig-0.16-f7a41d?logo=zig&logoColor=white)](https://ziglang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Linux](https://img.shields.io/badge/Platform-Linux-yellow?logo=linux&logoColor=white)](https://kernel.org)
+[![macOS](https://img.shields.io/badge/Platform-macOS-black?logo=apple&logoColor=white)](docs/macos.md)
 
 Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB RAM, Cortex-A53).
 
-> Renders modern sites (Google, Wikipedia, Bing, Hacker News, GitHub) under the
-> QuickJS-ng engine (`SUZUME_JS=quickjs`). The default kotori engine is faster but
-> handles a smaller feature set — switch to QuickJS for sites with heavy JS.
+> Experimental browser: a native macOS GUI is available, but modern-site
+> compatibility and security boundaries still need work. QuickJS-ng
+> (`SUZUME_JS=quickjs`) supports more JavaScript than the default kotori engine.
+> Do not use sensitive accounts yet; see the documented limitations.
 
 ## Features
 
@@ -23,12 +25,16 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 - 120+ CSS properties, 200+ unit tests
 - HTML5 parsing via lexbor
 - **JavaScript engine** — kotori (self-implemented in Zig) + QuickJS-ng fallback
-- X11/XCB framebuffer rendering via libnsfb
+- Native AppKit window on macOS; X11/XCB on Linux (shared software renderer)
+- Back/forward/reload toolbar, address selection and UTF-8-safe text editing
+- macOS Command shortcuts, native menus, clipboard and IME text commits
+- CoreText font discovery on macOS; Fontconfig on Linux
 - FreeType + HarfBuzz text shaping (CJK support)
 - Tab browsing, keyboard navigation, find-in-page
 - Window resize with re-layout and media query re-evaluation
 - Mouse wheel scrolling
-- SSL certificate fallback with hostname verification
+- HTTP certificate-chain and hostname verification (no insecure retry)
+- Compressed HTTP transfers and bounded conditional-response cache (8 MiB / 128 entries)
 
 ## Web Platform Tests (WPT)
 
@@ -69,6 +75,27 @@ SUZUME_JS=quickjs bash tests/wpt/run_wpt.sh dom/nodes
 
 ## Building
 
+Use **Zig 0.16.x**. The source uses its `std.Io` and `std.process.Init` APIs;
+0.15 and 0.17 are not compatible.
+
+### macOS (no XQuartz required)
+
+```bash
+git submodule update --init --recursive
+brew bundle --file=Brewfile.macos
+bash scripts/build-macos.sh
+open zig-out/Suzume.app
+```
+
+The build creates `Suzume.app` and `Suzume-macos.zip`, bundles non-system dylibs,
+and ad-hoc signs the application. It uses native system fonts without Fontconfig.
+Apple Silicon is locally verified; Intel is supported by the build script but
+not locally tested. See [macOS instructions and limitations](docs/macos.md).
+
+![Browser framebuffer from the macOS build, displaying the local smoke-test page](docs/images/macos.png)
+
+### Linux / individual test targets
+
 ```bash
 zig build -Doptimize=ReleaseSafe   # daily-use build (recommended)
 zig build              # debug build (slow — for development only)
@@ -76,6 +103,11 @@ zig build run          # run browser
 zig build test-css     # run CSS engine tests
 zig build test-kotori      # run kotori JS engine tests
 zig build test-kotori-dom  # run kotori DOM binding tests
+zig build test-http-unit   # HTTP ownership/cache unit tests
+zig build test-ui-input    # UTF-8 editing and selection
+zig build test-text-fallback # CJK fallback (requires system Latin/CJK fonts)
+zig build test-surface     # macOS RAM framebuffer colors and resize
+python3 tests/http_regression.py  # offline HTTP/TLS integration tests (requires Python + OpenSSL)
 ```
 
 > **Note:** the default `zig build` produces a Debug binary, which is
@@ -89,6 +121,26 @@ zig build test-kotori-dom  # run kotori DOM binding tests
 ```bash
 zig build -Dtarget=aarch64-linux-gnu.2.38 -Doptimize=ReleaseFast --search-prefix ~/suzume-sysroot/usr
 ```
+
+### HTTP regression tests
+
+`tests/http_regression.py` starts local HTTP and self-signed HTTPS fixtures; it
+needs no external websites, display server, or renderer dependencies. It tests
+compression, conditional GET/304 reuse, redirect header isolation, `no-store`,
+`Vary`, binary POST bodies, TLS rejection, bounded cache memory, and allocation
+failure cleanup. Run both configurations:
+
+```bash
+python3 tests/http_regression.py
+python3 tests/http_regression.py -O ReleaseSafe
+```
+
+Set `ZIG=/path/to/zig-0.16.0` if necessary; extra arguments are passed to `zig test`.
+The HTTP, Linux build/input, and macOS build/renderer/input checks fail on
+regressions. CSS auditing now actually runs the individual suites instead of
+silently passing zero tests; its existing failures are advisory and recorded
+in the roadmap. See [the development plan](docs/browser-roadmap.md) for
+remaining compatibility and performance work.
 
 ## Architecture
 

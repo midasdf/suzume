@@ -1,5 +1,6 @@
 const std = @import("std");
 const env = @import("../env.zig");
+const nsfb_c = @import("../bindings/nsfb.zig").c;
 const Surface = @import("../paint/surface.zig").Surface;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const TextRenderer = @import("../paint/text.zig").TextRenderer;
@@ -16,8 +17,21 @@ pub const content_y: i32 = url_bar_height + tab_bar_height;
 /// Default initial window size (used at Surface.init time).
 /// Large values let the WM/X server clamp to actual screen size.
 /// Override with SUZUME_WIDTH/SUZUME_HEIGHT env vars for testing.
-pub var default_window_w: i32 = 4096;
-pub var default_window_h: i32 = 4096;
+pub var default_window_w: i32 = if (@import("builtin").os.tag == .macos) 1200 else 4096;
+pub var default_window_h: i32 = if (@import("builtin").os.tag == .macos) 800 else 4096;
+
+pub const address_text_x: i32 = 112;
+pub const NavigationAction = enum { none, back, forward, reload };
+
+pub fn hitTestNavigation(x: i32, y: i32) NavigationAction {
+    if (y < 0 or y >= url_bar_height or x < 0 or x >= 102) return .none;
+    return switch (@divTrunc(x, 34)) {
+        0 => .back,
+        1 => .forward,
+        2 => .reload,
+        else => .none,
+    };
+}
 
 pub fn initWindowSize() void {
     if (env.get("SUZUME_WIDTH")) |w_str| {
@@ -87,6 +101,25 @@ pub fn paintUrlBar(surface: *Surface, fonts: *FontCache, input: *const TextInput
     // Border bottom
     surface.fillRect(0, url_bar_height - 1, surface.width, 1, Surface.argbToColour(url_bar_border));
 
+    // Navigation controls share their 34px spacing with hitTestNavigation.
+    const icon_colour = Surface.argbToColour(url_bar_text_color);
+    for ([_]i32{ 16, 50 }, 0..) |cx, i| {
+        surface.fillRect(cx - 6, 17, 12, 2, icon_colour);
+        var n: i32 = 0;
+        while (n < 6) : (n += 1) {
+            const x = if (i == 0) cx - 6 + n else cx + 5 - n;
+            surface.fillRect(x, 17 - n, 2, 2, icon_colour);
+            surface.fillRect(x, 17 + n, 2, 2, icon_colour);
+        }
+    }
+    surface.fillRect(77, 11, 12, 2, icon_colour);
+    surface.fillRect(77, 23, 12, 2, icon_colour);
+    surface.fillRect(77, 11, 2, 9, icon_colour);
+    surface.fillRect(87, 16, 2, 9, icon_colour);
+    surface.fillRect(84, 10, 6, 5, icon_colour);
+    surface.fillRect(76, 21, 6, 5, icon_colour);
+    surface.fillRect(102, 6, 1, url_bar_height - 12, Surface.argbToColour(url_bar_border));
+
     // Text
     const text = input.getText();
     if (text.len > 0) {
@@ -94,10 +127,28 @@ pub fn paintUrlBar(surface: *Surface, fonts: *FontCache, input: *const TextInput
         const tr = fonts.getRenderer(font_size) orelse return;
         const metrics = tr.measure(text);
         const text_y: i32 = @divTrunc(url_bar_height - metrics.height, 2) + metrics.ascent;
+        const cursor_width = tr.measure(text[0..input.cursor]).width;
+        const available_width = @max(surface.width - address_text_x - 12, 0);
+        const offset = if (input.focused) @max(cursor_width - available_width, 0) else 0;
+        const text_x = address_text_x - offset;
+        var old_clip: nsfb_c.nsfb_bbox_t = undefined;
+        _ = nsfb_c.nsfb_plot_get_clip(surface.fb, &old_clip);
+        var text_clip = nsfb_c.nsfb_bbox_t{ .x0 = address_text_x - 4, .y0 = 0, .x1 = surface.width - 6, .y1 = url_bar_height - 1 };
+        _ = nsfb_c.nsfb_plot_set_clip(surface.fb, &text_clip);
+        defer _ = nsfb_c.nsfb_plot_set_clip(surface.fb, &old_clip);
+
+        if (input.focused and input.selectedText().len > 0) {
+            const anchor = input.selection_anchor.?;
+            const start = @min(anchor, input.cursor);
+            const end = @max(anchor, input.cursor);
+            const selection_x = text_x + tr.measure(text[0..start]).width;
+            const selection_w = tr.measure(text[start..end]).width;
+            surface.fillRect(selection_x, 5, selection_w, url_bar_height - 10, Surface.argbToColour(0xFF454f80));
+        }
 
         tr.renderGlyphs(
             text,
-            8, // left padding
+            text_x, // keep the caret visible without painting over navigation
             text_y,
             BlitCtx,
             .{ .surface = surface, .colour = Surface.argbToColour(url_bar_text_color) },
@@ -110,14 +161,14 @@ pub fn paintUrlBar(surface: *Surface, fonts: *FontCache, input: *const TextInput
             const cursor_text = text[0..input.cursor];
             const cursor_x: i32 = if (cursor_text.len > 0) blk: {
                 const cm = tr.measure(cursor_text);
-                break :blk 8 + cm.width;
-            } else 8;
+                break :blk text_x + cm.width;
+            } else text_x;
 
             surface.fillRect(cursor_x, 6, 1, url_bar_height - 12, Surface.argbToColour(url_bar_cursor_color));
         }
     } else if (input.focused) {
         // Just cursor at start
-        surface.fillRect(8, 6, 1, url_bar_height - 12, Surface.argbToColour(url_bar_cursor_color));
+        surface.fillRect(address_text_x, 6, 1, url_bar_height - 12, Surface.argbToColour(url_bar_cursor_color));
     }
 }
 

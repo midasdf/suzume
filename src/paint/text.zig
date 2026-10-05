@@ -103,7 +103,18 @@ pub const TextRenderer = struct {
             _ = c.FT_Done_Face(face);
             return;
         }
+        if (self.fallback_face) |old| _ = c.FT_Done_Face(old);
         self.fallback_face = face;
+    }
+
+    // HarfBuzz clusters are UTF-8 byte offsets, not Unicode codepoints.
+    fn fallbackGlyph(self: *TextRenderer, text: []const u8, cluster: u32) c_uint {
+        const face = self.fallback_face orelse return 0;
+        if (cluster >= text.len) return 0;
+        const length = std.unicode.utf8ByteSequenceLength(text[cluster]) catch return 0;
+        if (length > text.len - cluster) return 0;
+        const codepoint = std.unicode.utf8Decode(text[cluster..][0..length]) catch return 0;
+        return c.FT_Get_Char_Index(face, codepoint);
     }
 
     /// Measure text dimensions using HarfBuzz shaping.
@@ -120,12 +131,21 @@ pub const TextRenderer = struct {
 
         var glyph_count: u32 = 0;
         const positions = c.hb_buffer_get_glyph_positions(buf, &glyph_count);
+        const infos = c.hb_buffer_get_glyph_infos(buf, &glyph_count);
 
         // Sum raw 26.6 fixed-point advances first, convert once at the end.
         // Truncating each glyph individually accumulates rounding error (~0.5px/glyph).
         var total_advance_26_6: i32 = 0;
         for (0..glyph_count) |i| {
-            total_advance_26_6 += positions[i].x_advance;
+            var advance = positions[i].x_advance;
+            if (infos[i].codepoint == 0) {
+                const glyph = self.fallbackGlyph(text, infos[i].cluster);
+                if (glyph != 0) {
+                    const face = self.fallback_face.?;
+                    if (c.FT_Load_Glyph(face, glyph, c.FT_LOAD_DEFAULT) == 0) advance = @intCast(face.*.glyph.*.advance.x);
+                }
+            }
+            total_advance_26_6 += advance;
         }
         const total_advance = @divTrunc(total_advance_26_6, 64);
 
@@ -181,14 +201,16 @@ pub const TextRenderer = struct {
 
             // Load and render the glyph (try fallback font for .notdef glyphs)
             var render_face = self.ft_face;
+            var advance = positions[i].x_advance;
             var load_ok = false;
             if (glyph_index == 0 and self.fallback_face != null) {
                 // Primary font missing this glyph — try fallback
                 // Map the original codepoint to the fallback font's glyph index
                 const fb_face = self.fallback_face.?;
-                const fb_glyph = c.FT_Get_Char_Index(fb_face, infos[i].cluster);
+                const fb_glyph = self.fallbackGlyph(text, infos[i].cluster);
                 if (fb_glyph != 0 and c.FT_Load_Glyph(fb_face, fb_glyph, c.FT_LOAD_RENDER | c.FT_LOAD_TARGET_LIGHT) == 0) {
                     render_face = fb_face;
+                    advance = @intCast(fb_face.*.glyph.*.advance.x);
                     load_ok = true;
                 }
             }
@@ -215,7 +237,7 @@ pub const TextRenderer = struct {
                 });
             }
 
-            pen_x_26_6 += positions[i].x_advance;
+            pen_x_26_6 += advance;
             pen_y += y_advance;
         }
     }
