@@ -30,7 +30,7 @@ jobs:
             libxcb1-dev libxcb-icccm4-dev libxcb-image0-dev \
             libxcb-keysyms1-dev libxcb-util-dev libxcb-cursor-dev libx11-dev \
             libcurl4-openssl-dev libsqlite3-dev libwebp-dev libbrotli-dev libwoff-dev \
-            libfontconfig-dev libfreetype-dev libharfbuzz-dev pkg-config
+            libfontconfig-dev libfreetype-dev libharfbuzz-dev fonts-dejavu-core pkg-config
 
       - name: Format check
         continue-on-error: true
@@ -43,7 +43,7 @@ jobs:
         run: zig build test-ui-input -Doptimize=ReleaseSafe
       - name: CSS regression tests
         run: zig build test-css -Doptimize=ReleaseSafe
-      - name: Production DOM and CSS cascade regressions
+      - name: Production DOM, CSS cascade and layout regressions
         run: zig build test-dom-style -Doptimize=ReleaseSafe
 
   http-regression:
@@ -57,7 +57,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev python3 openssl
       - name: Check changed Zig formatting
-        run: zig fmt --check build.zig src/net/http.zig
+        run: zig fmt --check build.zig src/net/http.zig src/net/websocket.zig
       - name: Offline HTTP and TLS regressions (Debug)
         run: python3 tests/http_regression.py
       - name: Offline HTTP and TLS regressions (ReleaseSafe)
@@ -90,8 +90,15 @@ jobs:
         run: |
           case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
           zig build test-css -Doptimize=ReleaseSafe -Dtarget="$arch-macos.15.0"
-      - name: Production DOM and CSS cascade regressions
+      - name: Production DOM, CSS cascade and layout regressions
         run: zig-out/Suzume.app/Contents/MacOS/suzume --test-dom
+      - name: Offline HTTP and WebSocket TLS regressions
+        env:
+          SUZUME_REQUIRE_WEBSOCKET: "1"
+        run: |
+          prefix="$(brew --prefix)"
+          python3 tests/http_regression.py -I"$prefix/opt/curl/include" -L"$prefix/opt/curl/lib"
+          python3 tests/http_regression.py -O ReleaseSafe -I"$prefix/opt/curl/include" -L"$prefix/opt/curl/lib"
       - name: Native window and input smoke tests
         run: |
           clang -fobjc-arc -I deps/libnsfb/include -I src/platform \

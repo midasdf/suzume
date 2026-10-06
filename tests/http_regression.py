@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Offline HTTP/TLS regression fixture. Usage: python3 tests/http_regression.py [zig flags]."""
+import base64
 import gzip
+import hashlib
 import http.server
 import os
 from pathlib import Path
@@ -13,11 +15,31 @@ import threading
 
 class Handler(http.server.BaseHTTPRequestHandler):
     revalidations = 0
+    websocket_upgrades = 0
+    secure_websocket_upgrades = 0
 
     def log_message(self, *_):
         pass
 
     def do_GET(self):
+        if self.path == "/ws":
+            key = self.headers["Sec-WebSocket-Key"]
+            assert key and self.headers.get("Upgrade", "").lower() == "websocket"
+            accept = base64.b64encode(hashlib.sha1(
+                (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
+            ).digest()).decode()
+            Handler.websocket_upgrades += 1
+            if isinstance(self.connection, ssl.SSLSocket):
+                Handler.secure_websocket_upgrades += 1
+            self.protocol_version = "HTTP/1.1"
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", accept)
+            self.end_headers()
+            self.wfile.write(b"\x81\x05hello")
+            self.wfile.flush()
+            return
         body = b"hello browser"
         if self.path == "/redirect":
             self.send_response(302)
@@ -80,12 +102,20 @@ def main():
             env = dict(os.environ,
                        SUZUME_TEST_ORIGIN=f"http://127.0.0.1:{plain.server_port}",
                        SUZUME_TEST_TLS_URL=f"https://127.0.0.1:{https.server_port}/plain",
+                       SUZUME_TEST_WS_URL=f"ws://127.0.0.1:{plain.server_port}/ws",
+                       SUZUME_TEST_WSS_URL=f"wss://127.0.0.1:{https.server_port}/ws",
                        NO_PROXY="127.0.0.1", no_proxy="127.0.0.1")
             subprocess.run([
                 os.environ.get("ZIG", "zig"), "test", "src/net/http.zig", "-lc", "-lcurl",
                 *sys.argv[1:],
             ], cwd=root, env=env, check=True)
             assert Handler.revalidations == 1, "304 revalidation did not run"
+            # Some distro curl builds do not include ws/wss: those two Zig
+            # integration cases explicitly report SkipZigTest, not a fake pass.
+            assert Handler.websocket_upgrades in (0, 1)
+            if os.environ.get("SUZUME_REQUIRE_WEBSOCKET") == "1":
+                assert Handler.websocket_upgrades == 1, "required WebSocket integration was skipped"
+            assert Handler.secure_websocket_upgrades == 0, "untrusted WSS upgraded despite TLS verification"
         finally:
             for server in servers:
                 server.shutdown()

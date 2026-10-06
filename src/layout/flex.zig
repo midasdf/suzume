@@ -78,7 +78,7 @@ const dom_api = @import("../js/dom_api.zig");
 pub fn layoutFlex(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
     const style = box.style;
     // Content position
-    const content_x = box.padding.left + box.border.left;
+    const content_x = box.margin.left + box.padding.left + box.border.left;
     box.content.x = content_x;
     box.content.y = cursor_y + box.padding.top + box.border.top;
 

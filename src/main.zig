@@ -417,9 +417,6 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
         return;
     };
 
-    // html root has no margin; body margin is applied via CSS cascade
-    new_root_box.margin = .{};
-
     // Layout with full viewport width
     const content_w: f32 = @floatFromInt(layout_width);
     block_layout.layoutBlockVp(new_root_box, content_w, 0, fonts, @floatFromInt(layout_height));
@@ -911,10 +908,6 @@ fn navigateTo(
             return false;
         };
 
-        // Apply body margin to the root box (html element has 0 margin by default)
-        // html root has no margin; body margin is applied via CSS cascade
-        root_box.margin = .{};
-
         const content_w: f32 = @floatFromInt(layout_width);
         block_layout.layoutBlockVp(root_box, content_w, 0, fonts, @floatFromInt(layout_height));
         sanitizeBoxGeometry(root_box);
@@ -978,9 +971,6 @@ fn navigateTo(
         doc.deinit();
         return false;
     };
-
-    // html root has no margin; body margin is applied via CSS cascade
-    root_box.margin = .{};
 
     // Layout with full viewport width
     const content_w: f32 = @floatFromInt(layout_width);

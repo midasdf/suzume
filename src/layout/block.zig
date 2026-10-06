@@ -286,7 +286,7 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 }
 
 /// Layout a block box with viewport height for resolving percent heights.
-pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, viewport_height: f32) void {
+pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts: *FontCache, viewport_height: f32) void {
     // Resolve percentage margins/padding against containing block width (CSS Box Model spec:
     // percentage margins and padding are always relative to containing block WIDTH, even vertical ones).
     if (box.style.margin_top_is_pct) box.margin.top = box.style.margin_top * containing_width / 100.0;
@@ -297,6 +297,8 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     if (box.style.padding_right_is_pct) box.padding.right = box.style.padding_right * containing_width / 100.0;
     if (box.style.padding_bottom_is_pct) box.padding.bottom = box.style.padding_bottom * containing_width / 100.0;
     if (box.style.padding_left_is_pct) box.padding.left = box.style.padding_left * containing_width / 100.0;
+    // A root has no parent flow algorithm to place its top margin.
+    const cursor_y = cursor_y_arg + if (box.parent == null) box.margin.top else @as(f32, 0);
 
     // Pre-resolve definite height for flex/grid containers so they can distribute space.
     // Must happen BEFORE delegation to flex/grid layout.
@@ -335,15 +337,26 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         else => {},
     }
 
+    // Delegated containers resolve their auto margins after sizing. Discard
+    // margins from an earlier layout before computing the new available width.
+    if (box.style.display == .flex or box.style.display == .inline_flex or
+        box.style.display == .grid or box.style.display == .table)
+    {
+        if (box.style.margin_left_auto) box.margin.left = 0;
+        if (box.style.margin_right_auto) box.margin.right = 0;
+    }
+
     // Delegate to flex layout if display is flex
     if (box.style.display == .flex or box.style.display == .inline_flex) {
         flex.layoutFlex(box, containing_width, cursor_y, fonts);
+        resolveContainerAutoMargins(box, containing_width);
         return;
     }
 
     // Grid layout
     if (box.style.display == .grid or box.style.display == .inline_grid) {
         grid.layoutGrid(box, containing_width, cursor_y, fonts);
+        resolveContainerAutoMargins(box, containing_width);
         return;
     }
 
@@ -354,22 +367,14 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         if (box.style.overflow_x != .visible and box.content.width > containing_width) {
             box.content.width = containing_width;
         }
-        // Apply margin:auto centering for tables (e.g. <center><table width="85%">)
-        if (box.style.margin_left_auto and box.style.margin_right_auto) {
-            const remaining = @max(containing_width - box.content.width -
-                box.padding.left - box.padding.right -
-                box.border.left - box.border.right, 0);
-            const auto_margin = remaining / 2.0;
-            box.margin.left = auto_margin;
-            box.margin.right = auto_margin;
-            adjustXPositions(box, auto_margin);
-        }
+        resolveContainerAutoMargins(box, containing_width);
         return;
     }
 
-    // Content x starts after padding + border (left side).
+    // Content starts inside the margin, border and padding. Auto-margin
+    // branches below replace the margin offset rather than adding it twice.
     const content_x = box.padding.left + box.border.left;
-    box.content.x = content_x;
+    box.content.x = content_x + box.margin.left;
     box.content.y = cursor_y + box.padding.top + box.border.top;
 
     // Compute content width based on box-sizing model
@@ -761,11 +766,31 @@ fn createsBfc(style: ComputedStyle) bool {
     return false;
 }
 
-/// Layout children in block formatting context (all children are block-level).
+fn resolveContainerAutoMargins(box: *Box, containing_width: f32) void {
+    if (box.style.display == .inline_flex) return;
+    if (box.parent) |parent| {
+        // Flex/grid item margins are distributed by their parent's algorithm.
+        if (parent.style.display == .flex or parent.style.display == .inline_flex or
+            parent.style.display == .grid) return;
+    }
+    if (!box.style.margin_left_auto and !box.style.margin_right_auto) return;
+    const old_left = box.margin.left;
+    const remaining = @max(containing_width - box.content.width -
+        box.padding.left - box.padding.right - box.border.left - box.border.right -
+        box.margin.left - box.margin.right, 0);
+    if (box.style.margin_left_auto and box.style.margin_right_auto) {
+        box.margin.left = remaining / 2;
+        box.margin.right = remaining / 2;
+    } else if (box.style.margin_left_auto) {
+        box.margin.left = remaining;
+    } else {
+        box.margin.right = remaining;
+    }
+    adjustXPositions(box, box.margin.left - old_left);
+}
+
 /// Re-layout a box's block children with a definite containing height.
-/// Used by flex layout (CSS Flexbox L1 §9.4, CSS Sizing L3 §5.3) after
-/// determining a flex item's definite cross size via stretch alignment,
-/// so that percentage heights in the item's descendants resolve correctly.
+/// Used by flex layout after determining a flex item's definite cross size.
 /// Does NOT change the box's own `content.height`.
 pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, containing_height: f32) void {
     // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3: re-layout the item's block

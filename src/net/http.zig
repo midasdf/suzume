@@ -8,13 +8,18 @@ const c = @cImport({
 // 0 = uninitialized, 1 = initializing, 2 = ready, 3 = failed.
 var curl_init_state = std.atomic.Value(u8).init(0);
 
-fn initCurl() !void {
+pub fn initCurl() !void {
     if (curl_init_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null) {
         const rc = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
         curl_init_state.store(if (rc == c.CURLE_OK) 2 else 3, .release);
     }
     while (curl_init_state.load(.acquire) == 1) std.atomic.spinLoopHint();
     if (curl_init_state.load(.acquire) != 2) return error.CurlGlobalInitFailed;
+}
+
+// Discover WebSocket regressions in the same root as the HTTP fixture tests.
+comptime {
+    if (builtin.is_test) _ = @import("websocket.zig");
 }
 
 const ua_string = "Mozilla/5.0 (X11; Linux " ++ @tagName(builtin.cpu.arch) ++ ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";

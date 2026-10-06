@@ -50,7 +50,7 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
     const style = box.style;
 
     // Content area
-    box.content.x = box.padding.left + box.border.left;
+    box.content.x = box.margin.left + box.padding.left + box.border.left;
     box.content.y = cursor_y + box.padding.top + box.border.top;
     const h_space = box.margin.left + box.margin.right + box.padding.left + box.padding.right + box.border.left + box.border.right;
     const explicit_w = switch (style.width) {

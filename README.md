@@ -122,13 +122,14 @@ python3 tests/http_regression.py  # offline HTTP/TLS integration tests (requires
 zig build -Dtarget=aarch64-linux-gnu.2.38 -Doptimize=ReleaseFast --search-prefix ~/suzume-sysroot/usr
 ```
 
-### HTTP regression tests
+### HTTP and WebSocket regression tests
 
 `tests/http_regression.py` starts local HTTP and self-signed HTTPS fixtures; it
 needs no external websites, display server, or renderer dependencies. It tests
 compression, conditional GET/304 reuse, redirect header isolation, `no-store`,
 `Vary`, binary POST bodies, TLS rejection, bounded cache memory, and allocation
-failure cleanup. Run both configurations:
+failure cleanup, WebSocket frame metadata, and self-signed WSS rejection.
+Run both configurations:
 
 ```bash
 python3 tests/http_regression.py
@@ -136,6 +137,9 @@ python3 tests/http_regression.py -O ReleaseSafe
 ```
 
 Set `ZIG=/path/to/zig-0.16.0` if necessary; extra arguments are passed to `zig test`.
+For Homebrew curl, add `-I$(brew --prefix curl)/include -L$(brew --prefix curl)/lib`.
+Curl builds without ws/wss explicitly skip two integration cases; macOS CI requires
+all nine cases.
 The HTTP, CSS, Linux build/input, and macOS build/renderer/input checks fail on
 regressions. CSS testing now executes the actual suites (including CSSOM)
 instead of silently passing zero tests: 363 tests pass in Debug and ReleaseSafe.

@@ -151,6 +151,9 @@ pub fn buildBoxTree(
     // Apply body style
     if (styles.getStyle(body_node)) |s| {
         root_box.style = s;
+        root_box.margin = .{ .top = s.margin_top, .right = s.margin_right, .bottom = s.margin_bottom, .left = s.margin_left };
+        root_box.padding = .{ .top = s.padding_top, .right = s.padding_right, .bottom = s.padding_bottom, .left = s.padding_left };
+        root_box.border = .{ .top = s.border_top_width, .right = s.border_right_width, .bottom = s.border_bottom_width, .left = s.border_left_width };
     }
 
     // Build children
@@ -222,7 +225,7 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
                     const anon = try allocator.create(Box);
                     anon.* = .{};
                     anon.box_type = .anonymous_block;
-                    anon.style = parent.style;
+                    cascade_mod.inheritAll(&anon.style, &parent.style);
                     anon.style.display = .block;
                     anon.style.background_color = 0x00000000;
                     anon.style.margin_top = 0;
@@ -282,7 +285,9 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
                 const anon = try allocator.create(Box);
                 anon.* = .{};
                 anon.box_type = .anonymous_block;
-                anon.style = parent.style;
+                // Anonymous boxes inherit text properties, not borders,
+                // opacity, positioning or other non-inherited parent state.
+                cascade_mod.inheritAll(&anon.style, &parent.style);
                 anon.style.display = .block; // anonymous blocks are always block-level
                 anon.style.background_color = 0x00000000; // transparent
                 // Reset box-model properties (anonymous blocks don't have their own margins/padding)

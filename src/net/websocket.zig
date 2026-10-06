@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("curl/curl.h");
     @cInclude("curl/websockets.h");
+    @cInclude("stdlib.h");
 });
 
 const ua_string = "suzume/1.0";
@@ -29,8 +30,13 @@ pub const WebSocket = struct {
     allocator: std.mem.Allocator,
 
     pub fn connect(allocator: std.mem.Allocator, url: [:0]const u8) !WebSocket {
+        if (!std.ascii.startsWithIgnoreCase(url, "ws://") and
+            !std.ascii.startsWithIgnoreCase(url, "wss://")) return error.InvalidWebSocketScheme;
+        try @import("http.zig").initCurl();
         const handle = c.curl_easy_init() orelse return error.CurlInitFailed;
+        errdefer c.curl_easy_cleanup(handle);
 
+        _ = c.curl_easy_setopt(handle, c.CURLOPT_PROTOCOLS_STR, @as([*c]const u8, "ws,wss"));
         _ = c.curl_easy_setopt(handle, c.CURLOPT_URL, url.ptr);
         _ = c.curl_easy_setopt(handle, c.CURLOPT_USERAGENT, @as([*c]const u8, ua_string));
         // CONNECT_ONLY=2 enables WebSocket upgrade
@@ -40,20 +46,9 @@ pub const WebSocket = struct {
         _ = c.curl_easy_setopt(handle, c.CURLOPT_TIMEOUT, @as(c_long, 10));
 
         const rc = c.curl_easy_perform(handle);
-        if (rc != c.CURLE_OK) {
-            // Try without SSL peer verification
-            if (rc == c.CURLE_SSL_CACERT or rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_SSL_CERTPROBLEM) {
-                _ = c.curl_easy_setopt(handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0));
-                const rc2 = c.curl_easy_perform(handle);
-                if (rc2 != c.CURLE_OK) {
-                    c.curl_easy_cleanup(handle);
-                    return error.WsConnectFailed;
-                }
-            } else {
-                c.curl_easy_cleanup(handle);
-                return error.WsConnectFailed;
-            }
-        }
+        if (rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_SSL_CERTPROBLEM)
+            return error.CertificateVerificationFailed;
+        if (rc != c.CURLE_OK) return error.WsConnectFailed;
 
         return WebSocket{
             .handle = handle,
@@ -67,7 +62,7 @@ pub const WebSocket = struct {
         if (self.state != .open) return error.WsNotOpen;
         var sent: usize = 0;
         const rc = c.curl_ws_send(self.handle, data.ptr, data.len, &sent, 0, c.CURLWS_TEXT);
-        if (rc != c.CURLE_OK) return error.WsSendFailed;
+        if (rc != c.CURLE_OK or sent != data.len) return error.WsSendFailed;
     }
 
     /// Send a binary message.
@@ -75,7 +70,7 @@ pub const WebSocket = struct {
         if (self.state != .open) return error.WsNotOpen;
         var sent: usize = 0;
         const rc = c.curl_ws_send(self.handle, data.ptr, data.len, &sent, 0, c.CURLWS_BINARY);
-        if (rc != c.CURLE_OK) return error.WsSendFailed;
+        if (rc != c.CURLE_OK or sent != data.len) return error.WsSendFailed;
     }
 
     /// Send a close frame.
@@ -93,10 +88,10 @@ pub const WebSocket = struct {
 
         var buf: [65536]u8 = undefined;
         var nread: usize = 0;
-        const meta: ?*const c.struct_curl_ws_frame = null;
-        _ = meta;
-
-        const rc = c.curl_ws_recv(self.handle, &buf, buf.len, &nread, null);
+        var frame_meta: [*c]const c.struct_curl_ws_frame = null;
+        // curl_ws_recv requires a metadata output pointer, even if the caller
+        // only wants the payload. curl_ws_meta is for callback-mode receives.
+        const rc = c.curl_ws_recv(self.handle, &buf, buf.len, &nread, &frame_meta);
 
         if (rc == c.CURLE_AGAIN) {
             // No data available (non-blocking)
@@ -107,17 +102,14 @@ pub const WebSocket = struct {
             self.state = .closed;
             return null;
         }
-        if (nread == 0) return null;
-
-        // Check frame metadata
-        const frame_meta: ?*const c.struct_curl_ws_frame = c.curl_ws_meta(self.handle);
-        const is_text = if (frame_meta) |fm| (fm.*.flags & c.CURLWS_TEXT) != 0 else true;
-        const is_close = if (frame_meta) |fm| (fm.*.flags & c.CURLWS_CLOSE) != 0 else false;
+        const is_text = frame_meta != null and (frame_meta.*.flags & c.CURLWS_TEXT) != 0;
+        const is_close = frame_meta != null and (frame_meta.*.flags & c.CURLWS_CLOSE) != 0;
 
         if (is_close) {
             self.state = .closed;
             return null;
         }
+        if (nread == 0) return null;
 
         const data = self.allocator.alloc(u8, nread) catch return null;
         @memcpy(data, buf[0..nread]);
@@ -135,3 +127,53 @@ pub const WebSocket = struct {
         self.state = .closed;
     }
 };
+
+fn requireWebSocketSupport() !void {
+    try @import("http.zig").initCurl();
+    const info = c.curl_version_info(c.CURLVERSION_NOW) orelse return error.SkipZigTest;
+    var index: usize = 0;
+    var ws = false;
+    var wss = false;
+    while (info.*.protocols[index] != null) : (index += 1) {
+        const protocol = std.mem.span(info.*.protocols[index]);
+        ws = ws or std.mem.eql(u8, protocol, "ws");
+        wss = wss or std.mem.eql(u8, protocol, "wss");
+    }
+    if (!ws or !wss) return error.SkipZigTest;
+}
+
+test "WebSocket refuses non-WebSocket schemes before connecting" {
+    try std.testing.expectError(error.InvalidWebSocketScheme, WebSocket.connect(std.testing.allocator, "https://example.com"));
+    try std.testing.expectError(error.InvalidWebSocketScheme, WebSocket.connect(std.testing.allocator, "file:///etc/passwd"));
+}
+
+test "local WebSocket receives text with required frame metadata" {
+    const url = c.getenv("SUZUME_TEST_WS_URL");
+    if (url == null) return error.SkipZigTest;
+    try requireWebSocketSupport();
+    var ws = try WebSocket.connect(std.testing.allocator, std.mem.span(url));
+    defer ws.deinit();
+    for (0..100) |_| {
+        if (ws.recv()) |message| {
+            var owned = message;
+            defer owned.deinit();
+            try std.testing.expect(owned.is_text);
+            try std.testing.expectEqualStrings("hello", owned.data);
+            return;
+        }
+        try std.Io.sleep(std.testing.io, .fromMilliseconds(10), .awake);
+    }
+    return error.MissingWebSocketMessage;
+}
+
+test "local WSS rejects a self-signed certificate without insecure retry" {
+    const url = c.getenv("SUZUME_TEST_WSS_URL");
+    if (url == null) return error.SkipZigTest;
+    try requireWebSocketSupport();
+    var ws = WebSocket.connect(std.testing.allocator, std.mem.span(url)) catch |err| {
+        try std.testing.expectEqual(error.CertificateVerificationFailed, err);
+        return;
+    };
+    defer ws.deinit();
+    return error.UntrustedWebSocketAccepted;
+}

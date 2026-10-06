@@ -115,9 +115,9 @@ open zig-out/Suzume.app --args http://127.0.0.1:18765/macos-smoke.html
 - Native title tracking, downloads, file dialogs, per-tab history correctness,
   accessibility tree and cancellation-aware asynchronous document loading remain
   priorities.
-- HTTP certificate verification is strict, but other security boundaries still
-  need audit; notably the existing WebSocket insecure retry is not fixed here.
-  Do not use sensitive accounts yet.
+- HTTP and WebSocket certificate verification are strict, with no insecure TLS
+  retry. Other security boundaries and WebSocket fragmentation/backpressure still
+  need audit. Do not use sensitive accounts yet.
 
 See [the browser roadmap](browser-roadmap.md) for measurement and compatibility
 priorities. No world-fastest/lightest claim has been established.

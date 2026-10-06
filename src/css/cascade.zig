@@ -1348,7 +1348,7 @@ fn collectInlineDecls(
 
 // ── Inheritance ──────────────────────────────────────────────────────
 
-fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
+pub fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
     style.color = parent.color;
     style.color_set_by_css = parent.color_set_by_css;
     style.font_family = parent.font_family;
@@ -1750,11 +1750,18 @@ fn applyDeclaration(
         .line_height => {
             if (eqlIgnoreCase(trimmed, "normal")) {
                 style.line_height = .normal;
-            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
-                style.line_height = .{ .px = px };
             } else if (std.fmt.parseFloat(f32, trimmed)) |n| {
-                style.line_height = .{ .number = n };
-            } else |_| {}
+                // Unitless numbers are font-size multipliers, not pixel lengths.
+                if (std.math.isFinite(n) and n >= 0) style.line_height = .{ .number = n };
+            } else |_| {
+                if (std.mem.endsWith(u8, trimmed, "%")) {
+                    const pct = std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1]) catch return;
+                    const px = fs * pct / 100;
+                    if (std.math.isFinite(px) and px >= 0) style.line_height = .{ .px = px };
+                } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                    if (std.math.isFinite(px) and px >= 0) style.line_height = .{ .px = px };
+                }
+            }
         },
         .letter_spacing => {
             if (eqlIgnoreCase(trimmed, "normal")) {

@@ -133,7 +133,12 @@ pub fn main() !void {
     for (0..300) |_| try large_css.appendSlice(allocator, ".a { color: red; }\n");
     try large_css.appendSlice(allocator, ".a { color: blue; }");
     try expectTargetColor(large_css.items, 0xff0000ff);
-    std.debug.print("PASS: 7 production CSS cascade regressions\n", .{});
+    try expectTargetLineHeight(".a { font-size: 16px; line-height: 1.6; }", .{ .number = 1.6 });
+    try expectTargetLineHeight(".a { font-size: 16px; line-height: 150%; }", .{ .px = 24 });
+    try expectTargetLineHeight(".a { line-height: 20px; }", .{ .px = 20 });
+    try expectTargetLineHeight(".a { line-height: -2; }", .normal);
+    std.debug.print("PASS: 11 production CSS cascade regressions\n", .{});
+    try @import("test_block_layout.zig").run(allocator);
 }
 
 fn expectTargetColor(css: []const u8, expected: u32) !void {
@@ -146,4 +151,16 @@ fn expectTargetColor(css: []const u8, expected: u32) !void {
     defer result.deinit();
     const style = result.getStyle(target) orelse return error.MissingComputedStyle;
     try std.testing.expectEqual(expected, style.color);
+}
+
+fn expectTargetLineHeight(css: []const u8, expected: ComputedStyle.LineHeight) !void {
+    var doc = try Document.parse("<!doctype html><html><body><div class='a'>target</div></body></html>");
+    defer doc.deinit();
+    const root = doc.root() orelse return error.MissingRoot;
+    const body = doc.body() orelse return error.MissingBody;
+    const target = body.firstElementChild() orelse return error.MissingTarget;
+    var result = try cascade_mod.cascade(root, std.heap.c_allocator, css, 720, 720);
+    defer result.deinit();
+    const style = result.getStyle(target) orelse return error.MissingComputedStyle;
+    try std.testing.expectEqual(expected, style.line_height);
 }

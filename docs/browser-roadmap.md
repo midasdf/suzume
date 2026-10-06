@@ -18,6 +18,9 @@
   containing no-store, Vary or Set-Cookie. Uncacheable replacements invalidate
   old entries. Allocations roll back on failure and cache teardown frees all data.
 - Offline HTTP/TLS regression fixtures and fail-on-error CI were added.
+- WebSockets share process-wide curl initialization, only accept ws/wss, and
+  never retry certificate errors with TLS verification disabled. Receive calls
+  now supply required frame metadata; incomplete sends no longer report success.
 
 ### Native macOS GUI
 
@@ -54,6 +57,19 @@
   same nearest-byte quantization.
 - CSS regression checks are now blocking on Linux and macOS CI.
 
+### Layout and native paint
+
+- Fixed lost horizontal margins for block, flex, grid and table containers,
+  including negative/percentage margins and nested positioning. Root box edges
+  now come from CSS; navigation/reflow no longer erase authored html margins.
+- Unitless line-height now multiplies font size rather than becoming tiny pixel
+  heights; percentage line-height resolves against font size. Anonymous boxes
+  inherit text properties, not parent borders, positioning or opacity.
+- Flex/grid/table auto margins resolve after sizing; repeated resize discards
+  old resolved auto margins instead of shrinking or shifting boxes twice.
+- Added production geometry assertions and an offline packaged-GUI PNG test
+  that checks exact marker colors, area and position through real layout/paint.
+
 ## Verification
 
 Locally verified on an Apple Silicon Mac using Zig 0.16.0:
@@ -64,16 +80,21 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
   testing-allocator leak checks, including 99 CSSOM tests previously not run,
   nine new nesting/selector fixtures and cascade-priority regressions. This is
   a regression baseline, not proof of complete CSS standards compatibility.
-- Packaged-browser DOM/CSS integration assertions pass for seven additional
+- Packaged-browser DOM/CSS integration assertions pass for 11 additional
   fixtures: nesting, trailing declarations, !important specificity, parent-list
-  specificity, nested/media conditional groups and a 301-rule stylesheet.
-- Offline HTTP/TLS tests in Debug and ReleaseSafe: six tests each, including
-  compression, 304 reuse, redirects, no-store/Vary, binary POST, self-signed TLS
-  rejection, memory budgets and allocation-failure injection.
+  specificity, conditional groups, a 301-rule stylesheet and line-height.
+- Production geometry: 18 cases pass, covering block/flex/grid/table margins,
+  root box edges, real font line metrics and anonymous-box inheritance.
+- Offline HTTP/WebSocket tests in Debug and ReleaseSafe: nine tests each with
+  Homebrew curl, including compression, 304 reuse, redirects, no-store/Vary,
+  binary POST, self-signed HTTPS/WSS rejection, WebSocket text/frame metadata,
+  memory budgets and allocation-failure injection. Builds without curl ws/wss
+  explicitly skip the two WebSocket integration cases; macOS CI requires them.
 - AppKit smoke test: actual color/orientation presentation, input/modifiers, IME
   callback commits, CoreText font files, clipboard, resize and quit lifecycle.
 - Packaged browser screenshots of a local Japanese/form/link fixture and
-  about:blank, plus full-GUI fresh-profile/default-homepage smoke tests.
+  about:blank, plus full-GUI fresh-profile/default-homepage and exact-pixel
+  block/flex/grid margin smoke tests.
 
 The local stripped bundle is approximately **10 MiB**, including six embedded
 dylibs; its zip is approximately **3.7 MiB**. These are build-artifact sizes, not memory
@@ -96,9 +117,9 @@ See [macOS instructions](macos.md) for remaining GUI limitations.
 3. **Native UX**: Retina-resolution text/layout, caret-aligned IME candidates and
    inline preedit, consistent selection across find/forms, horizontal gestures,
    native title updates, file dialogs and accessibility.
-4. **Security boundaries**: remove the remaining WebSocket insecure TLS retry;
-   audit cookies (domain/path/HttpOnly/Secure), origin isolation, fetch/CORS,
-   mixed content and credential forwarding. Do not use sensitive accounts yet.
+4. **Security boundaries**: audit cookies (domain/path/HttpOnly/Secure), origin
+   isolation, fetch/CORS, mixed content and credential forwarding. Expand
+   WebSocket fragmentation/backpressure coverage. Do not use sensitive accounts yet.
 5. **Responsiveness**: main-thread document/script/style fetching still blocks.
    Add cancellation-aware asynchronous loading while preserving script ordering;
    reduce unnecessary whole-page style/layout/paint work.
