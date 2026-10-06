@@ -94,7 +94,10 @@ pub fn run(allocator: std.mem.Allocator) !void {
     try textLineMetrics(allocator);
     try anonymousBoxStyles(allocator);
     try rootBoxModel(allocator, &fonts);
-    std.debug.print("PASS: 18 production margin/layout regressions\n", .{});
+    try verticalMargins(allocator, &fonts);
+    try preformattedRelayout(allocator);
+    try blockAlignmentAndHeight(allocator, &fonts);
+    std.debug.print("PASS: 27 production margin/layout regressions\n", .{});
 }
 
 fn textLineMetrics(allocator: std.mem.Allocator) !void {
@@ -169,4 +172,91 @@ fn rootBoxModel(allocator: std.mem.Allocator, fonts: *FontCache) !void {
     try std.testing.expectEqual(@as(f32, 11), box.content.y);
     try std.testing.expectEqual(@as(f32, 0), box.marginBox().x);
     try std.testing.expectEqual(@as(f32, 0), box.marginBox().y);
+}
+
+fn verticalMargins(allocator: std.mem.Allocator, fonts: *FontCache) !void {
+    const cases = [_]struct { bottom: f32, top: f32, gap: f32 }{
+        .{ .bottom = 30, .top = 20, .gap = 30 },
+        .{ .bottom = -10, .top = -20, .gap = -20 },
+        .{ .bottom = 30, .top = -10, .gap = 20 },
+    };
+    for (cases) |case| {
+        var parent = Box{};
+        defer parent.children.deinit(allocator);
+        var first = Box{ .parent = &parent, .style = .{ .height = .{ .px = 20 }, .margin_bottom = case.bottom } };
+        var second = Box{ .parent = &parent, .style = .{ .display = .flex, .height = .{ .px = 20 }, .margin_top = case.top }, .margin = .{ .top = case.top } };
+        try parent.children.append(allocator, &first);
+        try parent.children.append(allocator, &second);
+        block.layoutBlock(&parent, 400, 0, fonts);
+        try std.testing.expectEqual(case.gap, second.content.y - first.content.y - first.content.height);
+    }
+    for ([_]f32{ 24, -4 }) |leaf_margin| {
+        var root = Box{};
+        defer root.children.deinit(allocator);
+        var middle = Box{ .parent = &root, .style = .{ .margin_top = 8 }, .margin = .{ .top = 8 } };
+        defer middle.children.deinit(allocator);
+        var leaf = Box{ .parent = &middle, .style = .{ .height = .{ .px = 20 }, .margin_top = leaf_margin }, .margin = .{ .top = leaf_margin } };
+        try root.children.append(allocator, &middle);
+        try middle.children.append(allocator, &leaf);
+        const expected: f32 = if (leaf_margin > 0) 24 else 4;
+        for (0..10) |_| {
+            block.layoutBlock(&root, 400, 0, fonts);
+            try std.testing.expectEqual(expected, middle.content.y);
+            try std.testing.expectEqual(expected, leaf.content.y);
+        }
+        // A later style change must not retain the previously collapsed value.
+        leaf.style.margin_top = 0;
+        block.layoutBlock(&root, 400, 0, fonts);
+        try std.testing.expectEqual(@as(f32, 8), middle.content.y);
+    }
+}
+
+fn blockAlignmentAndHeight(allocator: std.mem.Allocator, fonts: *FontCache) !void {
+    for ([_]@import("css/computed.zig").ComputedStyle.TextAlign{ .center, .right }) |text_align| {
+        var root = Box{ .style = .{ .text_align = text_align } };
+        defer root.children.deinit(allocator);
+        var child = Box{ .parent = &root, .style = .{ .width = .{ .px = 100 }, .height = .{ .px = 20 } } };
+        try root.children.append(allocator, &child);
+        block.layoutBlock(&root, 400, 0, fonts);
+        try std.testing.expectEqual(@as(f32, 0), child.content.x);
+    }
+    var root = Box{};
+    defer root.children.deinit(allocator);
+    var fixed = Box{ .parent = &root, .style = .{ .height = .{ .px = 100 } } };
+    defer fixed.children.deinit(allocator);
+    var inside = Box{ .parent = &fixed, .style = .{ .height = .{ .px = 20 }, .margin_bottom = 30 } };
+    var after = Box{ .parent = &root, .style = .{ .height = .{ .px = 20 } } };
+    try root.children.append(allocator, &fixed);
+    try root.children.append(allocator, &after);
+    try fixed.children.append(allocator, &inside);
+    block.layoutBlock(&root, 400, 0, fonts);
+    try std.testing.expectEqual(@as(f32, 100), after.content.y);
+    try std.testing.expectEqual(@as(f32, 0), fixed.margin.bottom);
+}
+
+fn preformattedRelayout(allocator: std.mem.Allocator) !void {
+    const resolver = @import("paint/font_resolver.zig");
+    const path = resolver.resolve(allocator, "sans-serif") orelse return error.MissingTestFont;
+    defer allocator.free(path);
+    var fonts = FontCache.init(allocator, path);
+    defer fonts.deinit();
+    var root = Box{};
+    defer root.children.deinit(allocator);
+    var child = Box{ .parent = &root, .box_type = .inline_text, .text = "one\ntwo", .style = .{
+        .font_size_px = 16,
+        .line_height = .{ .px = 20 },
+        .white_space = .pre,
+    } };
+    defer child.lines.deinit(allocator);
+    try root.children.append(allocator, &child);
+    block.layoutBlock(&root, 400, 0, &fonts);
+    try std.testing.expectEqual(@as(f32, 40), root.content.height);
+    try std.testing.expectEqual(@as(usize, 2), child.lines.items.len);
+    const storage = child.lines.items.ptr;
+    for (0..100) |_| {
+        block.layoutBlock(&root, 200, 0, &fonts);
+        try std.testing.expectEqual(@as(f32, 40), root.content.height);
+        try std.testing.expect(child.lines.items.ptr == storage);
+        try std.testing.expectEqualStrings("two", child.lines.items[1].text);
+    }
 }

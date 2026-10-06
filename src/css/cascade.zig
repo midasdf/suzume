@@ -90,9 +90,8 @@ const ua_stylesheet_text =
     \\a { color: #0000EE; text-decoration: underline; display: inline; }
     \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp, time, mark,
     \\data, output, wbr, ruby, rt, rp, bdi, bdo, label { display: inline; }
-    \\pre { white-space: pre; font-family: monospace; }
-    \\code { font-family: monospace; display: inline; white-space: pre; }
-    \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
+    \\pre { display: block; white-space: pre; font-family: monospace; margin-top: 1em; margin-bottom: 1em; }
+    \\code { font-family: monospace; display: inline; }
     \\hr { border-top-width: 1px; border-top-style: solid; border-top-color: #808080; margin-top: 8px; margin-bottom: 8px; }
     \\p { margin-top: 1em; margin-bottom: 1em; }
     \\blockquote { margin-left: 40px; margin-right: 40px; margin-top: 1em; margin-bottom: 1em;
@@ -289,7 +288,6 @@ pub fn cascade(
 /// Priority: higher key = higher priority. Unlayered = 0xFFFF (all sentinels).
 /// Example: [0] = 0x0FFF, [0,0] = 0x00FF, [1] = 0x1FFF
 /// Comparison: parent [0] > child [0,0], later sibling [1] > [0]
-
 pub const UNLAYERED_KEY: u16 = 0xFFFF;
 
 fn makeTopLevelLayerKey(index: u4) u16 {
@@ -1311,7 +1309,10 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .align_items => style.align_items = parent.align_items,
         .align_self => style.align_self = parent.align_self,
         .align_content => style.align_content = parent.align_content,
-        .gap => { style.gap = parent.gap; style.row_gap = parent.row_gap; },
+        .gap => {
+            style.gap = parent.gap;
+            style.row_gap = parent.row_gap;
+        },
         .row_gap => style.row_gap = parent.row_gap,
         .column_gap => style.gap = parent.gap,
         .min_width => style.min_width = parent.min_width,
@@ -1567,7 +1568,8 @@ fn applyDeclaration(
             // We only support solid rendering currently; value is valid as long as parseable
             if (eqlIgnoreCase(trimmed, "solid") or eqlIgnoreCase(trimmed, "double") or
                 eqlIgnoreCase(trimmed, "dotted") or eqlIgnoreCase(trimmed, "dashed") or
-                eqlIgnoreCase(trimmed, "wavy")) {}
+                eqlIgnoreCase(trimmed, "wavy"))
+            {}
         },
         .text_decoration_thickness => {
             if (eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "from-font")) {

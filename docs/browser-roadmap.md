@@ -86,12 +86,18 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
   testing-allocator leak checks, including 99 CSSOM tests previously not run,
   nine new nesting/selector fixtures and cascade-priority regressions. This is
   a regression baseline, not proof of complete CSS standards compatibility.
-- Packaged-browser DOM/CSS integration assertions pass for 16 additional
+- Packaged-browser DOM/CSS integration assertions pass for 17 additional
   fixtures: nesting, trailing declarations, !important specificity, parent-list
   specificity, conditional groups, a 301-rule stylesheet, line-height, distinct
-  ancestor/attribute contexts, inherited fonts and retained variable scopes.
-- Production geometry: 18 cases pass, covering block/flex/grid/table margins,
-  root box edges, real font line metrics and anonymous-box inheritance.
+  ancestor/attribute contexts, inherited fonts, retained variable scopes and
+  standard pre/code defaults.
+- Production geometry: 27 cases pass, covering block/flex/grid/table margins,
+  root box edges, real font line metrics, anonymous-box inheritance, signed and
+  BFC-sibling margin collapse, nested/repeated layout, fixed-height boundaries,
+  text-align versus block positioning, pre height and line-buffer reuse.
+- Renderer/input/CSS combined: 371 tests pass in Debug and ReleaseSafe.
+  Text metric tests verify exact-byte ownership, eviction, fallback invalidation
+  and bounded scratch-buffer retention.
 - Offline HTTP/WebSocket tests in Debug and ReleaseSafe: nine tests each with
   Homebrew curl, including compression, 304 reuse, redirects, no-store/Vary,
   binary POST, self-signed HTTPS/WSS rejection, WebSocket text/frame metadata,

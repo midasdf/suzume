@@ -5,7 +5,25 @@
 html { margin-left: 16px; margin-top: 12px; }
 body { margin: 0; background: white; }
 .marker { margin-left: 24px; width: 40px; height: 20px; background: #12ab34; }
+.sample { margin-left: 24px; width: 40px; height: 20px; }
+.positive-start { margin-bottom: 30px; background: #1122aa; }
+.positive-end { display: flex; margin-top: 20px; background: #ee5500; }
+.negative-start { height: 60px; margin-bottom: -10px; background: #556677; }
+.negative-end { display: flex; margin-top: -20px; background: #ff0088; }
+pre { margin: 0; line-height: 20px; }
+.after-pre { background: #00bbcc; }
 </style>
 <div class="marker"></div>
 <div class="marker" style="display: flex"></div>
 <div class="marker" style="display: grid"></div>
+<div class="sample positive-start"></div>
+<div class="sample positive-end"></div>
+<div class="sample negative-start"></div>
+<div class="sample negative-end"></div>
+<pre>one
+two</pre>
+<div class="sample after-pre"></div>
+<div style="text-align: center"><div class="sample" style="background: #aabb00"></div></div>
+<div style="text-align: right"><div class="sample" style="background: #bb00aa"></div></div>
+<div style="height: 100px"><div style="height: 20px; margin-bottom: 30px"></div></div>
+<div class="sample" style="background: #aabbcc"></div>

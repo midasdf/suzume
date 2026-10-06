@@ -47,6 +47,8 @@ jobs:
         run: zig build test-dom-style -Doptimize=ReleaseSafe
       - name: Headless CSS benchmark smoke (no performance threshold)
         run: python3 tests/cascade_benchmark.py --repeat 1
+      - name: Text measurement benchmark and advance checks
+        run: zig-out/bin/suzume --bench-text
 
   http-regression:
     runs-on: ubuntu-24.04
@@ -96,6 +98,8 @@ jobs:
         run: zig-out/Suzume.app/Contents/MacOS/suzume --test-dom
       - name: Headless CSS benchmark smoke (no performance threshold)
         run: python3 tests/cascade_benchmark.py --repeat 1
+      - name: Text measurement benchmark and advance checks
+        run: zig-out/Suzume.app/Contents/MacOS/suzume --bench-text
       - name: Offline HTTP and WebSocket TLS regressions
         env:
           SUZUME_REQUIRE_WEBSOCKET: "1"

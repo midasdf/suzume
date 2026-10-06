@@ -28,7 +28,7 @@ class GeometryHandler(BaseHTTPRequestHandler):
         self.wfile.write(self.fixture)
 
 
-def marker_pixels(png):
+def marker_pixels(png, rgb=b"\x12\xab\x34"):
     """Decode stb's non-interlaced RGB/RGBA PNG with no third-party packages."""
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     offset = 8
@@ -74,7 +74,7 @@ def marker_pixels(png):
                 predictor = (left, up, upper_left)[distances.index(min(distances))]
             row[i] = (row[i] + predictor) & 255
         for x in range(width):
-            if row[x * bpp:x * bpp + 3] == b"\x12\xab\x34":
+            if row[x * bpp:x * bpp + 3] == rgb:
                 pixels.append((x, y))
         previous = row
     return pixels
@@ -107,6 +107,14 @@ def smoke(binary, arguments, expected_url, expected_title, geometry=False):
             assert max(x for x, _ in pixels) == 79, "incorrect marker width"
             assert min(y for _, y in pixels) == 76, "root top margin was lost (64px browser chrome + 12px margin)"
             assert max(y for _, y in pixels) - min(y for _, y in pixels) + 1 == 60
+            for rgb, top in [(b"\x11\x22\xaa", 136), (b"\xee\x55\x00", 186),
+                             (b"\xff\x00\x88", 246), (b"\x00\xbb\xcc", 306),
+                             (b"\xaa\xbb\x00", 326), (b"\xbb\x00\xaa", 346),
+                             (b"\xaa\xbb\xcc", 466)]:
+                actual = set(marker_pixels(png, rgb))
+                expected = {(x, y) for x in range(40, 80) for y in range(top, top + 20)}
+                bounds = (min(actual), max(actual)) if actual else None
+                assert actual == expected, f"margin/pre layout incorrect for {rgb.hex()}: {len(actual)} pixels, bounds={bounds}"
         print(f"Packaged GUI smoke passed: {expected_url}")
 
 

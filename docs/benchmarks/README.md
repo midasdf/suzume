@@ -1,4 +1,4 @@
-# CSS cascade measurements
+# Renderer microbenchmarks
 
 ## 2026-10-06: remove unsafe style sharing
 
@@ -47,3 +47,37 @@ collector uses `/usr/bin/time` for peak process RSS, records each sample, and
 reports median and nearest-rank p95. New binaries report their optimization
 mode. CI runs a one-sample correctness/collector smoke test without a timing
 threshold; runner hardware and load vary.
+
+## 2026-10-06: bounded text measurement reuse
+
+Same Apple A18 Pro/macOS/Zig/ReleaseSafe environment. Five process runs,
+20,000 measurements per case. [Raw samples](text-measure.jsonl).
+
+| Workload | Median transient/uncached | Median optimized |
+|---|---:|---:|
+| Three repeated text samples | 289.99 ms | 146.77 ms |
+| 20,000 unique row labels | 67.12 ms | 65.90 ms |
+
+Repeated measurements are about **1.98× faster**; unique inputs improve about
+**1.8%** in this sample. The comparison disables both new optimizations and
+reproduces the old per-measure HarfBuzz buffer lifecycle within the same binary.
+It is not a historical-binary or whole-browser comparison. Font/glyph data is
+warmed identically, every measured width is checked against uncached shaping,
+and each mode produces the same checksum. Unique label formatting is included
+in both timings; repeated input favors memoization and is not a general-page
+speedup. Baseline runs first in each pair, so order/system noise remain limitations.
+
+Optimized renderers retain at most 16 exact-byte metric entries for strings of
+128 bytes or fewer (2,560 bytes per font renderer), invalidated on fallback
+replacement. Larger text is not cached; measurement scratch buffers are retained
+only for inputs up to 4,096 bytes. Drawing still shapes/rasterizes normally.
+Resize re-layout also reuses existing line-list storage instead of abandoning
+it on every pass; a 100-pass regression checks stable storage and geometry.
+This does **not** resolve the existing whole-page/runtime retention on navigation.
+
+```sh
+zig-out/Suzume.app/Contents/MacOS/suzume --bench-text # macOS
+zig-out/bin/suzume --bench-text # Linux
+```
+
+CI runs both text workloads with width checks, without a performance threshold.

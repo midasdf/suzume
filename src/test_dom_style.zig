@@ -143,8 +143,26 @@ pub fn main() !void {
     try expectContextColors("<!doctype html><html><body><div><div class='scope'><p>one</p></div></div><div><div class='scope'><p>two</p></div></div></body></html>", ".scope { --fg: red; } p { color: var(--fg, blue); }", 0xffff0000, 0xffff0000);
     try expectInheritedFonts(contexts);
     try expectRetainedVariableScopes();
-    std.debug.print("PASS: 16 production CSS cascade regressions\n", .{});
+    try expectDefaultPreAndCode();
+    std.debug.print("PASS: 17 production CSS cascade regressions\n", .{});
     try @import("test_block_layout.zig").run(allocator);
+}
+
+fn expectDefaultPreAndCode() !void {
+    var doc = try Document.parse("<!doctype html><html><body><pre><code>one\ntwo</code></pre><code>normal code</code></body></html>");
+    defer doc.deinit();
+    const root = doc.root() orelse return error.MissingRoot;
+    const body = doc.body() orelse return error.MissingBody;
+    const pre = body.firstElementChild() orelse return error.MissingTarget;
+    const inner = pre.firstElementChild() orelse return error.MissingTarget;
+    const code = pre.nextSibling() orelse return error.MissingTarget;
+    var result = try cascade_mod.cascade(root, std.heap.c_allocator, null, 720, 720);
+    defer result.deinit();
+    const ps = result.getStyle(pre) orelse return error.MissingComputedStyle;
+    try std.testing.expectEqual(.block, ps.display);
+    try std.testing.expectEqual(@as(f32, 0), ps.padding_top);
+    try std.testing.expectEqual(.pre, (result.getStyle(inner) orelse return error.MissingComputedStyle).white_space);
+    try std.testing.expectEqual(.normal, (result.getStyle(code) orelse return error.MissingComputedStyle).white_space);
 }
 
 fn expectTargetColor(css: []const u8, expected: u32) !void {

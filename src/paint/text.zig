@@ -30,6 +30,24 @@ pub const TextRenderer = struct {
     font_size_px: u32,
     // Fallback font for missing glyphs (e.g., CJK characters in a Latin font)
     fallback_face: ?c.FT_Face = null,
+    // FreeType faces already require rendering-thread confinement. Reuse the
+    // measurement scratch buffer for small strings, but never retain buffers
+    // grown by unusually large page text. Drawing keeps its own callback buffer.
+    measure_buffer: ?*c.hb_buffer_t = null,
+    // Exact-byte, per-font cache: fixed storage, no borrowed DOM strings.
+    // The only face-changing API, loadFallback(), invalidates these entries.
+    metric_cache: [16]MetricEntry = undefined,
+    metric_count: usize = 0,
+    metric_next: usize = 0,
+    metric_cache_enabled: bool = true,
+
+    const retained_measure_limit = 4096;
+    const MetricEntry = struct {
+        bytes: [128]u8,
+        len: usize,
+        hash: u64,
+        metrics: TextMetrics,
+    };
 
     pub fn init(font_path: [*:0]const u8, font_size_px: u32) !TextRenderer {
         var library: c.FT_Library = undefined;
@@ -89,6 +107,7 @@ pub const TextRenderer = struct {
     }
 
     pub fn deinit(self: *TextRenderer) void {
+        if (self.measure_buffer) |buffer| c.hb_buffer_destroy(buffer);
         c.hb_font_destroy(self.hb_font);
         if (self.fallback_face) |fb| _ = c.FT_Done_Face(fb);
         _ = c.FT_Done_Face(self.ft_face);
@@ -105,6 +124,8 @@ pub const TextRenderer = struct {
         }
         if (self.fallback_face) |old| _ = c.FT_Done_Face(old);
         self.fallback_face = face;
+        self.metric_count = 0;
+        self.metric_next = 0;
     }
 
     // HarfBuzz clusters are UTF-8 byte offsets, not Unicode codepoints.
@@ -119,8 +140,28 @@ pub const TextRenderer = struct {
 
     /// Measure text dimensions using HarfBuzz shaping.
     pub fn measure(self: *TextRenderer, text: []const u8) TextMetrics {
-        const buf = c.hb_buffer_create() orelse return .{ .width = 0, .height = 0, .ascent = 0, .descent = 0 };
-        defer c.hb_buffer_destroy(buf);
+        const cacheable = self.metric_cache_enabled and text.len <= 128;
+        const hash = if (cacheable) std.hash.Wyhash.hash(0, text) else 0;
+        if (cacheable) for (self.metric_cache[0..self.metric_count]) |*entry| {
+            if (entry.hash == hash and entry.len == text.len and std.mem.eql(u8, entry.bytes[0..entry.len], text)) return entry.metrics;
+        };
+        const metrics = self.measureShaped(text);
+        if (cacheable and metrics.height > 0) {
+            const entry = &self.metric_cache[self.metric_next];
+            entry.* = .{ .bytes = undefined, .len = text.len, .hash = hash, .metrics = metrics };
+            @memcpy(entry.bytes[0..text.len], text);
+            self.metric_next = (self.metric_next + 1) % self.metric_cache.len;
+            self.metric_count = @min(self.metric_count + 1, self.metric_cache.len);
+        }
+        return metrics;
+    }
+
+    fn measureShaped(self: *TextRenderer, text: []const u8) TextMetrics {
+        const retain = text.len <= retained_measure_limit;
+        const buf = if (retain and self.measure_buffer != null) self.measure_buffer.? else (c.hb_buffer_create() orelse return .{ .width = 0, .height = 0, .ascent = 0, .descent = 0 });
+        if (retain) self.measure_buffer = buf;
+        defer if (!retain) c.hb_buffer_destroy(buf);
+        c.hb_buffer_reset(buf);
 
         c.hb_buffer_add_utf8(buf, text.ptr, @intCast(text.len), 0, @intCast(text.len));
         c.hb_buffer_set_direction(buf, c.HB_DIRECTION_LTR);
@@ -132,6 +173,7 @@ pub const TextRenderer = struct {
         var glyph_count: u32 = 0;
         const positions = c.hb_buffer_get_glyph_positions(buf, &glyph_count);
         const infos = c.hb_buffer_get_glyph_infos(buf, &glyph_count);
+        if (c.hb_buffer_allocation_successful(buf) == 0) return .{ .width = 0, .height = 0, .ascent = 0, .descent = 0 };
 
         // Sum raw 26.6 fixed-point advances first, convert once at the end.
         // Truncating each glyph individually accumulates rounding error (~0.5px/glyph).

@@ -289,6 +289,10 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts: *FontCache, viewport_height: f32) void {
     // Resolve percentage margins/padding against containing block width (CSS Box Model spec:
     // percentage margins and padding are always relative to containing block WIDTH, even vertical ones).
+    // Restore computed margins before each pass: collapsed descendant margins
+    // must not accumulate across resize/re-layout.
+    if (!box.style.margin_top_auto) box.margin.top = box.style.margin_top;
+    if (!box.style.margin_bottom_auto) box.margin.bottom = box.style.margin_bottom;
     if (box.style.margin_top_is_pct) box.margin.top = box.style.margin_top * containing_width / 100.0;
     if (box.style.margin_right_is_pct) box.margin.right = box.style.margin_right * containing_width / 100.0;
     if (box.style.margin_bottom_is_pct) box.margin.bottom = box.style.margin_bottom * containing_width / 100.0;
@@ -803,6 +807,10 @@ pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, contai
     box.content.height = saved_h;
 }
 
+fn collapseMargins(a: f32, b: f32) f32 {
+    return @max(@max(a, b), 0) + @min(@min(a, b), 0);
+}
+
 fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) void {
     var child_y: f32 = 0;
     var prev_margin_bottom: f32 = 0;
@@ -863,20 +871,17 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
                 // Parent-child collapsing: first in-flow child's top margin collapses
                 // with parent's top margin if parent has no top border/padding/BFC.
                 // Collapsed margin = max(parent, child). Parent absorbs the larger value.
-                if (is_first_child and !parent_blocks_collapse) {
-                    if (child_margin_top > box.margin.top) {
-                        box.margin.top = child_margin_top;
-                    }
+                const collapses_with_parent = is_first_child and !parent_blocks_collapse;
+                const parent_margin_before = box.margin.top;
+                if (collapses_with_parent) {
+                    box.margin.top = collapseMargins(parent_margin_before, child_margin_top);
                     // Child's top margin is absorbed by parent — zero it out
                     child_margin_top = 0;
                 }
                 is_first_child = false;
 
-                // Sibling margin collapsing: BFC elements do not participate
-                const collapsed_margin = if (createsBfc(child.style))
-                    prev_margin_bottom + child_margin_top // full margins, no collapsing
-                else
-                    @max(prev_margin_bottom, child_margin_top); // normal collapsing
+                // A BFC prevents collapse with its children, not its siblings.
+                const collapsed_margin = collapseMargins(prev_margin_bottom, child_margin_top);
                 child_y += collapsed_margin;
 
                 // Reset expired float widths — once child_y is past a float's bottom,
@@ -895,6 +900,15 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
 
                 layoutBlockVp(child, avail_width, box.content.y + child_y, fonts, containing_height);
 
+                // Descendant collapse/percentage resolution can change the
+                // child's used top margin during layout. Place it using that
+                // final value, rather than the pre-layout estimate.
+                const used_top = if (collapses_with_parent) @as(f32, 0) else child.margin.top;
+                if (collapses_with_parent) box.margin.top = collapseMargins(parent_margin_before, child.margin.top);
+                const margin_delta = collapseMargins(prev_margin_bottom, used_top) - collapsed_margin;
+                child_y += margin_delta;
+                if (margin_delta != 0) adjustYPositions(child, margin_delta);
+
                 // Adjust child x position relative to parent content area
                 var x_offset = box.content.x;
                 // If there's a left float, shift right
@@ -902,20 +916,14 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
                     x_offset += float_left_width;
                 }
 
-                // Block-level centering: if parent has text-align:center and child
-                // is narrower than container, center the child block.
-                // This handles <center> tag and similar patterns.
-                if (box.style.text_align == .center) {
+                // text-align only aligns inline content, not block boxes.
+                // Preserve the legacy <center> element's block alignment.
+                const legacy_center = if (box.dom_node) |node| if (node.tagName()) |tag| std.ascii.eqlIgnoreCase(tag, "center") else false else false;
+                if (legacy_center) {
                     const child_total_w = child.content.width + child.padding.left + child.padding.right +
                         child.border.left + child.border.right + child.margin.left + child.margin.right;
                     if (child_total_w < avail_width) {
                         x_offset += (avail_width - child_total_w) / 2;
-                    }
-                } else if (box.style.text_align == .right) {
-                    const child_total_w = child.content.width + child.padding.left + child.padding.right +
-                        child.border.left + child.border.right + child.margin.left + child.margin.right;
-                    if (child_total_w < avail_width) {
-                        x_offset += avail_width - child_total_w;
                     }
                 }
 
@@ -925,19 +933,11 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
                     child.content.height +
                     child.padding.bottom + child.border.bottom;
 
-                // BFC children do not participate in margin collapsing with neighbours.
-                // Emit the bottom margin immediately so it can't collapse with the next
-                // sibling's top margin, then reset the pending margin to zero.
-                if (createsBfc(child.style)) {
-                    child_y += child.margin.bottom;
-                    prev_margin_bottom = 0;
-                } else {
-                    prev_margin_bottom = child.margin.bottom;
-                }
+                prev_margin_bottom = child.margin.bottom;
             },
             .inline_text => {
                 // Apply margin collapse for text too
-                const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
+                const collapsed_margin = collapseMargins(prev_margin_bottom, child.margin.top);
                 child_y += collapsed_margin;
 
                 // Pass float context for per-line width calculation (CSS 2.1 §9.5)
@@ -961,7 +961,7 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
             },
             .replaced => {
                 // Replaced element (image): fixed intrinsic dimensions
-                const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
+                const collapsed_margin = collapseMargins(prev_margin_bottom, child.margin.top);
                 child_y += collapsed_margin;
 
                 child.content.y = box.content.y + child_y + child.padding.top + child.border.top;
@@ -1073,15 +1073,21 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
     // CSS 2.1 §8.3.1: Last child's bottom margin collapsing with parent
     // If parent has no bottom border/padding and doesn't create BFC,
     // the last child's bottom margin collapses with parent's bottom margin.
-    const parent_blocks_bottom_collapse = box.border.bottom > 0 or box.padding.bottom > 0 or
-        createsBfc(box.style);
+    const definite_height = switch (box.style.height) {
+        .auto => false,
+        else => true,
+    };
+    const positive_min_height = switch (box.style.min_height) {
+        .auto => false,
+        .px, .percent => |value| value > 0,
+        else => true,
+    };
+    const parent_blocks_bottom_collapse = box.parent == null or box.border.bottom > 0 or box.padding.bottom > 0 or
+        createsBfc(box.style) or definite_height or positive_min_height;
     if (parent_blocks_bottom_collapse) {
         child_y += prev_margin_bottom;
     } else {
-        // Last child's bottom margin collapses with parent's — take the max
-        if (prev_margin_bottom > box.margin.bottom) {
-            box.margin.bottom = prev_margin_bottom;
-        }
+        box.margin.bottom = collapseMargins(box.margin.bottom, prev_margin_bottom);
         // Don't add prev_margin_bottom to child_y — it "escapes" downward
     }
 
@@ -1278,7 +1284,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 // Apply letter-spacing and word-spacing adjustments
                 const text_width: f32 = applyTextSpacing(base_text_width, text, child.style);
 
-                child.lines = .empty;
+                child.lines.clearRetainingCapacity();
                 child.content.x = base_x;
                 child.content.y = base_y + cursor_y;
 
@@ -1286,8 +1292,10 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 const is_pre = child.style.white_space == .pre or child.style.white_space == .pre_wrap or child.style.white_space == .break_spaces;
                 if (is_pre) {
                     layoutPreText(child, text, base_x + cursor_x, base_y + cursor_y, container_width, text_renderer, text_line_height, ascent, allocator);
-                    cursor_y += child.content.height;
-                    cursor_x = 0;
+                    // Leave the cursor on the last line; finalization below
+                    // adds its height once, and later inline items continue it.
+                    cursor_y += @max(child.content.height - text_line_height, 0);
+                    cursor_x = if (child.lines.items.len > 0) child.lines.items[child.lines.items.len - 1].width else 0;
                     if (text_line_height > line_height) line_height = text_line_height;
                     continue;
                 }
@@ -1948,7 +1956,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
     // Skip text layout in containers too narrow to display anything meaningful
     if (container_width < 2) return;
 
-    box.lines = .empty;
+    box.lines.clearRetainingCapacity();
     box.content.x = base_x;
     box.content.y = base_y;
 
