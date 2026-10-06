@@ -1,0 +1,23 @@
+{
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "binary": "fixed: unsafe style sharing and unconditional sibling scans removed",
+  "repeats": 5,
+  "timing_scope": "CSS parse/index/cascade only; DOM parsing excluded",
+  "rss_scope": "peak entire headless process across both workloads; no GUI, layout, paint or JavaScript",
+  "peak_rss_bytes_median": 50954240,
+  "peak_rss_bytes_samples": [50905088, 50954240, 50921472, 50954240, 50987008],
+  "cases": {
+    "siblings": {
+      "elements": 10003,
+      "median_ms": 13.519459,
+      "p95_ms": 13.891083,
+      "samples_ms": [13.463542, 13.203125, 13.519459, 13.676584, 13.891083]
+    },
+    "rows": {
+      "elements": 4003,
+      "median_ms": 4.641417,
+      "p95_ms": 4.988875,
+      "samples_ms": [4.843709, 4.595875, 4.641417, 4.988875, 4.573292]
+    }
+  }
+}

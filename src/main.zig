@@ -1772,6 +1772,7 @@ pub fn main(init: std.process.Init) !void {
     _ = args.skip();
     var initial_url: ?[]const u8 = null;
     var run_test_dom = false;
+    var run_css_bench = false;
     var run_test_http = false;
     var run_test_js = false;
     var run_test_dom_js = false;
@@ -1782,6 +1783,8 @@ pub fn main(init: std.process.Init) !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--test-dom")) {
             run_test_dom = true;
+        } else if (std.mem.eql(u8, arg, "--bench-css")) {
+            run_css_bench = true;
         } else if (std.mem.eql(u8, arg, "--test-http")) {
             run_test_http = true;
         } else if (std.mem.eql(u8, arg, "--test-js")) {
@@ -1810,6 +1813,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    if (run_css_bench) return @import("bench_css.zig").run(allocator, init.io);
     if (run_test_dom) return dom_test.main();
     if (run_test_http) return testHttp(allocator);
     if (run_test_js) return testJs();

@@ -1,0 +1,23 @@
+{
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "binary": "baseline: 544d638 cascade plus benchmark harness",
+  "repeats": 5,
+  "timing_scope": "CSS parse/index/cascade only; DOM parsing excluded",
+  "rss_scope": "peak entire headless process across both workloads; no GUI, layout, paint or JavaScript",
+  "peak_rss_bytes_median": 96043008,
+  "peak_rss_bytes_samples": [96059392, 96026624, 96043008, 96026624, 96043008],
+  "cases": {
+    "siblings": {
+      "elements": 10003,
+      "median_ms": 313.831875,
+      "p95_ms": 322.151667,
+      "samples_ms": [322.151667, 313.831875, 314.762, 313.113209, 313.246417]
+    },
+    "rows": {
+      "elements": 4003,
+      "median_ms": 4.0365,
+      "p95_ms": 4.218834,
+      "samples_ms": [4.218834, 4.01575, 4.090917, 4.023583, 4.0365]
+    }
+  }
+}

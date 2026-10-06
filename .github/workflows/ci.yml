@@ -30,7 +30,7 @@ jobs:
             libxcb1-dev libxcb-icccm4-dev libxcb-image0-dev \
             libxcb-keysyms1-dev libxcb-util-dev libxcb-cursor-dev libx11-dev \
             libcurl4-openssl-dev libsqlite3-dev libwebp-dev libbrotli-dev libwoff-dev \
-            libfontconfig-dev libfreetype-dev libharfbuzz-dev fonts-dejavu-core pkg-config
+            libfontconfig-dev libfreetype-dev libharfbuzz-dev fonts-dejavu-core pkg-config time
 
       - name: Format check
         continue-on-error: true
@@ -45,6 +45,8 @@ jobs:
         run: zig build test-css -Doptimize=ReleaseSafe
       - name: Production DOM, CSS cascade and layout regressions
         run: zig build test-dom-style -Doptimize=ReleaseSafe
+      - name: Headless CSS benchmark smoke (no performance threshold)
+        run: python3 tests/cascade_benchmark.py --repeat 1
 
   http-regression:
     runs-on: ubuntu-24.04
@@ -92,6 +94,8 @@ jobs:
           zig build test-css -Doptimize=ReleaseSafe -Dtarget="$arch-macos.15.0"
       - name: Production DOM, CSS cascade and layout regressions
         run: zig-out/Suzume.app/Contents/MacOS/suzume --test-dom
+      - name: Headless CSS benchmark smoke (no performance threshold)
+        run: python3 tests/cascade_benchmark.py --repeat 1
       - name: Offline HTTP and WebSocket TLS regressions
         env:
           SUZUME_REQUIRE_WEBSOCKET: "1"

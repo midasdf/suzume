@@ -22,95 +22,10 @@ const VarMap = variables.VarMap;
 pub const StyleMap = std.AutoHashMap(usize, ComputedStyle);
 pub const CustomPropMap = std.AutoHashMap(usize, *const VarMap);
 
-// ── Style sharing cache ────────────────────────────────────────────────
-// When two elements share the same tag, class, id, inline style, and their
-// parent's computed style is equivalent, they will produce identical computed
-// styles. Cache and reuse to skip redundant cascade work (~30% win per Stylo).
-
-const StyleCacheKey = struct {
-    tag_hash: u32,
-    class_hash: u32,
-    id_hash: u32,
-    inline_hash: u32,
-    parent_hash: u32,
-    // Structural pseudo-class info: elements at different sibling positions
-    // can match different selectors (:first-child, :last-child, :nth-child, etc.)
-    sibling_index: u16,
-    is_last_child: bool,
-};
-
-const StyleCacheEntry = struct {
-    style: ComputedStyle,
-    // Store actual attribute values for collision verification
-    tag: ?[]const u8,
-    class: ?[]const u8,
-    id: ?[]const u8,
-    inline_style: ?[]const u8,
-};
-
-pub const StyleCache = std.AutoHashMap(StyleCacheKey, StyleCacheEntry);
-
-/// Compare two optional strings for equality (null == null, "a" == "a").
-fn optionalEql(a: ?[]const u8, b: ?[]const u8) bool {
-    if (a == null and b == null) return true;
-    if (a == null or b == null) return false;
-    return std.mem.eql(u8, a.?, b.?);
-}
-
-/// Count previous element siblings for structural pseudo-class cache key.
-fn countPrevElementSiblings(n: anytype) u16 {
-    const lxb = @import("../bindings/lexbor.zig").c;
-    var count: u16 = 0;
-    var sib = n.prev;
-    while (sib != null) {
-        const s = sib.?;
-        if (s.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) count +|= 1;
-        sib = s.*.prev;
-    }
-    return count;
-}
-
-/// Check if node has a next element sibling.
-fn hasNextElementSibling(n: anytype) bool {
-    const lxb = @import("../bindings/lexbor.zig").c;
-    var sib = n.next;
-    while (sib != null) {
-        const s = sib.?;
-        if (s.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return true;
-        sib = s.*.next;
-    }
-    return false;
-}
-
-fn hashAttr(s: ?[]const u8) u32 {
-    const str = s orelse return 0;
-    var h: u32 = 0;
-    for (str) |c| h = h *% 31 +% @as(u32, c);
-    return h;
-}
-
-fn hashParentStyle(ps: ?*const ComputedStyle) u32 {
-    const p = ps orelse return 0;
-    // Mix a few inherited properties that most affect child style.
-    var h: u32 = @as(u32, @bitCast(p.font_size_px)) *% 2654435761;
-    h ^= p.color *% 7;
-    h ^= @as(u32, @intFromEnum(p.display)) *% 13;
-    // Hash line_height union: tag + payload bits
-    const lh_tag: u32 = @intFromEnum(p.line_height);
-    const lh_val: u32 = switch (p.line_height) {
-        .normal => 0,
-        .px => |v| @bitCast(v),
-        .number => |v| @bitCast(v),
-    };
-    h ^= (lh_tag *% 17) ^ (lh_val *% 19);
-    h ^= @as(u32, @intFromEnum(p.text_align)) *% 23;
-    h ^= @as(u32, p.font_weight) *% 29;
-    h ^= @as(u32, @intFromEnum(p.font_style)) *% 31;
-    h ^= @as(u32, @intFromEnum(p.white_space)) *% 37;
-    h ^= @as(u32, @intFromEnum(p.visibility)) *% 41;
-    h ^= @as(u32, @intFromEnum(p.list_style_type)) *% 43;
-    return h;
-}
+// Compute each node's cascade against its actual DOM context. Reuse keyed
+// only by tag/class/id and a partial parent-style hash is not safe: ancestor
+// selectors, arbitrary attributes, font inheritance and scoped variables differ.
+// Avoiding its unconditional sibling scans also removes an O(n²) list walk.
 
 /// A @font-face rule's extracted data.
 pub const FontFaceInfo = struct {
@@ -335,8 +250,10 @@ pub fn cascade(
     var author_next_anon: u16 = next_anon_order;
     try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena, &layer_order_map, &author_next_anon, UNLAYERED_KEY);
 
-    // 6. Root VarMap (empty — per-element scoping builds VarMaps during walk)
-    var root_vars = VarMap.init(arena);
+    // Scope maps retain their parent after this function returns (e.g. JS
+    // computed-style queries). The root must share the result arena's lifetime.
+    const root_vars = try arena.create(VarMap);
+    root_vars.* = VarMap.init(arena);
 
     // 7. Build rule indices
     var ua_index = try buildFlatRuleIndex(ua_rules.items, arena);
@@ -344,7 +261,6 @@ pub fn cascade(
 
     // 8. Walk DOM tree and compute styles
     var root_bloom = SelectorBloomFilter.init();
-    var style_cache = StyleCache.init(arena);
     try walkAndCompute(
         doc_root,
         null,
@@ -352,12 +268,11 @@ pub fn cascade(
         &result.custom_props,
         &ua_index,
         &author_index,
-        &root_vars,
+        root_vars,
         vw,
         vh,
         arena,
         &root_bloom,
-        &style_cache,
     );
 
     return result;
@@ -969,7 +884,6 @@ fn walkAndCompute(
     vh: f32,
     arena: std.mem.Allocator,
     parent_bloom: *const SelectorBloomFilter,
-    style_cache: *StyleCache,
 ) !void {
     if (node.nodeType() == .element) {
         // Build bloom filter: copy parent's filter and add this element's
@@ -986,52 +900,6 @@ fn walkAndCompute(
             var cls_iter = std.mem.splitScalar(u8, cls, ' ');
             while (cls_iter.next()) |c| {
                 if (c.len > 0) element_bloom.add(SelectorBloomFilter.hashString(c));
-            }
-        }
-
-        // ── Style sharing cache lookup ─────────────────────────────────
-        // Elements with identical attributes and equivalent parent style
-        // will produce the same computed style — skip the full cascade.
-        const node_tag = node.tagName();
-        const node_class = node.getAttribute("class");
-        const node_id = node.getAttribute("id");
-        const node_inline = node.getAttribute("style");
-        // Compute sibling position for structural pseudo-class correctness
-        const sibling_index = countPrevElementSiblings(node.lxb_node);
-        const cache_key = StyleCacheKey{
-            .tag_hash = hashAttr(node_tag),
-            .class_hash = hashAttr(node_class),
-            .id_hash = hashAttr(node_id),
-            .inline_hash = hashAttr(node_inline),
-            .parent_hash = hashParentStyle(parent_style),
-            .sibling_index = sibling_index,
-            .is_last_child = !hasNextElementSibling(node.lxb_node),
-        };
-        // Only use cache when no custom properties in scope and no HTML presentational attrs
-        const has_presentational = node.getAttribute("bgcolor") != null or
-            node.getAttribute("width") != null or
-            node.getAttribute("height") != null or
-            node.getAttribute("align") != null or
-            node.getAttribute("valign") != null;
-        const can_use_cache = (var_map.parent == null) and !has_presentational;
-        if (can_use_cache) {
-            if (style_cache.get(cache_key)) |entry| {
-                // Verify full string match to prevent hash collision crashes
-                if (optionalEql(entry.tag, node_tag) and
-                    optionalEql(entry.class, node_class) and
-                    optionalEql(entry.id, node_id) and
-                    optionalEql(entry.inline_style, node_inline))
-                {
-                    try styles.put(@intFromPtr(node.lxb_node), entry.style);
-                    var cached_copy = entry.style;
-                    var child = node.firstChild();
-                    while (child) |c| {
-                        try walkAndCompute(c, &cached_copy, styles, custom_props_map, ua_index, author_index, var_map, vw, vh, arena, &element_bloom, style_cache);
-                        child = c.nextSibling();
-                    }
-                    return;
-                }
-                // Hash collision — fall through to full cascade
             }
         }
 
@@ -1108,30 +976,19 @@ fn walkAndCompute(
 
         try styles.put(@intFromPtr(node.lxb_node), style);
 
-        // Store in style sharing cache (only when no custom properties in scope).
-        if (can_use_cache) {
-            style_cache.put(cache_key, .{
-                .style = style,
-                .tag = node_tag,
-                .class = node_class,
-                .id = node_id,
-                .inline_style = node_inline,
-            }) catch {};
-        }
-
         // Recurse into children with this element's VarMap (scoped inheritance).
         // IMPORTANT: pass style by value (stack copy), NOT by HashMap pointer.
         // Pass the element's bloom filter so children accumulate ancestor info.
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, &style, styles, custom_props_map, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom, style_cache);
+            try walkAndCompute(c, &style, styles, custom_props_map, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom);
             child = c.nextSibling();
         }
     } else {
         // Non-element nodes (text, etc.) — recurse with parent's VarMap and bloom
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, parent_style, styles, custom_props_map, ua_index, author_index, var_map, vw, vh, arena, parent_bloom, style_cache);
+            try walkAndCompute(c, parent_style, styles, custom_props_map, ua_index, author_index, var_map, vw, vh, arena, parent_bloom);
             child = c.nextSibling();
         }
     }

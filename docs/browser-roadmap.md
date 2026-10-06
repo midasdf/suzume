@@ -55,6 +55,12 @@
   !important no longer reverses specificity; UA !important has correct priority.
   Packed specificity saturates rather than wrapping, and HSL/RGB alpha use the
   same nearest-byte quantization.
+- Unsafe style sharing was removed: selected attributes and a partial parent
+  hash did not capture ancestor selectors, arbitrary attributes, inherited fonts
+  or variable scope. Unconditional sibling counting was also quadratic, and the
+  arena retained duplicate computed styles for the page's lifetime.
+- Retained custom-property maps now have an arena-owned root parent, not a
+  pointer to a stack-local VarMap after cascade returns.
 - CSS regression checks are now blocking on Linux and macOS CI.
 
 ### Layout and native paint
@@ -80,9 +86,10 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
   testing-allocator leak checks, including 99 CSSOM tests previously not run,
   nine new nesting/selector fixtures and cascade-priority regressions. This is
   a regression baseline, not proof of complete CSS standards compatibility.
-- Packaged-browser DOM/CSS integration assertions pass for 11 additional
+- Packaged-browser DOM/CSS integration assertions pass for 16 additional
   fixtures: nesting, trailing declarations, !important specificity, parent-list
-  specificity, conditional groups, a 301-rule stylesheet and line-height.
+  specificity, conditional groups, a 301-rule stylesheet, line-height, distinct
+  ancestor/attribute contexts, inherited fonts and retained variable scopes.
 - Production geometry: 18 cases pass, covering block/flex/grid/table margins,
   root box edges, real font line metrics and anonymous-box inheritance.
 - Offline HTTP/WebSocket tests in Debug and ReleaseSafe: nine tests each with
@@ -99,6 +106,13 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
 The local stripped bundle is approximately **10 MiB**, including six embedded
 dylibs; its zip is approximately **3.7 MiB**. These are build-artifact sizes, not memory
 usage measurements, and will vary with toolchains and dependencies.
+
+A five-run ReleaseSafe **headless CSS microbenchmark** on Apple A18 Pro measured
+10,003-element sibling cascade median **313.83 → 13.52 ms** and peak process RSS
+**91.59 → 48.59 MiB** after unsafe sharing/sibling scans were removed. A repeated-row
+case became about 15% slower; this tradeoff is recorded rather than hidden.
+These are not GUI/browser-wide or competitor benchmarks. See the
+[workloads, samples and limitations](benchmarks/README.md).
 
 Linux and Intel full-browser builds are not locally verified. CI results are
 separate from local verification. Native callback tests are not a human Japanese

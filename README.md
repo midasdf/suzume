@@ -146,6 +146,12 @@ instead of silently passing zero tests: 363 tests pass in Debug and ReleaseSafe.
 See [the development plan](docs/browser-roadmap.md) for remaining compatibility
 and performance work.
 
+### CSS microbenchmark
+
+After a ReleaseSafe build, run `python3 tests/cascade_benchmark.py --repeat 5`.
+It checks fixed workloads and reports cascade median/p95 plus headless-process
+peak RSS—not browser startup or GUI memory. See [measured results and tradeoffs](docs/benchmarks/README.md).
+
 ## Architecture
 
 ```
