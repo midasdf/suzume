@@ -91,13 +91,16 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
   specificity, conditional groups, a 301-rule stylesheet, line-height, distinct
   ancestor/attribute contexts, inherited fonts, retained variable scopes and
   standard pre/code defaults.
-- Production geometry: 35 cases pass, covering block/flex/grid/table margins,
+- Production geometry: 40 cases pass, covering block/flex/grid/table margins,
   root box edges, real font line metrics, anonymous-box inheritance, signed and
   BFC-sibling margin collapse, nested/repeated layout, fixed-height boundaries,
   text-align versus block positioning, pre height and line-buffer reuse.
   Wrapping checks cover normal/keep-all overflow, explicit break-word/anywhere/
   break-all, latest mixed Latin/CJK boundaries and retrying words on empty lines
-  across inline text nodes before emergency splitting.
+  across inline text nodes before emergency splitting. Mixed-height wrapped
+  lines finish at the tallest inline's height without carrying it to later lines;
+  overflowing words retain their occupied cursor width. Ellipsis regressions
+  cover UTF-8/shaped prefixes and containers too narrow for any retained text.
 - Renderer/input/CSS combined: 371 tests pass in Debug and ReleaseSafe.
   Text metric tests verify exact-byte ownership, eviction, fallback invalidation
   and bounded scratch-buffer retention.

@@ -1351,34 +1351,21 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                         const ellipsis_metrics = text_renderer.measure("\xe2\x80\xa6");
                         const ellipsis_w: f32 = @floatFromInt(ellipsis_metrics.width);
                         const target_w = remaining_width - ellipsis_w;
-
-                        if (target_w > 0) {
-                            // Find how many bytes fit within target_w
-                            var byte_end: usize = 0;
-                            var acc_w: f32 = 0;
-                            while (byte_end < text.len) {
-                                const char_start = byte_end;
-                                const first_byte = text[byte_end];
-                                const char_len: usize = if (first_byte < 0x80) 1 else if (first_byte < 0xE0) 2 else if (first_byte < 0xF0) 3 else 4;
-                                byte_end = @min(byte_end + char_len, text.len);
-                                const char_metrics = text_renderer.measure(text[char_start..byte_end]);
-                                acc_w += @as(f32, @floatFromInt(char_metrics.width));
-                                if (acc_w > target_w) {
-                                    byte_end = char_start;
-                                    break;
-                                }
-                            }
-                            if (byte_end > 0) {
-                                // Use a slice of the original text (no heap allocation)
-                                display_text = text[0..byte_end];
-                                display_width = acc_w - @as(f32, @floatFromInt(
-                                    if (byte_end < text.len) text_renderer.measure(text[byte_end..text.len]).width else 0,
-                                ));
-                                // Recalculate width from the truncated slice
-                                const trunc_metrics = text_renderer.measure(display_text);
-                                display_width = @as(f32, @floatFromInt(trunc_metrics.width)) + ellipsis_w;
-                                has_ellipsis = true;
-                            }
+                        display_text = text[0..0];
+                        display_width = if (target_w >= 0) ellipsis_w else 0;
+                        has_ellipsis = target_w >= 0;
+                        // Measure shaped prefixes, not isolated characters:
+                        // kerning/ligatures change advances at the boundary.
+                        // No suffix measurement is needed for truncation.
+                        var byte_end: usize = 0;
+                        while (target_w > 0 and byte_end < text.len) {
+                            const decoded = decodeUtf8(text, byte_end);
+                            byte_end += decoded.len;
+                            const prefix = text[0..byte_end];
+                            const prefix_width = applyTextSpacing(@floatFromInt(text_renderer.measure(prefix).width), prefix, child.style);
+                            if (prefix_width > target_w) break;
+                            display_text = prefix;
+                            display_width = prefix_width + ellipsis_w;
                         }
                     }
 
@@ -1398,7 +1385,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     if (text_line_height > line_height) line_height = text_line_height;
                 } else {
                     // Need to word-wrap using CJK-aware + break-word logic, possibly starting mid-line
-                    var total_text_height: f32 = 0;
+                    var completed_height: f32 = 0;
                     var max_text_width: f32 = 0;
                     var line_start: usize = 0;
                     var current_line_width: f32 = 0;
@@ -1422,16 +1409,22 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                                 const lx = if (first_line) (base_x + cursor_x) else base_x;
                                 child.lines.append(allocator, .{
                                     .x = lx,
-                                    .y = base_y + cursor_y + total_text_height,
+                                    .y = base_y + cursor_y + completed_height,
                                     .width = lw,
                                     .height = text_line_height,
                                     .text = line_text,
                                     .ascent = ascent,
                                 }) catch {};
-                                total_text_height += text_line_height;
-                                current_line_width = 0;
+                                current_line_width = lw;
                                 if (lw > max_text_width) max_text_width = lw;
-                                first_line = false;
+                                var next_start = break_pos;
+                                while (next_start < text.len and text[next_start] == ' ') next_start += 1;
+                                if (next_start < text.len) {
+                                    // Finish a shared line at the tallest inline's
+                                    // height; later lines only contain this text.
+                                    completed_height += if (first_line) @max(line_height, text_line_height) else text_line_height;
+                                    first_line = false;
+                                }
                             }
                             line_start = break_pos;
                             if (line_start < text.len and text[line_start] == ' ') {
@@ -1445,13 +1438,12 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                             const lx = if (first_line) (base_x + cursor_x) else base_x;
                             child.lines.append(allocator, .{
                                 .x = lx,
-                                .y = base_y + cursor_y + total_text_height,
+                                .y = base_y + cursor_y + completed_height,
                                 .width = lw,
                                 .height = text_line_height,
                                 .text = line_text,
                                 .ascent = ascent,
                             }) catch {};
-                            total_text_height += text_line_height;
                             current_line_width = lw;
                             if (lw > max_text_width) max_text_width = lw;
                             break;
@@ -1459,10 +1451,10 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     }
 
                     child.content.width = max_text_width;
-                    child.content.height = total_text_height;
-                    cursor_y += total_text_height - text_line_height; // Already on last line
+                    child.content.height = completed_height + text_line_height;
+                    cursor_y += completed_height; // Already on last line
                     cursor_x = current_line_width;
-                    if (text_line_height > line_height) line_height = text_line_height;
+                    line_height = if (completed_height > 0) text_line_height else @max(line_height, text_line_height);
                 }
             },
             .inline_box => {

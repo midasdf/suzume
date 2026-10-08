@@ -98,7 +98,9 @@ pub fn run(allocator: std.mem.Allocator) !void {
     try preformattedRelayout(allocator);
     try blockAlignmentAndHeight(allocator, &fonts);
     try wordWrapping(allocator);
-    std.debug.print("PASS: 35 production margin/layout regressions\n", .{});
+    try mixedLineHeights(allocator);
+    try ellipsisWidths(allocator);
+    std.debug.print("PASS: 40 production margin/layout regressions\n", .{});
 }
 
 fn textLineMetrics(allocator: std.mem.Allocator) !void {
@@ -294,6 +296,70 @@ fn wordWrapping(allocator: std.mem.Allocator) !void {
     try std.testing.expect(child.lines.items.len > 1);
     // A later CJK boundary wins over an earlier Latin space.
     try std.testing.expectEqualStrings("a 日本語", child.lines.items[0].text);
+}
+
+fn mixedLineHeights(allocator: std.mem.Allocator) !void {
+    const resolver = @import("paint/font_resolver.zig");
+    const path = resolver.resolve(allocator, "sans-serif") orelse return error.MissingTestFont;
+    defer allocator.free(path);
+    var fonts = FontCache.init(allocator, path);
+    defer fonts.deinit();
+    var root = Box{};
+    defer root.children.deinit(allocator);
+    var prefix = Box{ .parent = &root, .box_type = .inline_text, .text = "X", .style = .{ .font_size_px = 16, .line_height = .{ .px = 40 } } };
+    defer prefix.lines.deinit(allocator);
+    var wrapped = Box{ .parent = &root, .box_type = .inline_text, .text = "a a a a a a a", .style = .{ .font_size_px = 16, .line_height = .{ .px = 20 } } };
+    defer wrapped.lines.deinit(allocator);
+    try root.children.append(allocator, &prefix);
+    try root.children.append(allocator, &wrapped);
+    const renderer = fonts.getRendererForFamily(16, .sans_serif) orelse return error.MissingTestFont;
+    const width: f32 = @floatFromInt(renderer.measure("X").width + renderer.measure("a ").width + 1);
+    for (0..10) |_| {
+        block.layoutBlock(&root, width, 0, &fonts);
+        try std.testing.expect(wrapped.lines.items.len >= 3);
+        try std.testing.expectEqual(@as(f32, 0), wrapped.lines.items[0].y);
+        try std.testing.expectEqual(@as(f32, 40), wrapped.lines.items[1].y);
+        try std.testing.expectEqual(@as(f32, 60), wrapped.lines.items[2].y);
+        const last = wrapped.lines.items[wrapped.lines.items.len - 1];
+        try std.testing.expectEqual(last.y + 20, root.content.height);
+    }
+    // An overflowing final word with a trailing space still occupies its line.
+    // A following inline must move below it, not overlap at x=0 on that line.
+    prefix.text = "Supercalifragilisticexpialidocious ";
+    prefix.style.line_height = .{ .px = 20 };
+    wrapped.text = "next";
+    block.layoutBlock(&root, 60, 0, &fonts);
+    try std.testing.expectEqual(@as(usize, 1), prefix.lines.items.len);
+    try std.testing.expectEqual(@as(f32, 20), wrapped.lines.items[0].y);
+    try std.testing.expectEqual(@as(f32, 40), root.content.height);
+}
+
+fn ellipsisWidths(allocator: std.mem.Allocator) !void {
+    const resolver = @import("paint/font_resolver.zig");
+    const path = resolver.resolve(allocator, "sans-serif") orelse return error.MissingTestFont;
+    defer allocator.free(path);
+    var fonts = FontCache.init(allocator, path);
+    defer fonts.deinit();
+    const renderer = fonts.getRendererForFamily(16, .sans_serif) orelse return error.MissingTestFont;
+    const ellipsis: f32 = @floatFromInt(renderer.measure("…").width);
+    for ([_]f32{ ellipsis - 1, ellipsis, ellipsis + 50 }) |width| {
+        var root = Box{ .style = .{ .text_overflow = .ellipsis, .overflow_x = .hidden } };
+        defer root.children.deinit(allocator);
+        var child = Box{ .parent = &root, .box_type = .inline_text, .text = "AV office 日本語 a very long title", .style = .{ .font_size_px = 16, .white_space = .nowrap } };
+        defer child.lines.deinit(allocator);
+        try root.children.append(allocator, &child);
+        block.layoutBlock(&root, width, 0, &fonts);
+        try std.testing.expectEqual(@as(usize, 1), child.lines.items.len);
+        const line = child.lines.items[0];
+        try std.testing.expect(line.width <= width);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(line.text));
+        try std.testing.expectEqual(width >= ellipsis, line.ellipsis);
+        if (width <= ellipsis) try std.testing.expectEqual(@as(usize, 0), line.text.len);
+        if (line.ellipsis) {
+            const shaped: f32 = @floatFromInt(renderer.measure(line.text).width);
+            try std.testing.expectEqual(shaped + ellipsis, line.width);
+        }
+    }
 }
 
 fn preformattedRelayout(allocator: std.mem.Allocator) !void {
