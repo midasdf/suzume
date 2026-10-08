@@ -6146,23 +6146,22 @@ pub const KotoriRuntime = struct {
         \\})();
     ;
 
-    /// Fetch §4.1: resolve relative request URLs against the document
-    /// URL before calling the native fetch. The native layer (vm.zig
-    /// nativeFetch) hands its URL string verbatim to the HTTP client,
-    /// so a relative fetch("resources/data.json") would otherwise fail
-    /// with a network error. Resolution happens at call time because
-    /// setDocumentUrl stamps document.URL after runtime init.
+    /// Fetch §4.1: validate and resolve request URLs against the API base
+    /// URL before handing them to the transport. Conversion/parse failures
+    /// reject the promise; they must not reach the HTTP client.
     const fetch_resolve_polyfill_js =
         \\(function(){
-        \\  if(typeof fetch!=='function'||typeof URL!=='function')return;
+        \\  if(typeof fetch!=='function')return;
         \\  var _nativeFetch=fetch;
         \\  globalThis.fetch=function(input,init){
-        \\    var u=(input&&typeof input==='object'&&input.url!==undefined)?String(input.url):String(input);
         \\    try{
-        \\      var base=(typeof document!=='undefined'&&document.URL)?String(document.URL):'';
-        \\      u=base?new URL(u,base).href:new URL(u).href;
-        \\    }catch(e){}
-        \\    return _nativeFetch(u,init);
+        \\      if(arguments.length===0)throw new TypeError('fetch requires a URL');
+        \\      var u=(input&&typeof input==='object'&&input.url!==undefined)?String(input.url):String(input);
+        \\      var base=(typeof document!=='undefined')?document.baseURI:undefined;
+        \\      var parsed=__suzume_url_parse(u,base);
+        \\      if(!parsed)throw new TypeError('Invalid request URL');
+        \\    }catch(e){return Promise.reject(e);}
+        \\    return _nativeFetch(parsed.href,init);
         \\  };
         \\})();
     ;
@@ -6187,7 +6186,12 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  XHR.UNSENT=0;XHR.OPENED=1;XHR.HEADERS_RECEIVED=2;XHR.LOADING=3;XHR.DONE=4;
         \\  XHR.prototype.open=function(method,url,async_){
-        \\    this._method=method;this._url=url;this._async=async_!==false;
+        \\    if(arguments.length<2)throw new TypeError('XMLHttpRequest.open requires method and URL');
+        \\    method=String(method);url=String(url);
+        \\    var base=(typeof document!=='undefined')?document.baseURI:undefined;
+        \\    var parsed=__suzume_url_parse(url,base);
+        \\    if(!parsed)throw new DOMException('Invalid request URL','SyntaxError');
+        \\    this._method=method;this._url=parsed.href;this._async=async_!==false;
         \\    this.readyState=1;this._fireReadyState();
         \\  };
         \\  XHR.prototype.setRequestHeader=function(name,value){this._headers[name]=value;};

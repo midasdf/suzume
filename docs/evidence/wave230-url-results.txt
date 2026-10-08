@@ -1,0 +1,42 @@
+Wave 230 — 2026-10-09
+WPT revision: 2810902e6a3a78789efe5de3376d4f082087041f
+Engine: kotori; build: ReleaseSafe; reporting files: 28/28
+Unit: 1847/1847 -> 1853/1853; kotori: 1040/1040 unchanged; DOM: 231/231 -> 237/237
+URL total: 6469/7316 -> 6658/7316
+Existing passing subtests lost: 0 (compared WPT_FAIL sets per file)
+
+File | before | after
+a-element.html | WPT_SUMMARY: PASS=896 FAIL=1 TOTAL=897 | WPT_SUMMARY: PASS=896 FAIL=1 TOTAL=897
+a-element-origin.html | WPT_SUMMARY: PASS=415 FAIL=0 TOTAL=415 | WPT_SUMMARY: PASS=415 FAIL=0 TOTAL=415
+data-uri-fragment.html | WPT_SUMMARY: PASS=0 FAIL=0 TOTAL=0 | WPT_SUMMARY: PASS=0 FAIL=0 TOTAL=0
+failure.html | WPT_SUMMARY: PASS=413 FAIL=762 TOTAL=1175 | WPT_SUMMARY: PASS=602 FAIL=573 TOTAL=1175
+historical.any.html | WPT_SUMMARY: PASS=1 FAIL=0 TOTAL=1 | WPT_SUMMARY: PASS=1 FAIL=0 TOTAL=1
+idlharness.any.html | WPT_SUMMARY: PASS=0 FAIL=2 TOTAL=2 | WPT_SUMMARY: PASS=0 FAIL=2 TOTAL=2
+IdnaTestV2.any.html | WPT_SUMMARY: PASS=2669 FAIL=7 TOTAL=2676 | WPT_SUMMARY: PASS=2669 FAIL=7 TOTAL=2676
+IdnaTestV2-removed.any.html | WPT_SUMMARY: PASS=21 FAIL=0 TOTAL=21 | WPT_SUMMARY: PASS=21 FAIL=0 TOTAL=21
+url-constructor.any.html | WPT_SUMMARY: PASS=897 FAIL=1 TOTAL=898 | WPT_SUMMARY: PASS=897 FAIL=1 TOTAL=898
+urlencoded-parser.any.html | WPT_SUMMARY: PASS=35 FAIL=70 TOTAL=105 | WPT_SUMMARY: PASS=35 FAIL=70 TOTAL=105
+url-origin.any.html | WPT_SUMMARY: PASS=416 FAIL=0 TOTAL=416 | WPT_SUMMARY: PASS=416 FAIL=0 TOTAL=416
+url-searchparams.any.html | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4 | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4
+urlsearchparams-append.any.html | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4 | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4
+urlsearchparams-constructor.any.html | WPT_SUMMARY: PASS=23 FAIL=4 TOTAL=27 | WPT_SUMMARY: PASS=23 FAIL=4 TOTAL=27
+urlsearchparams-delete.any.html | WPT_SUMMARY: PASS=8 FAIL=0 TOTAL=8 | WPT_SUMMARY: PASS=8 FAIL=0 TOTAL=8
+urlsearchparams-foreach.any.html | WPT_SUMMARY: PASS=6 FAIL=0 TOTAL=6 | WPT_SUMMARY: PASS=6 FAIL=0 TOTAL=6
+urlsearchparams-getall.any.html | WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2 | WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2
+urlsearchparams-get.any.html | WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2 | WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2
+urlsearchparams-has.any.html | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4 | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4
+urlsearchparams-set.any.html | WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2 | WPT_SUMMARY: PASS=2 FAIL=0 TOTAL=2
+urlsearchparams-size.any.html | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4 | WPT_SUMMARY: PASS=4 FAIL=0 TOTAL=4
+urlsearchparams-sort.any.html | WPT_SUMMARY: PASS=17 FAIL=0 TOTAL=17 | WPT_SUMMARY: PASS=17 FAIL=0 TOTAL=17
+urlsearchparams-stringifier.any.html | WPT_SUMMARY: PASS=14 FAIL=0 TOTAL=14 | WPT_SUMMARY: PASS=14 FAIL=0 TOTAL=14
+url-setters.any.html | WPT_SUMMARY: PASS=279 FAIL=0 TOTAL=279 | WPT_SUMMARY: PASS=279 FAIL=0 TOTAL=279
+url-setters-stripping.any.html | WPT_SUMMARY: PASS=320 FAIL=0 TOTAL=320 | WPT_SUMMARY: PASS=320 FAIL=0 TOTAL=320
+url-statics-canparse.any.html | WPT_SUMMARY: PASS=8 FAIL=0 TOTAL=8 | WPT_SUMMARY: PASS=8 FAIL=0 TOTAL=8
+url-statics-parse.any.html | WPT_SUMMARY: PASS=8 FAIL=0 TOTAL=8 | WPT_SUMMARY: PASS=8 FAIL=0 TOTAL=8
+url-tojson.any.html | WPT_SUMMARY: PASS=1 FAIL=0 TOTAL=1 | WPT_SUMMARY: PASS=1 FAIL=0 TOTAL=1
+
+Verification commands:
+cd /home/midasdf/suzume
+zig build test --summary all
+zig build -Doptimize=ReleaseSafe --summary all
+./tests/wpt/run_wpt_parallel.sh --jobs 8 url

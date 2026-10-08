@@ -3419,6 +3419,101 @@ test "CSSStyleDeclaration.item index converts with ToUint32" {
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+fn echoRequestUrl(_: *anyopaque, allocator: std.mem.Allocator, url: []const u8, _: []const u8, _: ?[]const u8) ?VM.HttpFetchResult {
+    return .{ .status = 200, .body = allocator.dupe(u8, url) catch return null, .content_type = "" };
+}
+
+fn expectRequestResult(source: []const u8) !void {
+    kotori.io.io = std.testing.io;
+    defer kotori.io.io = null;
+    const html = "<html><head><base href=\"https://assets.example/static/pages/\"></head><body></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+    rt.setDocumentUrl("https://page.example/index.html");
+    rt.setHttpFetcher(doc, &echoRequestUrl);
+    try std.testing.expect(rt.eval(source).isOk());
+    _ = rt.runMicrotasks();
+    const result = rt.eval("requestResult");
+    try std.testing.expect(result.isOk());
+    try std.testing.expectEqualStrings("ok", result.ok orelse "undefined");
+}
+
+test "KotoriRuntime XHR rejects invalid URLs before changing state" {
+    try expectRequestResult(
+        \\var inputs = ['http://[::1', 'https://ex ample.org/', 'file://example:1/', 'http://host:65536/'];
+        \\var requestResult = 'ok';
+        \\for (var i = 0; i < inputs.length; i++) {
+        \\  var xhr = new XMLHttpRequest(), events = 0, threw = false;
+        \\  xhr.onreadystatechange = function() { events++; };
+        \\  try { xhr.open('GET', inputs[i]); }
+        \\  catch (e) { threw = e instanceof DOMException && e.name === 'SyntaxError' && e.code === 12; }
+        \\  if (!threw || xhr.readyState !== 0 || events !== 0) requestResult = 'bad';
+        \\}
+    );
+}
+
+test "KotoriRuntime invalid XHR reopen preserves an opened request" {
+    try expectRequestResult(
+        \\var xhr = new XMLHttpRequest(), events = 0;
+        \\xhr.onreadystatechange = function() { events++; };
+        \\xhr.open('GET', 'https://valid.example/data');
+        \\var threw = false;
+        \\try { xhr.open('POST', 'http://[bad'); } catch (e) { threw = e.name === 'SyntaxError'; }
+        \\var requestResult = threw && xhr.readyState === 1 && events === 1 ? 'pending' : 'bad';
+        \\xhr.onload = function() {
+        \\  requestResult = requestResult === 'pending' && xhr.responseText === 'https://valid.example/data' ? 'ok' : 'bad';
+        \\};
+        \\xhr.send();
+    );
+}
+
+test "KotoriRuntime XHR resolves against baseURI at open time" {
+    try expectRequestResult(
+        \\var xhr = new XMLHttpRequest(), requestResult = 'pending';
+        \\xhr.open('GET', '../data a.json?x=1');
+        \\document.querySelector('base').setAttribute('href', 'https://changed.example/');
+        \\xhr.onload = function() {
+        \\  var expected = 'https://assets.example/static/data%20a.json?x=1';
+        \\  requestResult = xhr.responseText === expected && xhr.responseURL === expected ? 'ok' : 'bad';
+        \\};
+        \\xhr.send();
+    );
+}
+
+test "KotoriRuntime fetch rejects invalid URLs without calling transport" {
+    try expectRequestResult(
+        \\var requestResult = 'pending';
+        \\fetch('http://[bad').then(function() { requestResult = 'bad'; }, function(e) {
+        \\  requestResult = e instanceof TypeError ? 'ok' : 'bad';
+        \\});
+    );
+}
+
+test "KotoriRuntime fetch rejects URL conversion exceptions asynchronously" {
+    try expectRequestResult(
+        \\var marker = {}, requestResult = 'pending';
+        \\var input = { toString: function() { throw marker; } };
+        \\try {
+        \\  fetch(input).then(function() { requestResult = 'bad'; }, function(e) {
+        \\    requestResult = e === marker ? 'ok' : 'bad';
+        \\  });
+        \\} catch (e) { requestResult = 'bad'; }
+    );
+}
+
+test "KotoriRuntime fetch uses baseURI and the native URL parser" {
+    try expectRequestResult(
+        \\globalThis.URL = function() { throw new Error('page replaced URL'); };
+        \\var requestResult = 'pending';
+        \\fetch('../data a.json?x=1').then(function(response) {
+        \\  requestResult = response.url === 'https://assets.example/static/data%20a.json?x=1' ? 'ok' : 'bad';
+        \\}, function() { requestResult = 'bad'; });
+    );
+}
+
 test "KotoriRuntime CSSOM item index converts with ToUint32" {
     kotori.io.io = std.testing.io;
     const html = "<html><body></body></html>";
