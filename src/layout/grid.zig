@@ -3,6 +3,7 @@ const Box = @import("box.zig").Box;
 const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const block = @import("block.zig");
+const cascade_mod = @import("../css/cascade.zig");
 
 /// Grid area placement: row/col start and end (0-based, exclusive end).
 const AreaPlacement = struct {
@@ -46,7 +47,25 @@ fn buildAreaMap(
 }
 
 /// Lay out a grid container and its children.
+/// Height of the current grid container's containing block, used to resolve
+/// percentage heights the way CSS 2.1 §10.5 requires. 0 means "indefinite"
+/// (percentage heights behave as `auto`). Set by `layoutGridVp` on entry.
+var grid_containing_height: f32 = 0;
+
 pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
+    layoutGridVp(box, containing_width, cursor_y, fonts, 0);
+}
+
+/// Grid layout with the containing block's definite height.
+///
+/// `containing_height` resolves percentage heights on the container itself.
+/// It is 0 when the containing block's height is indefinite, in which case
+/// percentage heights behave as `auto` (CSS 2.1 §10.5) rather than resolving
+/// against the window.
+pub fn layoutGridVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, containing_height: f32) void {
+    const saved_containing_height = grid_containing_height;
+    grid_containing_height = containing_height;
+    defer grid_containing_height = saved_containing_height;
     const style = box.style;
 
     // Content area
@@ -145,12 +164,56 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
         layoutSequential(box, col_widths, num_cols, col_gap, row_gap_val, fonts);
     }
 
-    // Apply explicit height if set
-    const explicit_h = switch (style.height) {
+    // CSS Grid L1 §7.2 / CSS Sizing L3 §5.2: a grid container with a definite
+    // height keeps that size; content that does not fit overflows instead of
+    // stretching the container. `calc()` and percentages must be resolved here
+    // too — Google's homepage hero is `height:calc(100% - 560px);max-height:290px`
+    // and previously collapsed to the content height (600px), pushing the search
+    // form far below where it belongs.
+    const explicit_h: ?f32 = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none, .min_content, .max_content, .fit_content, .content, .calc => null,
+        .percent => |pct| if (grid_containing_height > 0)
+            pct * grid_containing_height / 100.0
+        else
+            null,
+        .calc => |expr| if (grid_containing_height > 0)
+            cascade_mod.resolveCalcPct(expr, grid_containing_height, style.font_size_px)
+        else
+            null,
+        else => null,
     };
-    if (explicit_h) |h| box.content.height = h;
+    {
+        const box_edges_v = box.padding.top + box.padding.bottom +
+            box.border.top + box.border.bottom;
+        const bs_h = if (style.box_sizing == .border_box) box_edges_v else 0;
+        const min_h: f32 = switch (style.min_height) {
+            .px => |mh| @max(mh - bs_h, 0),
+            .percent => |pct| @max(pct * grid_containing_height / 100.0 - bs_h, 0),
+            else => 0,
+        };
+        const max_h: ?f32 = switch (style.max_height) {
+            .px => |mh| @max(mh - bs_h, 0),
+            .percent => |pct| @max(pct * grid_containing_height / 100.0 - bs_h, 0),
+            .calc => |expr| if (cascade_mod.resolveCalcPct(expr, grid_containing_height, style.font_size_px)) |mh|
+                @max(mh - bs_h, 0)
+            else
+                null,
+            else => null,
+        };
+
+        // Height measured by the placement pass, before applying constraints.
+        const content_h = box.content.height;
+
+        if (explicit_h) |eh| {
+            const specified = @max(eh - bs_h, 0);
+            box.content.height = @max(specified, min_h);
+        } else if (min_h > 0 and content_h < min_h) {
+            box.content.height = min_h;
+        }
+        if (max_h) |mh| {
+            if (box.content.height > mh) box.content.height = mh;
+        }
+    }
 }
 
 /// Layout children using grid-template-areas placement.

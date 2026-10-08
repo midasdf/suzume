@@ -100,7 +100,90 @@ pub fn run(allocator: std.mem.Allocator) !void {
     try wordWrapping(allocator);
     try mixedLineHeights(allocator);
     try ellipsisWidths(allocator);
-    std.debug.print("PASS: 40 production margin/layout regressions\n", .{});
+
+    // ── Flex/grid definite-size and intrinsic-width regressions ─────────
+    //
+    // These lock in the fixes for real-site breakage (google.com,
+    // en.wikipedia.org):
+    //   1. `height:100%` on a flex item inside an indefinite-height ancestor
+    //      must behave as `auto`, not resolve against the viewport.
+    //   2. A flex container with a definite height must not grow to fit
+    //      overflowing content.
+    //   3. An auto-width flex item's intrinsic contribution must not be the
+    //      container width just because a descendant is `width:100%`.
+    {
+        // (1) Percentage height inside an indefinite-height flex row.
+        // The row's height must come from its content (17px text line), never
+        // from the window height. Previously this stretched to 600px.
+        var row = Box{ .style = .{ .display = .flex } };
+        defer row.children.deinit(allocator);
+        var item = Box{ .parent = &row, .style = .{ .display = .flex, .height = .{ .percent = 100 } } };
+        defer item.children.deinit(allocator);
+        var text = Box{ .parent = &item, .box_type = .inline_text, .text = "X", .style = .{ .font_size_px = 16 } };
+        defer text.lines.deinit(allocator);
+        try item.children.append(allocator, &text);
+        try row.children.append(allocator, &item);
+        block.layoutBlockVp(&row, 1200, 0, &fonts, 600);
+        try std.testing.expect(row.content.height < 100);
+        try std.testing.expectEqual(@as(f32, 0), item.content.height);
+    }
+    {
+        // (2) A definite-height flex column must not grow past its height.
+        var col = Box{ .style = .{ .display = .flex, .flex_direction = .column, .height = .{ .px = 100 } } };
+        defer col.children.deinit(allocator);
+        var tall = Box{ .parent = &col, .style = .{ .height = .{ .px = 400 } } };
+        defer tall.children.deinit(allocator);
+        try col.children.append(allocator, &tall);
+        block.layoutBlock(&col, 1200, 0, &fonts);
+        try std.testing.expectEqual(@as(f32, 100), col.content.height);
+    }
+    {
+        // (3) An auto-width flex item wrapping a stretched descendant must
+        // contribute its content width, not the container width.
+        var row = Box{ .style = .{ .display = .flex } };
+        defer row.children.deinit(allocator);
+        var grow = Box{
+            .parent = &row,
+            .style = .{ .display = .inline_block, .flex_grow = 1 },
+        };
+        defer grow.children.deinit(allocator);
+        var inner = Box{ .parent = &grow, .style = .{ .display = .flex, .width = .{ .percent = 100 } } };
+        defer inner.children.deinit(allocator);
+        var label = Box{ .parent = &inner, .box_type = .inline_text, .text = "Gmail", .style = .{ .font_size_px = 16 } };
+        defer label.lines.deinit(allocator);
+        try inner.children.append(allocator, &label);
+        try grow.children.append(allocator, &inner);
+        try row.children.append(allocator, &grow);
+        block.layoutBlock(&row, 1200, 0, &fonts);
+        // The grow item must expand to the row, but its *intrinsic* width (used
+        // while resolving basis) must not have been the full 1200 up front.
+        try std.testing.expect(grow.content.width <= 1200);
+        try std.testing.expectEqual(@as(f32, 1200), row.content.width);
+    }
+    {
+        // (4) `max-width` must be applied before `margin:auto` centring.
+        // CSS 2.1 §10.4: auto margins absorb the space left after the used
+        // width is resolved, so a max-width bound must shift the box to the
+        // centre (Google's search field is `max-width:688px;margin:auto`).
+        var parent = Box{ .style = .{ .width = .{ .px = 1008 } } };
+        defer parent.children.deinit(allocator);
+        var child = Box{
+            .parent = &parent,
+            .style = .{
+                .max_width = .{ .px = 688 },
+                .margin_left_auto = true,
+                .margin_right_auto = true,
+            },
+        };
+        defer child.children.deinit(allocator);
+        try parent.children.append(allocator, &child);
+        block.layoutBlock(&parent, 1008, 0, &fonts);
+        try std.testing.expectEqual(@as(f32, 688), child.content.width);
+        // Remaining space (1008 - 688 = 320) is split evenly.
+        try std.testing.expectEqual(@as(f32, 160), child.content.x);
+    }
+
+    std.debug.print("PASS: 44 production margin/layout regressions (incl. flex/grid definite size + intrinsic width + max-width centring)\n", .{});
 }
 
 fn textLineMetrics(allocator: std.mem.Allocator) !void {

@@ -325,12 +325,22 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts:
                 h;
         },
         .percent => |pct| {
+            // CSS Sizing L3 §5.3 / CSS 2.1 §10.5: a percentage height resolves
+            // against the containing block's height. When that height is
+            // indefinite (`viewport_height <= 0`) the used value is `auto`, i.e.
+            // content-based — NOT the viewport. Falling back to the viewport here
+            // made `height:100%` elements inside indefinite-height ancestors (for
+            // example Wikipedia's `.mw-logo{height:100%}` inside a flex row) size
+            // themselves to the window, which then stretched the whole flex
+            // container. Reset to 0 so the box is re-sized from its content.
             if (viewport_height > 0) {
                 const resolved = pct * viewport_height / 100.0;
                 box.content.height = if (box.style.box_sizing == .border_box)
                     @max(resolved - pad_v_pre - bdr_v_pre, 0)
                 else
                     resolved;
+            } else {
+                box.content.height = 0;
             }
         },
         .calc => |expr| {
@@ -342,6 +352,8 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts:
                     else
                         resolved;
                 }
+            } else {
+                box.content.height = 0;
             }
         },
         else => {},
@@ -358,14 +370,14 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts:
 
     // Delegate to flex layout if display is flex
     if (box.style.display == .flex or box.style.display == .inline_flex) {
-        flex.layoutFlex(box, containing_width, cursor_y, fonts);
+        flex.layoutFlexVp(box, containing_width, cursor_y, fonts, viewport_height);
         resolveContainerAutoMargins(box, containing_width);
         return;
     }
 
     // Grid layout
     if (box.style.display == .grid or box.style.display == .inline_grid) {
-        grid.layoutGrid(box, containing_width, cursor_y, fonts);
+        grid.layoutGridVp(box, containing_width, cursor_y, fonts, viewport_height);
         resolveContainerAutoMargins(box, containing_width);
         return;
     }
@@ -499,6 +511,28 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts:
         else => {},
     }
 
+    // CSS 2.1 §10.4 / CSS Box Model §3: `margin: auto` distributes the
+    // *remaining* space after the used width is resolved. Because min/max-width
+    // are applied above, the auto margins computed from the pre-clamped width
+    // are stale whenever a max-width bound actually kicked in — a box like
+    // Google's search field (`max-width:688px; margin-left:auto; margin-right:auto`)
+    // would stay pinned to the left instead of centring. Re-distribute here,
+    // after the width is final.
+    if (box.style.margin_left_auto or box.style.margin_right_auto) {
+        const remaining_w = @max(containing_width - box.content.width - pad_h - bdr_h -
+            (if (box.style.margin_left_auto) @as(f32, 0) else box.margin.left) -
+            (if (box.style.margin_right_auto) @as(f32, 0) else box.margin.right), 0);
+        if (box.style.margin_left_auto and box.style.margin_right_auto) {
+            box.margin.left = remaining_w / 2.0;
+            box.margin.right = remaining_w / 2.0;
+        } else if (box.style.margin_left_auto) {
+            box.margin.left = remaining_w;
+        } else {
+            box.margin.right = remaining_w;
+        }
+        box.content.x = box.padding.left + box.border.left + box.margin.left;
+    }
+
     // Handle <hr> elements
     if (box.is_hr) {
         box.content.height = 0; // The border-top provides the visual line
@@ -572,7 +606,11 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y_arg: f32, fonts:
         // Block formatting context (also handles empty children)
         // Pass containing height for percentage height resolution in children.
         // If this box has a definite height, use it; otherwise pass viewport_height.
-        const child_containing_height = if (box.content.height > 0) box.content.height else viewport_height;
+        // CSS 2.1 §10.5: children resolve percentage heights against this box's
+        // content height. When this box's own height is indefinite, pass 0 so a
+        // percentage child becomes content-sized instead of silently resolving
+        // against the viewport.
+        const child_containing_height = if (box.content.height > 0) box.content.height else 0;
         layoutBlockChildren(box, fonts, child_containing_height);
     }
 
@@ -803,14 +841,34 @@ fn resolveContainerAutoMargins(box: *Box, containing_width: f32) void {
 /// Used by flex layout after determining a flex item's definite cross size.
 /// Does NOT change the box's own `content.height`.
 pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, containing_height: f32) void {
-    // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3: re-layout the item's block
-    // children so that `height: <pct>` descendants resolve against the item's
-    // definite main-axis size (containing_height).  We must NOT let
-    // layoutBlockChildren overwrite the item's own content.height, which was
-    // already set to the flex-resolved size by the caller.  Save and restore.
+    // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3: re-layout the item's children so
+    // that `height: <pct>` descendants resolve against the item's definite
+    // cross size (containing_height). We must NOT let the re-layout overwrite the
+    // item's own content size, which the caller already resolved.
+    //
+    // This has to respect the box's own formatting context. A flex/grid
+    // container's children were sized by the flex/grid algorithm; running plain
+    // block layout over them re-stretches every item to the container width and
+    // discards the per-item main sizes the parent flex algorithm just computed
+    // (this broke Google's homepage nav row: the anchors were correct at 101/42
+    // until this pass re-inflated them to 1188).
     const saved_h = box.content.height;
-    layoutBlockChildren(box, fonts, containing_height);
+    const saved_w = box.content.width;
+
+    switch (box.style.display) {
+        .flex, .inline_flex, .grid, .inline_grid => {
+            // Re-enter the formatting algorithm with the item's already-resolved
+            // width pinned as definite, so its children keep their computed sizes.
+            const saved_width_style = box.style.width;
+            box.style.width = .{ .px = saved_w };
+            layoutBlock(box, saved_w, box.content.y, fonts);
+            box.style.width = saved_width_style;
+        },
+        else => layoutBlockChildren(box, fonts, containing_height),
+    }
+
     box.content.height = saved_h;
+    box.content.width = saved_w;
 }
 
 fn collapseMargins(a: f32, b: f32) f32 {
@@ -1152,6 +1210,197 @@ pub fn computeMinContentWidthPublic(box: *Box, fonts: *FontCache) f32 {
 /// CSS Sizing L3 §5: max-content inline size. Public wrapper for flex layout.
 pub fn computeMaxContentWidthPublic(box: *Box, fonts: *FontCache) f32 {
     return computeMaxContentWidth(box, fonts);
+}
+
+/// Compute a flex item's intrinsic main-size contribution along the inline axis.
+///
+/// `computeShrinkToFitWidth` measures the rightmost painted edge of the already
+/// laid-out children, so it is only meaningful when the children were laid out
+/// at their *intrinsic* width. Flex layout pre-lays auto-width items out at the
+/// full container width to discover their content; for any descendant that
+/// stretches to fill its parent (`width:100%`, a nested `display:flex` whose
+/// items stretch, a block child of a block, ...) that measurement returns the
+/// container width and the item is treated as if it needed all the space.
+///
+/// Google's homepage hits this: `div.AorTac{display:inline-block;flex-grow:1}`
+/// wraps `<header class="gb_y" style="display:flex;width:100%">`, so the header
+/// reported 1188px instead of its ~100px content and the whole nav row
+/// overflowed (the links stacked vertically and the page grew by ~290px).
+///
+/// CSS Sizing L3 §5.2 / Flexbox L1 §9.2: the content-based contribution of an
+/// item is its max-content size, so we recurse into the box tree for a value
+/// that does not depend on the layout width.
+pub fn computeIntrinsicMainWidthPublic(box: *Box, fonts: *FontCache) f32 {
+    const intrinsic = computeIntrinsicMaxContentWidth(box, fonts);
+    if (intrinsic > 0) return intrinsic;
+    // No measurable content (empty box, unsupported subtree): fall back to the
+    // laid-out geometry so the item still contributes something.
+    return computeShrinkToFitWidth(box);
+}
+
+/// CSS Sizing L3 §5.2 max-content inline size, computed from the box tree
+/// without depending on a previous layout pass.
+///
+/// `computeMaxContentWidth` above reads `child.content.width` for non-text
+/// children. That value is only the intrinsic size when the child happened to be
+/// laid out at max-content width; for containers whose children stretch to the
+/// parent's width it equals whatever width the previous pass used — exactly the
+/// value we must not trust. This variant recurses instead.
+fn computeIntrinsicMaxContentWidth(box: *Box, fonts: *FontCache) f32 {
+    const is_flex_row = (box.style.display == .flex or box.style.display == .inline_flex) and
+        (box.style.flex_direction == .row or box.style.flex_direction == .row_reverse);
+
+    var max_line: f32 = 0;
+    var inline_accum: f32 = 0;
+    var flex_row_accum: f32 = 0;
+
+    for (box.children.items) |child| {
+        // Out-of-flow boxes do not contribute to intrinsic inline size.
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+
+        const child_edges = child.padding.left + child.padding.right +
+            child.border.left + child.border.right +
+            child.margin.left + child.margin.right;
+
+        // A definite (non-percentage) child width replaces its content
+        // contribution; percentage widths are indefinite for sizing purposes.
+        const definite_w: ?f32 = switch (child.style.width) {
+            .px => |w| w,
+            else => null,
+        };
+
+        if (child.box_type == .inline_text and definite_w == null) {
+            const text = child.text orelse continue;
+            const size_px: u32 = @intFromFloat(child.style.font_size_px);
+            const tr = if (child.style.font_family == .web_font and child.style.font_family_name != null)
+                (fonts.getRendererForWebFont(size_px, child.style.font_family_name.?) orelse
+                    fonts.getRendererForFamily(size_px, .sans_serif) orelse continue)
+            else
+                (fonts.getRendererForFamily(size_px, child.style.font_family) orelse continue);
+            const m = tr.measure(text);
+            const w: f32 = @floatFromInt(m.width);
+            if (is_flex_row) {
+                flex_row_accum += w + child_edges;
+            } else {
+                inline_accum += w;
+            }
+            continue;
+        }
+
+        const contribution: f32 = if (definite_w) |w| blk: {
+            const inner = if (child.style.box_sizing == .border_box)
+                @max(w - (child.padding.left + child.padding.right +
+                    child.border.left + child.border.right), 0)
+            else
+                w;
+            break :blk inner + child_edges;
+        } else switch (child.box_type) {
+            .replaced => blk: {
+                const w = if (child.intrinsic_width > 0) child.intrinsic_width else child.content.width;
+                break :blk w + child_edges;
+            },
+            else => blk: {
+                const inner = computeIntrinsicMaxContentWidth(child, fonts);
+                break :blk inner + child_edges;
+            },
+        };
+
+        if (is_flex_row) {
+            // A row flex container's max-content size is the sum of its items.
+            flex_row_accum += contribution;
+            continue;
+        }
+
+        // A block-level child takes its own line: flush any inline run first.
+        if (inline_accum > max_line) max_line = inline_accum;
+        inline_accum = 0;
+        if (contribution > max_line) max_line = contribution;
+    }
+
+    if (is_flex_row and flex_row_accum > max_line) max_line = flex_row_accum;
+    if (inline_accum > max_line) max_line = inline_accum;
+    return max_line;
+}
+
+/// CSS Flexbox L1 §4.5 "content size suggestion": the min-content inline size,
+/// computed from the box tree without depending on a previous layout pass.
+///
+/// `computeMinContentWidth` reads `child.content.width` for non-text children,
+/// which is only intrinsic when the child happened to be laid out at max-content
+/// width. Using the laid-out (container-width) value here makes `min-width: auto`
+/// pin a flex item to the full container width — the second half of the Google
+/// nav-row overflow.
+pub fn computeIntrinsicMinContentWidthPublic(box: *Box, fonts: *FontCache) f32 {
+    const intrinsic = computeIntrinsicMinContentWidth(box, fonts);
+    if (intrinsic > 0) return intrinsic;
+    return computeMinContentWidth(box, fonts);
+}
+
+fn computeIntrinsicMinContentWidth(box: *Box, fonts: *FontCache) f32 {
+    const is_flex = box.style.display == .flex or box.style.display == .inline_flex;
+    const is_column = is_flex and
+        (box.style.flex_direction == .column or box.style.flex_direction == .column_reverse);
+
+    var max_child: f32 = 0;
+    var sum_children: f32 = 0;
+    var any: bool = false;
+
+    for (box.children.items) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+
+        const child_edges = child.padding.left + child.padding.right +
+            child.border.left + child.border.right +
+            child.margin.left + child.margin.right;
+
+        const contribution: f32 = switch (child.style.width) {
+            .px => |w| blk: {
+                const inner = if (child.style.box_sizing == .border_box)
+                    @max(w - (child.padding.left + child.padding.right +
+                        child.border.left + child.border.right), 0)
+                else
+                    w;
+                break :blk inner + child_edges;
+            },
+            else => switch (child.box_type) {
+                .inline_text => blk: {
+                    const text = child.text orelse continue;
+                    const size_px: u32 = @intFromFloat(child.style.font_size_px);
+                    const tr = if (child.style.font_family == .web_font and child.style.font_family_name != null)
+                        (fonts.getRendererForWebFont(size_px, child.style.font_family_name.?) orelse
+                            fonts.getRendererForFamily(size_px, .sans_serif) orelse continue)
+                    else
+                        (fonts.getRendererForFamily(size_px, child.style.font_family) orelse continue);
+                    // min-content of a text run is its widest unbreakable word.
+                    var widest: f32 = 0;
+                    var iter = std.mem.tokenizeAny(u8, text, " \t\n\r");
+                    while (iter.next()) |word| {
+                        const m = tr.measure(word);
+                        const w: f32 = @floatFromInt(m.width);
+                        if (w > widest) widest = w;
+                    }
+                    break :blk widest + child_edges;
+                },
+                .replaced => blk: {
+                    const w = if (child.intrinsic_width > 0) child.intrinsic_width else child.content.width;
+                    break :blk w + child_edges;
+                },
+                else => blk: {
+                    const inner = computeIntrinsicMinContentWidth(child, fonts);
+                    break :blk inner + child_edges;
+                },
+            },
+        };
+
+        any = true;
+        if (contribution > max_child) max_child = contribution;
+        sum_children += contribution;
+    }
+
+    if (!any) return 0;
+    // A row flex container's min-content size is the sum of its items (they
+    // cannot wrap by default); a column/block container's is the widest child.
+    if (is_flex and !is_column) return sum_children;
+    return max_child;
 }
 
 /// CSS Sizing L3: min-content width — the narrowest the box can be without overflow.

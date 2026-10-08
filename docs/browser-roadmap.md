@@ -94,6 +94,52 @@
 - Added production geometry assertions and an offline packaged-GUI PNG test
   that checks exact marker colors, area and position through real layout/paint.
 
+### Modern-site layout compatibility (Google, Wikipedia)
+
+Four defects made mainstream sites unrenderable. All four were reproduced
+offline (fetched HTML with every stylesheet inlined, so the fixtures are
+deterministic and network-free) and fixed at the layout layer:
+
+- **Percentage heights no longer resolve against the viewport when the
+  containing block's height is indefinite.** `height: 100%` inside a short
+  ancestor used to become the window height, which stretched the whole
+  containing block. Wikipedia's `.mw-logo{height:100%}` inside a flex row
+  turned its 50px header into 676px. Percentage heights now behave as `auto`
+  in that case, per CSS 2.1 §10.5; flex and grid layout receive the containing
+  block's definite height explicitly instead of reading the global viewport.
+- **Definite-height flex/grid containers keep their size.** `layoutFlexColumn`
+  ended with `max(definite, content)`, so a `height:100%` column grew past the
+  viewport when content overflowed; Google's homepage measured 1030px instead
+  of 742px and pushed its own search form off-screen. Grid containers now also
+  resolve `calc()`/percentage heights and apply min/max-height.
+- **Flex item intrinsic contributions are computed from the box tree, not from
+  a container-width layout.** `shrink-to-fit` measured the already-laid-out
+  children, so any descendant with `width:100%` (Google's
+  `div.AorTac{flex-grow:1}` wrapping a `width:100%` flex header) reported the
+  full container width and made the nav row overflow — the top links stacked
+  vertically. New `computeIntrinsicMainWidthPublic` /
+  `computeIntrinsicMinContentWidthPublic` recurse without depending on a
+  previous layout pass; `min-width:auto` uses the min-content (content size
+  suggestion, Flexbox L1 §4.5).
+- **`max-width` is applied before `margin:auto` centring.** Auto margins were
+  computed from the pre-clamped width, so `max-width:688px;margin:auto`
+  (Google's search field) stayed pinned left instead of centring.
+- Re-entering a flex/grid container for a definite containing height
+  (`relayoutChildrenWithContainingHeight`) now respects its formatting context;
+  plain block layout there re-stretched every item and discarded the per-item
+  main sizes the flex algorithm had just computed.
+
+`--dump-layout <path>` (`--dump-layout-verbose`) writes a DOM-shaped outline of
+the painted box tree with geometry and the CSS properties most often
+responsible for a break, which is how these were located. Four new regression
+cases cover the flex/grid definite-size, intrinsic-width and max-width-centring
+behaviour (44 production layout regressions total).
+
+Measured effect (1200x800 headless screenshots): google.com went from only two
+header links drawn at a 1395px page height to a correct header, logo, centred
+search box, buttons and footer; en.wikipedia.org went from an empty page to a
+complete article with its 81px header (previously 676px).
+
 ## Verification
 
 Locally verified on an Apple Silicon Mac using Zig 0.16.0:
@@ -104,6 +150,13 @@ Locally verified on an Apple Silicon Mac using Zig 0.16.0:
   testing-allocator leak checks, including 99 CSSOM tests previously not run,
   nine new nesting/selector fixtures and cascade-priority regressions. This is
   a regression baseline, not proof of complete CSS standards compatibility.
+- Production layout regressions: **44 cases pass**, including flex/grid
+  definite-size retention, percentage-height resolution inside indefinite-height
+  ancestors, intrinsic (max-content/min-content) flex contributions and
+  max-width-before-auto-margin centring. Re-verified against offline fixtures of
+  google.com and en.wikipedia.org: the Google nav row no longer overflows, the
+  page is 742px tall instead of 1030px, and the Wikipedia header is 81px instead
+  of 676px.
 - Packaged-browser DOM/CSS integration assertions pass for 17 additional
   fixtures: nesting, trailing declarations, !important specificity, parent-list
   specificity, conditional groups, a 301-rule stylesheet, line-height, distinct

@@ -30,6 +30,7 @@ const Box = @import("layout/box.zig").Box;
 const ImageCache = @import("paint/image.zig").ImageCache;
 const decodeImage = @import("paint/image.zig").decodeImage;
 const ImageFetcher = @import("net/image_fetcher.zig").ImageFetcher;
+const layout_dump = @import("features/layout_dump.zig");
 
 const default_window_w = chrome.default_window_w;
 const default_window_h = chrome.default_window_h;
@@ -1772,6 +1773,8 @@ pub fn main(init: std.process.Init) !void {
     var screenshot_path: ?[]const u8 = null;
     var gui_smoke_path: ?[]const u8 = null;
     var webdriver_port: ?u16 = null;
+    var dump_layout_path: ?[]const u8 = null;
+    var dump_layout_verbose = false;
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--test-dom")) {
@@ -1795,6 +1798,11 @@ pub fn main(init: std.process.Init) !void {
             kotori.io.wpt_mode = true;
         } else if (std.mem.eql(u8, arg, "--screenshot")) {
             screenshot_path = args.next();
+        } else if (std.mem.eql(u8, arg, "--dump-layout")) {
+            dump_layout_path = args.next();
+        } else if (std.mem.eql(u8, arg, "--dump-layout-verbose")) {
+            dump_layout_path = args.next();
+            dump_layout_verbose = true;
         } else if (std.mem.eql(u8, arg, "--gui-smoke")) {
             gui_smoke_path = args.next() orelse return error.MissingScreenshotPath;
         } else if (std.mem.startsWith(u8, arg, "--webdriver=")) {
@@ -2102,12 +2110,14 @@ pub fn main(init: std.process.Init) !void {
     // steps itself. We loop until the page is stable: no pending JS, no in-flight
     // image fetches, and DOM not dirty. A bounded iteration count guards
     // against runaway scripts.
-    if (screenshot_path) |spath| {
+    if (screenshot_path != null or dump_layout_path != null) {
         if (page_states.items.len == 0) {
-            surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
-            surface.update();
-            _ = surface.dumpToPng(spath);
-            std.debug.print("[screenshot] Saved to {s} (no page)\n", .{spath});
+            if (screenshot_path) |spath| {
+                surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
+                surface.update();
+                _ = surface.dumpToPng(spath);
+                std.debug.print("[screenshot] Saved to {s} (no page)\n", .{spath});
+            }
             return;
         }
         const pg = &page_states.items[0];
@@ -2356,10 +2366,25 @@ pub fn main(init: std.process.Init) !void {
             painter_mod.paint(root_box, target, &fonts, 0, 0, 0, target.height, ic_ptr);
         }
         if (dump_surface == null) surface.update();
-        if (target.dumpToPng(spath)) {
-            std.debug.print("[screenshot] Saved to {s} ({d}x{d})\n", .{ spath, target.width, target.height });
-        } else {
-            std.debug.print("[screenshot] Failed to save to {s}\n", .{spath});
+        if (dump_layout_path) |dpath| {
+            if (pg.root_box) |root_box| {
+                layout_dump.writeTo(allocator, root_box, dpath, .{
+                    .verbose = dump_layout_verbose,
+                }) catch |err| {
+                    std.debug.print("[dump-layout] Failed to write {s}: {}\n", .{ dpath, err });
+                };
+                std.debug.print("[dump-layout] Wrote {s} (page height {d:.0})\n", .{ dpath, pg.total_height });
+            } else {
+                std.debug.print("[dump-layout] No root box to dump\n", .{});
+            }
+        }
+
+        if (screenshot_path) |spath| {
+            if (target.dumpToPng(spath)) {
+                std.debug.print("[screenshot] Saved to {s} ({d}x{d})\n", .{ spath, target.width, target.height });
+            } else {
+                std.debug.print("[screenshot] Failed to save to {s}\n", .{spath});
+            }
         }
         return;
     }

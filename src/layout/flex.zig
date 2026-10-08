@@ -43,7 +43,7 @@ fn resolveFlexBasis(
         // contribution along the main axis.
         .content, .max_content => if (is_row) child.content.width else child.content.height,
         .min_content => if (is_row)
-            block.computeMinContentWidthPublic(child, fonts)
+            block.computeIntrinsicMinContentWidthPublic(child, fonts)
         else
             // Column-axis min-content height is not meaningfully different
             // from the measured height in our model (no fragmentation).
@@ -53,7 +53,7 @@ fn resolveFlexBasis(
         .fit_content => blk: {
             const max_c: f32 = if (is_row) child.content.width else child.content.height;
             const min_c: f32 = if (is_row)
-                block.computeMinContentWidthPublic(child, fonts)
+                block.computeIntrinsicMinContentWidthPublic(child, fonts)
             else
                 child.content.height;
             // No argument form: clamp max-content by available main size.
@@ -75,7 +75,26 @@ fn resolveFlexBasis(
 /// The flex container box should have display: flex.
 const dom_api = @import("../js/dom_api.zig");
 
+/// Height of the current flex container's containing block, used to resolve
+/// percentage heights the way CSS 2.1 §10.5 requires. 0 means "indefinite"
+/// (percentage heights behave as `auto`). Set by `layoutFlexVp` on entry.
+var flex_containing_height: f32 = 0;
+
 pub fn layoutFlex(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
+    layoutFlexVp(box, containing_width, cursor_y, fonts, 0);
+}
+
+/// Flex layout with the containing block's definite height.
+///
+/// `containing_height` resolves percentage heights on the container itself and
+/// on its items. It is 0 when the containing block's height is indefinite, in
+/// which case percentage heights behave as `auto` (CSS 2.1 §10.5). Passing the
+/// global viewport here instead made `height:100%` items inside short ancestors
+/// (e.g. Wikipedia's `.mw-logo`) stretch to the window height.
+pub fn layoutFlexVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, containing_height: f32) void {
+    const saved_containing_height = flex_containing_height;
+    flex_containing_height = containing_height;
+    defer flex_containing_height = saved_containing_height;
     const style = box.style;
     // Content position
     const content_x = box.margin.left + box.padding.left + box.border.left;
@@ -118,7 +137,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *
     if (children.len == 0) {
         box.content.height = switch (style.height) {
             .px => |h| h,
-            .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+            .percent => |pct| pct * flex_containing_height / 100.0,
             .auto, .none, .min_content, .max_content, .fit_content, .content, .calc => 0,
         };
         return;
@@ -175,7 +194,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *
         // to the content's actual extent so later basis resolution reads the
         // true max-content contribution.
         if (basis_is_intrinsic) {
-            const fit_w = block.computeShrinkToFitWidthPublic(child);
+            const fit_w = block.computeIntrinsicMainWidthPublic(child, fonts);
             if (fit_w > 0 and fit_w < child.content.width) {
                 child.content.width = fit_w;
             }
@@ -218,7 +237,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
             // Layout at container width first to measure content
             block.layoutBlock(child, container_width, box.content.y, fonts);
             // Then shrink to fit content (intrinsic width)
-            const fit_w = block.computeShrinkToFitWidthPublic(child);
+            const fit_w = block.computeIntrinsicMainWidthPublic(child, fonts);
             if (fit_w > 0 and fit_w < child.content.width) {
                 child.content.width = fit_w;
             }
@@ -291,8 +310,9 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 // min-width:auto for flex items: use content minimum width
                 // only when overflow is visible (default)
                 if (child.style.overflow_x == .visible and child.style.overflow_y == .visible) {
-                    // Use the intrinsic content width as minimum
-                    const content_min = block.computeShrinkToFitWidthPublic(child);
+                    // Flexbox L1 §4.5: the content size suggestion is the
+                    // item's min-content size, not its laid-out geometry.
+                    const content_min = block.computeIntrinsicMinContentWidthPublic(child, fonts);
                     // Clamp to flex-basis or explicit width to avoid expanding beyond intended size
                     const base = basis orelse (explicit_child_w orelse content_min);
                     break :blk @min(content_min, base);
@@ -340,7 +360,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     // Container cross size (resolve % against viewport)
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+        .percent => |pct| pct * flex_containing_height / 100.0,
         .auto, .none, .min_content, .max_content, .fit_content, .content, .calc => null,
     };
     const container_cross = explicit_h orelse max_cross;
@@ -611,7 +631,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, font
             if (child.style.display != .flex and child.style.display != .inline_flex and
                 child.style.display != .grid and child.style.display != .inline_grid)
             {
-                const fit_w = block.computeShrinkToFitWidthPublic(child);
+                const fit_w = block.computeIntrinsicMainWidthPublic(child, fonts);
                 if (fit_w > 0 and fit_w < child.content.width) {
                     child.content.width = fit_w;
                 }
@@ -740,7 +760,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, font
                 .percent => |pct| pct * container_width / 100.0,
                 .auto => blk: {
                     if (child.style.overflow_x == .visible and child.style.overflow_y == .visible) {
-                        const content_min = block.computeShrinkToFitWidthPublic(child);
+                        const content_min = block.computeIntrinsicMinContentWidthPublic(child, fonts);
                         const base = basis orelse (explicit_child_w orelse content_min);
                         break :blk @min(content_min, base);
                     }
@@ -979,7 +999,7 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, f
     // indefinite containers — keep same behaviour as nowrap).
     const explicit_h: ?f32 = switch (style.height) {
         .px => |h| h,
-        .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+        .percent => |pct| pct * flex_containing_height / 100.0,
         .auto, .none, .min_content, .max_content, .fit_content, .content, .calc => null,
     };
 
@@ -1347,7 +1367,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts
     if (children.len == 0) {
         box.content.height = switch (style.height) {
             .px => |h| h,
-            .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+            .percent => |pct| pct * flex_containing_height / 100.0,
             .auto, .none, .min_content, .max_content, .fit_content, .content, .calc => 0,
         };
         return;
@@ -1387,7 +1407,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts
     // Explicit container height (needed for flex-grow distribution)
     const explicit_h: ?f32 = switch (style.height) {
         .px => |h| h,
-        .percent => |pct| if (box.content.height > 0) box.content.height else pct * dom_api.g_viewport_height / 100.0,
+        .percent => |pct| if (box.content.height > 0) box.content.height else pct * flex_containing_height / 100.0,
         .auto, .none, .min_content, .max_content, .fit_content, .content, .calc => null,
     };
 
@@ -1613,7 +1633,27 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts
         if (col_flex_pos < col_flex_count) cursor_y += per_gap;
     }
 
-    box.content.height = @max(container_main, cursor_y);
+    // CSS Flexbox L1 §9.2 / CSS Sizing L3 §5.2: a flex container with a
+    // definite main size keeps that size. Content that does not fit overflows
+    // the box (subject to min-height); it must not stretch the container, or a
+    // `height:100%` column grows past the viewport and pushes the whole page
+    // down (Google's homepage grew from 742px to 1030px this way).
+    const used_main: f32 = if (explicit_h) |eh| blk: {
+        const min_h: f32 = switch (style.min_height) {
+            .px => |mh| mh,
+            .percent => |pct| pct * flex_containing_height / 100.0,
+            else => 0,
+        };
+        const max_h: ?f32 = switch (style.max_height) {
+            .px => |mh| mh,
+            .percent => |pct| pct * flex_containing_height / 100.0,
+            else => null,
+        };
+        var h = @max(eh, min_h);
+        if (max_h) |mh| h = @min(h, mh);
+        break :blk h;
+    } else @max(container_main, cursor_y);
+    box.content.height = used_main;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
