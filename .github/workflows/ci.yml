@@ -39,8 +39,8 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Text editing tests
-        run: zig build test-ui-input -Doptimize=ReleaseSafe
+      - name: Text editing and per-tab navigation tests
+        run: zig build test-ui-input test-navigation -Doptimize=ReleaseSafe
       - name: CSS regression tests
         run: zig build test-css -Doptimize=ReleaseSafe
       - name: Production DOM, CSS cascade and layout regressions
@@ -87,7 +87,7 @@ jobs:
         run: |
           prefix="$(brew --prefix)"
           case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
-          zig build test-ui-input test-text-fallback test-surface -Doptimize=ReleaseSafe \
+          zig build test-ui-input test-navigation test-text-fallback test-surface -Doptimize=ReleaseSafe \
             -Dtarget="$arch-macos.15.0" --search-prefix "$prefix" \
             --search-prefix "$prefix/opt/curl" --search-prefix "$prefix/opt/sqlite"
       - name: CSS regression tests

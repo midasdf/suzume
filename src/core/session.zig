@@ -95,6 +95,12 @@ pub fn restoreSession(
         if (url.len > 0) {
             if (tab_count == 0 and tab_mgr.tabCount() == 1) {
                 tab_mgr.updateActiveUrl(url);
+                // Reusing the startup tab must not leave the homepage as its
+                // session-history entry. Full back/forward lists aren't saved.
+                if (tab_mgr.getActiveTab()) |tab| {
+                    tab.history.deinit(tab_mgr.allocator);
+                    tab.history.push(tab_mgr.allocator, tab.url) catch {};
+                }
                 tab_mgr.updateActiveTitle(if (title.len > 0) title else url);
             } else {
                 _ = tab_mgr.newTab(url);

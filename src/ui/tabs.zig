@@ -1,13 +1,15 @@
 const std = @import("std");
+const History = @import("../navigation.zig").History;
 
 /// A single browser tab.
 pub const Tab = struct {
     url: []u8, // owned
     title: []u8, // owned
     scroll_y: f32,
+    history: History = .{},
     scroll_x: f32 = 0,
     active: bool, // has live DOM/layout/JS
-    is_private: bool = false, // private browsing mode — no history, no session save
+    is_private: bool = false, // no persistent visited history or session save
 
     /// Timestamp of last activation (for LRU eviction). Monotonic counter.
     last_used: u64,
@@ -35,6 +37,7 @@ pub const TabManager = struct {
         for (self.tabs.items) |*tab| {
             self.allocator.free(tab.url);
             self.allocator.free(tab.title);
+            tab.history.deinit(self.allocator);
         }
         self.tabs.deinit(self.allocator);
     }
@@ -48,19 +51,22 @@ pub const TabManager = struct {
         };
 
         self.counter += 1;
-        const tab = Tab{
+        var tab = Tab{
             .url = owned_url,
             .title = owned_title,
             .scroll_y = 0,
             .active = true,
             .last_used = self.counter,
         };
-
-        self.tabs.append(self.allocator, tab) catch {
+        tab.history.push(self.allocator, url) catch {};
+        self.tabs.ensureUnusedCapacity(self.allocator, 1) catch {
+            tab.history.deinit(self.allocator);
             self.allocator.free(owned_url);
             self.allocator.free(owned_title);
             return self.active_index;
         };
+
+        self.tabs.appendAssumeCapacity(tab);
 
         const new_index = self.tabs.items.len - 1;
         // Mark old active tab as no longer active for display purposes
@@ -82,7 +88,7 @@ pub const TabManager = struct {
         };
 
         self.counter += 1;
-        const tab = Tab{
+        var tab = Tab{
             .url = owned_url,
             .title = owned_title,
             .scroll_y = 0,
@@ -90,12 +96,15 @@ pub const TabManager = struct {
             .is_private = true,
             .last_used = self.counter,
         };
-
-        self.tabs.append(self.allocator, tab) catch {
+        tab.history.push(self.allocator, url) catch {};
+        self.tabs.ensureUnusedCapacity(self.allocator, 1) catch {
+            tab.history.deinit(self.allocator);
             self.allocator.free(owned_url);
             self.allocator.free(owned_title);
             return self.active_index;
         };
+
+        self.tabs.appendAssumeCapacity(tab);
 
         const new_index = self.tabs.items.len - 1;
         if (self.tabs.items.len > 1) {
@@ -112,9 +121,10 @@ pub const TabManager = struct {
         if (index >= self.tabs.items.len) return;
         if (self.tabs.items.len <= 1) return; // Don't close last tab (caller handles quit)
 
-        const tab = self.tabs.items[index];
+        var tab = self.tabs.items[index];
         self.allocator.free(tab.url);
         self.allocator.free(tab.title);
+        tab.history.deinit(self.allocator);
         _ = self.tabs.orderedRemove(index);
 
         // Adjust active index

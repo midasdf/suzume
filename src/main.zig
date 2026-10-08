@@ -192,6 +192,8 @@ fn applyActiveTabToUi(
     if (tab_mgr.getActiveTab()) |tab| {
         scroll_y.* = tab.scroll_y;
         scroll_x.* = tab.scroll_x;
+        if (tab.history.current() == null and tab.url.len > 0)
+            _ = pushHistoryNavigationUrl(allocator, &tab.history, tab.url);
         url_input.setText(tab.url);
         url_input.focused = false;
         if (current_url.*) |old| allocator.free(old);
@@ -229,28 +231,18 @@ fn recordHistoryIfNotPrivate(storage: ?*Storage, tab_mgr: *TabManager, url: []co
     if (!is_priv) s.addHistory(url, title);
 }
 
-/// Drop forward history entries after `history_pos` (frees their strings).
-fn truncateForwardHistory(allocator: std.mem.Allocator, history: *std.ArrayListUnmanaged([]u8), history_pos: usize) void {
-    if (history_pos + 1 >= history.items.len) return;
-    for (history.items[history_pos + 1 ..]) |item| {
-        allocator.free(item);
-    }
-    history.shrinkRetainingCapacity(history_pos + 1);
+const NavigationHistory = @import("navigation.zig").History;
+
+fn activeHistory(tab_mgr: *TabManager) *NavigationHistory {
+    return &tab_mgr.getActiveTab().?.history;
 }
 
-/// Append a copy of `url` to history and move `history_pos` to the new tail. Returns false on OOM.
 fn pushHistoryNavigationUrl(
     allocator: std.mem.Allocator,
-    history: *std.ArrayListUnmanaged([]u8),
-    history_pos: *usize,
+    history: *NavigationHistory,
     url: []const u8,
 ) bool {
-    const owned = allocator.dupe(u8, url) catch return false;
-    history.append(allocator, owned) catch {
-        allocator.free(owned);
-        return false;
-    };
-    history_pos.* = history.items.len - 1;
+    history.push(allocator, url) catch return false;
     return true;
 }
 
@@ -1969,14 +1961,6 @@ pub fn main(init: std.process.Init) !void {
     var prev_scroll_y: f32 = 0;
     var prev_scroll_x: f32 = 0;
 
-    // History
-    var history: std.ArrayListUnmanaged([]u8) = .empty;
-    defer {
-        for (history.items) |item| allocator.free(item);
-        history.deinit(allocator);
-    }
-    var history_pos: usize = 0;
-
     // Current URL (owned)
     var current_url: ?[]u8 = null;
     defer if (current_url) |u| allocator.free(u);
@@ -2066,8 +2050,8 @@ pub fn main(init: std.process.Init) !void {
             if (pg.doc) |*doc| {
                 if (extractTitle(doc)) |title| tab_mgr.updateActiveTitle(title);
                 if (current_url) |url| {
-                    const entry = allocator.dupe(u8, url) catch null;
-                    if (entry) |owned| history.append(allocator, owned) catch allocator.free(owned);
+                    if (activeHistory(&tab_mgr).current() == null)
+                        _ = pushHistoryNavigationUrl(allocator, activeHistory(&tab_mgr), url);
                 }
             }
         }
@@ -2094,19 +2078,11 @@ pub fn main(init: std.process.Init) !void {
                     // Extract page title
                     const init_title = if (page_states.items[0].doc) |*d| extractTitle(d) else null;
                     tab_mgr.updateActiveTitle(init_title orelse url);
-                    // Store in history
-                    const owned = allocator.alloc(u8, url.len) catch null;
-                    if (owned) |o| {
-                        @memcpy(o, url);
-                        history.append(allocator, o) catch {};
-                        history_pos = history.items.len - 1;
-                        if (current_url) |old| allocator.free(old);
-                        const cu = allocator.alloc(u8, url.len) catch null;
-                        if (cu) |cc| {
-                            @memcpy(cc, url);
-                            current_url = cc;
-                        }
-                    }
+                    // The initial tab normally already owns this entry.
+                    if (activeHistory(&tab_mgr).current() == null)
+                        _ = pushHistoryNavigationUrl(allocator, activeHistory(&tab_mgr), url);
+                    if (current_url) |old| allocator.free(old);
+                    current_url = allocator.dupe(u8, url) catch null;
                     recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, url, init_title orelse url);
                 } else {
                     status_text = "Failed";
@@ -3200,9 +3176,8 @@ pub fn main(init: std.process.Init) !void {
                     // Alt+Left: back
                     if ((alt_held and key == nsfb_c.NSFB_KEY_LEFT) or navigation_action == .back) {
                         focused_input_node = null;
-                        if (history_pos > 0) {
-                            history_pos -= 1;
-                            const url = history.items[history_pos];
+                        const history = activeHistory(&tab_mgr);
+                        if (history.backTarget()) |url| {
                             const url_z = allocator.allocSentinel(u8, url.len, 0) catch continue;
                             defer allocator.free(url_z);
                             @memcpy(url_z, url);
@@ -3211,6 +3186,7 @@ pub fn main(init: std.process.Init) !void {
                             needs_repaint = true;
                             const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
+                                history.position -= 1;
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -3232,9 +3208,8 @@ pub fn main(init: std.process.Init) !void {
                     // Alt+Right: forward
                     if ((alt_held and key == nsfb_c.NSFB_KEY_RIGHT) or navigation_action == .forward) {
                         focused_input_node = null;
-                        if (history_pos + 1 < history.items.len) {
-                            history_pos += 1;
-                            const url = history.items[history_pos];
+                        const history = activeHistory(&tab_mgr);
+                        if (history.forwardTarget()) |url| {
                             const url_z = allocator.allocSentinel(u8, url.len, 0) catch continue;
                             defer allocator.free(url_z);
                             @memcpy(url_z, url);
@@ -3243,6 +3218,7 @@ pub fn main(init: std.process.Init) !void {
                             needs_repaint = true;
                             const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
+                                history.position += 1;
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -3324,8 +3300,7 @@ pub fn main(init: std.process.Init) !void {
                                 page,
                                 &fonts,
                                 &loader,
-                                &history,
-                                &history_pos,
+                                activeHistory(&tab_mgr),
                                 &current_url,
                                 &status_text,
                                 &needs_repaint,
@@ -3529,8 +3504,7 @@ pub fn main(init: std.process.Init) !void {
                                     status_text = "Loading...";
                                     needs_repaint = true;
 
-                                    truncateForwardHistory(allocator, &history, history_pos);
-                                    _ = pushHistoryNavigationUrl(allocator, &history, &history_pos, nav_url);
+                                    _ = pushHistoryNavigationUrl(allocator, activeHistory(&tab_mgr), nav_url);
                                     if (current_url) |old| allocator.free(old);
                                     current_url = allocator.dupe(u8, nav_url) catch null;
                                     tab_mgr.updateActiveUrl(nav_url);
@@ -3597,8 +3571,7 @@ pub fn main(init: std.process.Init) !void {
                                         scroll_x = 0;
                                         url_input.focused = false;
 
-                                        truncateForwardHistory(allocator, &history, history_pos);
-                                        _ = pushHistoryNavigationUrl(allocator, &history, &history_pos, nav_target);
+                                        _ = pushHistoryNavigationUrl(allocator, activeHistory(&tab_mgr), nav_target);
                                         if (current_url) |old| allocator.free(old);
                                         current_url = allocator.dupe(u8, nav_target) catch null;
 
@@ -4023,8 +3996,7 @@ fn handleClick(
     page: *PageState,
     fonts: *painter_mod.FontCache,
     loader: *Loader,
-    history: *std.ArrayListUnmanaged([]u8),
-    history_pos: *usize,
+    history: *NavigationHistory,
     current_url: *?[]u8,
     status_text: *[]const u8,
     needs_repaint: *bool,
@@ -4144,8 +4116,7 @@ fn handleClick(
                             scroll_y.* = 0;
                             scroll_x.* = 0;
 
-                            truncateForwardHistory(allocator, history, history_pos.*);
-                            if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return false;
+                            _ = pushHistoryNavigationUrl(allocator, history, nav_url);
                             if (current_url.*) |old| allocator.free(old);
                             current_url.* = allocator.dupe(u8, nav_url) catch null;
                             needs_repaint.* = true;
@@ -4175,8 +4146,7 @@ fn handleClick(
                         scroll_y.* = 0;
                         scroll_x.* = 0;
 
-                        truncateForwardHistory(allocator, history, history_pos.*);
-                        if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return false;
+                        _ = pushHistoryNavigationUrl(allocator, history, nav_url);
                         if (current_url.*) |old| allocator.free(old);
                         current_url.* = allocator.dupe(u8, nav_url) catch null;
                         needs_repaint.* = true;
@@ -4211,8 +4181,7 @@ fn handleClick(
                 scroll_y.* = 0;
                 scroll_x.* = 0;
 
-                truncateForwardHistory(allocator, history, history_pos.*);
-                if (!pushHistoryNavigationUrl(allocator, history, history_pos, resolved)) return false;
+                _ = pushHistoryNavigationUrl(allocator, history, resolved);
 
                 if (current_url.*) |old| allocator.free(old);
                 const cu = allocator.alloc(u8, resolved.len) catch null;

@@ -30,7 +30,7 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 - macOS Command shortcuts, native menus, clipboard and IME text commits
 - CoreText font discovery on macOS; Fontconfig on Linux
 - FreeType + HarfBuzz text shaping (CJK support)
-- Tab browsing, keyboard navigation, find-in-page
+- Tab browsing with independent back/forward histories, keyboard navigation, find-in-page
 - Window resize with re-layout and media query re-evaluation
 - Mouse wheel scrolling
 - HTTP certificate-chain and hostname verification (no insecure retry)
@@ -105,6 +105,7 @@ zig build test-kotori      # run kotori JS engine tests
 zig build test-kotori-dom  # run kotori DOM binding tests
 zig build test-http-unit   # HTTP ownership/cache unit tests
 zig build test-ui-input    # UTF-8 editing and selection
+zig build test-navigation  # per-tab history, branching and allocation failures
 zig build test-text-fallback # CJK fallback (requires system Latin/CJK fonts)
 zig build test-surface     # macOS RAM framebuffer colors and resize
 python3 tests/http_regression.py  # offline HTTP/TLS integration tests (requires Python + OpenSSL)

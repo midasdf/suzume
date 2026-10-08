@@ -503,6 +503,16 @@ pub fn build(b: *std.Build) void {
         test_surface_step.dependOn(&b.addRunArtifact(surface_tests).step);
     }
 
+    const navigation_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test_navigation.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const test_navigation_step = b.step("test-navigation", "Run per-tab navigation history regressions");
+    test_navigation_step.dependOn(&b.addRunArtifact(navigation_tests).step);
+
     const input_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/test_ui_input.zig"),

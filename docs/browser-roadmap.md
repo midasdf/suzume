@@ -43,6 +43,24 @@
 - Build requirements corrected to Zig 0.16.x, matching existing source APIs.
   Linux build/input and macOS build/renderer/input CI are now blocking.
 
+### Per-tab navigation history
+
+- Back/forward lists now belong to each tab instead of a single process-wide
+  list. Switching or closing tabs preserves other tabs' navigation positions.
+- Private tabs retain in-memory back/forward navigation without writing it to
+  the persistent visited-page database or session file.
+- New tabs seed their initial URL once; session restoration replaces the
+  startup homepage entry with the restored URL. Full histories aren't persisted.
+- Back/forward positions advance only after a successful load. New navigation
+  allocates before discarding forward entries, preserving the list on OOM and
+  safely accepting URLs that alias an existing entry.
+- Five `test-navigation` tests pass locally in Debug and ReleaseSafe, including
+  tab isolation, private tabs, closing, restoration, branching, aliased URLs and
+  allocation-failure cleanup. Linux/macOS CI now runs this target. These are
+  state/ownership regressions, not end-to-end keyboard-navigation tests.
+- JavaScript History API/SPA traversal, POST replay and per-entry scroll
+  restoration still need integration work.
+
 ### CSS correctness and regression coverage
 
 - CSS and CSSStyleDeclaration tests now run as actual roots, including the
@@ -134,7 +152,7 @@ See [macOS instructions](macos.md) for remaining GUI limitations.
 ## Next priorities
 
 1. **Everyday navigation correctness**: local fixtures for redirects and final
-   URL-relative resources, per-tab back/forward history, reload, forms/POST,
+   URL-relative resources, end-to-end back/forward and SPA history, reload, forms/POST,
    downloads, keyboard input, tabs, resize and error-page recovery.
 2. **Layout compatibility**: compare local CSS/flex/grid/forms/script fixtures
    with a mainstream browser; expand standards coverage and repair geometry/
