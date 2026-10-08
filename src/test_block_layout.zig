@@ -97,7 +97,8 @@ pub fn run(allocator: std.mem.Allocator) !void {
     try verticalMargins(allocator, &fonts);
     try preformattedRelayout(allocator);
     try blockAlignmentAndHeight(allocator, &fonts);
-    std.debug.print("PASS: 27 production margin/layout regressions\n", .{});
+    try wordWrapping(allocator);
+    std.debug.print("PASS: 35 production margin/layout regressions\n", .{});
 }
 
 fn textLineMetrics(allocator: std.mem.Allocator) !void {
@@ -232,6 +233,67 @@ fn blockAlignmentAndHeight(allocator: std.mem.Allocator, fonts: *FontCache) !voi
     block.layoutBlock(&root, 400, 0, fonts);
     try std.testing.expectEqual(@as(f32, 100), after.content.y);
     try std.testing.expectEqual(@as(f32, 0), fixed.margin.bottom);
+}
+
+fn wordWrapping(allocator: std.mem.Allocator) !void {
+    const resolver = @import("paint/font_resolver.zig");
+    const path = resolver.resolve(allocator, "sans-serif") orelse return error.MissingTestFont;
+    defer allocator.free(path);
+    var fonts = FontCache.init(allocator, path);
+    defer fonts.deinit();
+    const Style = @import("css/computed.zig").ComputedStyle;
+    const cases = [_]struct { word: Style.WordBreak, overflow: Style.OverflowWrap, wrap: bool }{
+        .{ .word = .normal, .overflow = .normal, .wrap = false },
+        .{ .word = .keep_all, .overflow = .normal, .wrap = false },
+        .{ .word = .normal, .overflow = .break_word, .wrap = true },
+        .{ .word = .normal, .overflow = .anywhere, .wrap = true },
+        .{ .word = .break_all, .overflow = .normal, .wrap = true },
+    };
+    for (cases) |case| {
+        var root = Box{};
+        defer root.children.deinit(allocator);
+        var child = Box{ .parent = &root, .box_type = .inline_text, .text = "Supercalifragilisticexpialidocious", .style = .{
+            .font_size_px = 16,
+            .line_height = .{ .px = 20 },
+            .word_break = case.word,
+            .overflow_wrap = case.overflow,
+        } };
+        defer child.lines.deinit(allocator);
+        try root.children.append(allocator, &child);
+        block.layoutBlock(&root, 60, 0, &fonts);
+        try std.testing.expectEqual(case.wrap, child.lines.items.len > 1);
+        if (!case.wrap) try std.testing.expectEqualStrings(child.text.?, child.lines.items[0].text);
+        if (case.wrap) for (child.lines.items) |line| try std.testing.expect(line.width <= 60);
+    }
+    for ([_]Style.OverflowWrap{ .normal, .anywhere }) |overflow| {
+        var parent = Box{};
+        defer parent.children.deinit(allocator);
+        var prefix = Box{ .parent = &parent, .box_type = .inline_text, .text = "prefix", .style = .{ .font_size_px = 16, .line_height = .{ .px = 20 } } };
+        defer prefix.lines.deinit(allocator);
+        var word = Box{ .parent = &parent, .box_type = .inline_text, .text = "example", .style = .{ .font_size_px = 16, .line_height = .{ .px = 20 }, .overflow_wrap = overflow } };
+        defer word.lines.deinit(allocator);
+        try parent.children.append(allocator, &prefix);
+        try parent.children.append(allocator, &word);
+        const renderer = fonts.getRendererForFamily(16, .sans_serif) orelse return error.MissingTestFont;
+        const line_width: f32 = @floatFromInt(@max(renderer.measure("prefix").width, renderer.measure("example").width) + 2);
+        block.layoutBlock(&parent, line_width, 0, &fonts);
+        try std.testing.expectEqual(@as(usize, 1), word.lines.items.len);
+        try std.testing.expectEqualStrings("example", word.lines.items[0].text);
+        try std.testing.expectEqual(@as(f32, 0), word.lines.items[0].x);
+        try std.testing.expectEqual(@as(f32, 20), word.lines.items[0].y);
+        try std.testing.expectEqual(@as(f32, 40), parent.content.height);
+    }
+    var root = Box{};
+    defer root.children.deinit(allocator);
+    var child = Box{ .parent = &root, .box_type = .inline_text, .text = "a 日本語日本語", .style = .{ .font_size_px = 16 } };
+    defer child.lines.deinit(allocator);
+    try root.children.append(allocator, &child);
+    const renderer = fonts.getRendererForFamily(16, .sans_serif) orelse return error.MissingTestFont;
+    const width: f32 = @floatFromInt(renderer.measure("a 日本語").width);
+    block.layoutBlock(&root, width + 1, 0, &fonts);
+    try std.testing.expect(child.lines.items.len > 1);
+    // A later CJK boundary wins over an earlier Latin space.
+    try std.testing.expectEqualStrings("a 日本語", child.lines.items[0].text);
 }
 
 fn preformattedRelayout(allocator: std.mem.Allocator) !void {

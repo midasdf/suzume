@@ -35,6 +35,11 @@ const BreakFlags = struct {
 ///
 /// When break_all is set, every character boundary is a break opportunity (skip Phase 1).
 /// When keep_all is set, CJK inter-character breaks are suppressed.
+fn latestBreak(space: ?usize, cjk: ?usize) ?usize {
+    if (space) |s| return if (cjk) |j| @max(s, j) else s;
+    return cjk;
+}
+
 fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_renderer: anytype, flags: BreakFlags) ?usize {
     if (line_start >= text.len) return null;
 
@@ -95,8 +100,10 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
                 overflow_boundary = measure_end;
 
                 // If we have a space or CJK break from a previous boundary, use it
-                if (last_space_break) |bp| return bp;
-                if (last_cjk_break) |bp| return bp;
+                if (latestBreak(last_space_break, last_cjk_break)) |bp| return bp;
+                // Normal wrapping preserves an unbreakable word, even when
+                // it overflows. Emergency character breaks require opt-in.
+                if (!flags.break_word) return break_pos_cjk orelse break_pos_space orelse measure_end;
 
                 // No previous break — need character-level scan (Phase 2)
                 break;
@@ -123,8 +130,8 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
             const seg_width: f32 = @floatFromInt(seg_metrics.width);
             if (seg_width <= avail_width) return null; // all fits
             // Overflows — use last known break
-            if (last_space_break) |bp| return bp;
-            if (last_cjk_break) |bp| return bp;
+            if (latestBreak(last_space_break, last_cjk_break)) |bp| return bp;
+            if (!flags.break_word) return null; // one unbreakable word overflows
             // Fall through to Phase 2 for character-level break
             overflow_boundary = text.len;
         }
@@ -161,8 +168,7 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
 
         if (seg_width2 > avail_width and j > line_start) {
             // Overflowed. Use best available break.
-            if (last_space_break) |bp| return bp;
-            if (last_cjk_break) |bp| return bp;
+            if (latestBreak(last_space_break, last_cjk_break)) |bp| return bp;
             if (last_char_break) |bp| return bp;
             return j;
         }
@@ -1283,6 +1289,31 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 const base_text_width: f32 = @floatFromInt(full_metrics.width);
                 // Apply letter-spacing and word-spacing adjustments
                 const text_width: f32 = applyTextSpacing(base_text_width, text, child.style);
+
+                // Retry an unbreakable first word on an empty line before
+                // allowing overflow-wrap to split it. A narrow remainder is
+                // not the containing block's available line width.
+                const preserves_words = child.style.word_break != .break_all and
+                    child.style.white_space != .nowrap and child.style.white_space != .pre and
+                    child.style.white_space != .pre_wrap and child.style.white_space != .break_spaces;
+                if (preserves_words and cursor_x > 0 and text_width > container_width - cursor_x) {
+                    var word_end: usize = 0;
+                    while (word_end < text.len) {
+                        const decoded = decodeUtf8(text, word_end);
+                        if (decoded.cp == ' ') break;
+                        if (child.style.word_break != .keep_all and isCjkCodepoint(decoded.cp)) {
+                            if (word_end == 0) word_end += decoded.len;
+                            break;
+                        }
+                        word_end += decoded.len;
+                    }
+                    const first_width = applyTextSpacing(@floatFromInt(text_renderer.measure(text[0..word_end]).width), text[0..word_end], child.style);
+                    if (first_width > container_width - cursor_x) {
+                        cursor_y += line_height;
+                        cursor_x = 0;
+                        line_height = 0;
+                    }
+                }
 
                 child.lines.clearRetainingCapacity();
                 child.content.x = base_x;
