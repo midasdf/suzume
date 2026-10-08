@@ -3441,6 +3441,61 @@ fn expectRequestResult(source: []const u8) !void {
     try std.testing.expectEqualStrings("ok", result.ok orelse "undefined");
 }
 
+test "KotoriRuntime URLSearchParams record keys collide after USVString conversion" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams({'\uD835x': '1', xx: '2', '\uD83Dx': '3'});
+        \\var entries = Array.from(params);
+        \\var requestResult = params.size === 2 && entries[0][0] === '\uFFFDx' &&
+        \\  entries[0][1] === '3' && entries[1][0] === 'xx' &&
+        \\  params.toString() === '%EF%BF%BDx=3&xx=2' ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams sequences normalize without deduplicating" {
+    try expectRequestResult(
+        \\var hi = String.fromCharCode(0xD83D), lo = String.fromCharCode(0xDCA9);
+        \\var params = new URLSearchParams([['\uD800', '\uDC00'], ['\uDC00', 'two'], [hi + lo, '日本語']]);
+        \\var values = params.getAll('\uFFFD');
+        \\var requestResult = params.size === 3 && values.length === 2 &&
+        \\  values[0] === '\uFFFD' && values[1] === 'two' &&
+        \\  params.get('\uD83D\uDCA9') === '日本語' &&
+        \\  hi.charCodeAt(0) === 0xD83D && lo.charCodeAt(0) === 0xDCA9 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams methods convert names and values to USVString" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams();
+        \\params.append('\uD800', '\uDC00');
+        \\var valid = params.get('\uD900') === '\uFFFD' && params.has('\uDC00', '\uD800');
+        \\params.append('\uDC00', 'other');
+        \\params.set('\uD800', '\uD800');
+        \\valid = valid && params.size === 1 && params.getAll('\uDC00')[0] === '\uFFFD';
+        \\params.delete('\uDC00', '\uDC00');
+        \\var requestResult = valid && params.size === 0 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams string input replaces lone surrogates" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams('a=\uD800&\uDC00=x&emoji=\uD83D\uDCA9');
+        \\var requestResult = params.get('a') === '\uFFFD' && params.get('\uFFFD') === 'x' &&
+        \\  params.get('emoji') === '\uD83D\uDCA9' &&
+        \\  params.toString() === 'a=%EF%BF%BD&%EF%BF%BD=x&emoji=%F0%9F%92%A9' ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams rejects symbols during USVString conversion" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams(), threw = 0, symbol = Symbol('test');
+        \\try { params.append(symbol, 'value'); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\try { params.get(symbol); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\try { new URLSearchParams({key: symbol}); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\try { new URLSearchParams([[symbol, 'value']]); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\var requestResult = threw === 4 && params.size === 0 ? 'ok' : 'bad';
+    );
+}
+
 test "KotoriRuntime XHR rejects invalid URLs before changing state" {
     try expectRequestResult(
         \\var inputs = ['http://[::1', 'https://ex ample.org/', 'file://example:1/', 'http://host:65536/'];

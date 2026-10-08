@@ -1,6 +1,6 @@
 # suzume — 開発引き継ぎ
 
-## READ FIRST — 2026-10-09 / Wave 230
+## READ FIRST — 2026-10-09 / Wave 231
 
 ### 状態スナップショット
 
@@ -10,19 +10,33 @@ Wave 230 は `fetch()` と `XMLHttpRequest.open()` の要求 URL 処理を修正
 不正な URL は通信層へ渡さず、fetch は TypeError で Promise を拒否し、XHR は SyntaxError の DOMException を投げる。URL の文字列変換が投げた例外も fetch の拒否理由として保持する。
 相対 URL は `document.baseURI` で解決する。XHR は open 時点の絶対 URL を保存するため、その後に `<base>` が変わっても送信先は変わらない。ページがグローバルの URL コンストラクタを置き換えても、ネイティブの URL パーサーで解決する。
 
+Wave 231 は URLSearchParams の引数を、WebIDL の USVString として変換する処理を追加した。
+ネイティブの `__suzume_usv_string` は孤立したサロゲートを U+FFFD に置換する。分割された WTF-8 のペアは 1 つのスカラー値へ統合し、通常の文字列は再確保しない。
+record の変換後のキーが衝突した場合は、最初の挿入位置を保持して最後の値で上書きする。sequence では重複を保持する。コンストラクタと append/delete/get/getAll/has/set が対象で、Symbol の変換は TypeError になる。
+
 2026-10-09 の実測値は次のとおり。
 
-| 検証対象 | 着手前 | Wave 230 後 |
-|---|---:|---:|
-| `zig build test` | 1847/1847 | 1853/1853 |
-| kotori unit | 1040/1040 | 1040/1040 |
-| kotori DOM | 231/231 | 237/237 |
-| URL WPT 全体 | 6469/7316 (88.4%) | 6658/7316 (91.0%) |
-| `url/failure.html` | 413/1175 | 602/1175 |
+| 検証対象 | 着手前 | Wave 230 後 | Wave 231 後 |
+|---|---:|---:|---:|
+| `zig build test` | 1847/1847 | 1853/1853 | 1858/1858 |
+| kotori unit | 1040/1040 | 1040/1040 | 1040/1040 |
+| kotori DOM | 231/231 | 237/237 | 242/242 |
+| URL WPT 全体 | 6469/7316 (88.4%) | 6658/7316 (91.0%) | 6661/7316 (91.0%) |
+| `url/failure.html` | 413/1175 | 602/1175 | 602/1175 |
+| `urlsearchparams-constructor.any.html` | 23/27 | 23/27 | 26/27 |
 
 URL WPT は 28 ファイルを実行し、報告欠落は 0。各ファイルの分母を維持し、既存の成功サブテストが失敗へ変わった件数は 0。`data-uri-fragment.html` は着手前・修正後とも 0 サブテストを報告するため、iframe の動作を検証できたとは扱わない。
 
 WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。2026-07-06 の WPT と分母が異なるため、旧スコアだけで退行を判定しない。同一参照版・同一環境の before/after を比較する。
+
+結果は `docs/evidence/wave230-url-results.txt` と `wave231-url-results.txt` に記録した。
+回帰テストは 11 件追加し、実装前に 11 件の失敗、実装後に 11 件の成功を確認した。
+
+実ページの描画も確認したが、一般利用向けの完成には達していない。
+example.com は before/after のピクセル差が 0。Google は検索欄が初期画面外へ押し出され、着手前のバイナリでも同じ症状が出る。Wikipedia は記事本文を描画するが、スタイルの適用不足と動的スクリプト取得失敗が残る。
+3 ページの screenshot 実行は exit 0 だったが、描画の成功とは区別する。
+Google の before PNG にはロゴがあり、after PNG にはない。画像取得のタイミングを固定していないため、この視覚差の退行判定は未確定。
+証拠と再現コマンドは `docs/evidence/wave231-smoke.md` を参照する。
 
 着手前から 18 ファイルに未コミットの変更があった。
 対象は README、script_executor、CSS、VM/compiler/object、DOM、main、net、chrome、URL 関連だった。
@@ -30,9 +44,9 @@ WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。2026-07-06 の 
 
 ### 次の優先タスク
 
-1. **URLSearchParams の WebIDL USVString 変換。** `urlsearchparams-constructor.any.html` は 23/27。3 件は、非対応サロゲートを含む record のキーを U+FFFD へ変換する処理の不足。変換後のキーが一致する項目は、値を上書きする必要もある。内部の WTF-8 保存の破損ではない。残る 1 件は DOMException.prototype の branding check。
-2. **要求・応答 API の不足を解消する。** `urlencoded-parser.any.html` は 35/105。残る 70 件は Request/Response.formData の未実装。sendBeacon は true を返すだけのスタブで、不正 URL の検証もない。送信機能を実装せず成功を装う修正はしない。
-3. **日常閲覧の安全性と実機挙動を確認する。** TLS 証明書のフォールバック、origin/CORS、認証付きアセット、Pi Zero 2W のメモリ使用量は、本セッションでは未検証。互換性スコアだけで一般利用向けの完成を宣言しない。
+1. **Google と Wikipedia の描画を改善する。** 2026-10-09 の Google は検索欄が初期画面に入らない。レイアウトの高さは before/after とも 1953px。旧報告の「Google 解消済み」とは現行ページが異なる。HTML/CSS をローカル fixture に保存してから、flex の高さ計算と CSS 取得・適用を調べる。大きなスクリプトの上限を根拠なく引き上げない。
+2. **安全性と Pi Zero 2W の負荷を確認する。** TLS 証明書のフォールバックと origin/CORS は未検証。認証付きアセットと 512MB 環境のメモリ使用量も確認する。一般利用の前提となるため、互換性スコアと別に確認する。
+3. **URL・要求 API の残りを処理する。** URLSearchParams のコンストラクタは 26/27。残る 1 件は DOMException.prototype の branding check。`urlencoded-parser.any.html` の 70 件は Request/Response.formData の未実装。sendBeacon は true を返すだけのスタブ。不正 UTF-8 の formDecode もネイティブ実装へ統合し、境界条件を追加する。
 
 ### 検証コマンド
 
@@ -75,6 +89,9 @@ DISPLAY=:98 SUZUME_JS=kotori timeout 120 ./zig-out/bin/suzume --wpt-mode http://
 - **test_runner の shutdown race をテスト失敗と誤診しないこと。** Zig 0.16 の IPC 終了時には shutdown race がある。全テスト成功後でも `failed command:` / SIGABRT が出る。テスト結果を確認し、必要なら生成された test バイナリを直接実行する。
 - **WPT のゼロ件報告やタイムアウトを成功扱いしないこと。** 分母と報告欠落も before/after で照合する。parallel ランナーは .any.js のラッパーを生成しない。
 - **非対応 API を成功するスタブで埋めないこと。** iframe/contentWindow、window.open、Beacon の送信、Request/Response は完成していない。
+- **USVString の変換後に record のキーを比較すること。** 生のサロゲートが異なっても U+FFFD への変換で衝突する。sequence の重複排除はしない。
+- **exit 0 や DOM の存在だけで正常表示と判断しないこと。** Google の textarea は存在するが初期画面外にある。スクリーンショットと操作の確認を分けて記録する。
+- **README の cross-build 例にある ReleaseFast をコピーしないこと。** 既存の変更を保持するため README は本セッションでは変更していない。cross-build でも ReleaseSafe を使う。
 
 ### 判断済み事項
 
@@ -94,5 +111,5 @@ Zig の UB 規律は `~/.claude/skills/zig-gotchas/SKILL.md` に従う。
 - VM: 未捕捉例外は execute がクリアし、last_uncaught に保存。Promise の反応は runMicrotasks で処理。
 - WebDriver: `DISPLAY=:98 ./zig-out/bin/suzume --webdriver 9999`。execute/sync と execute/async は kotori を優先する。非同期コールバックの完了待ちには制限がある。
 - libnsfb パッチ: `./scripts/apply-libnsfb-patch.sh "$PWD/patches/libnsfb-xim.patch" "$PWD/deps/libnsfb"`。
-- 2026-07-01 の Google / Wikipedia / Hacker News の描画証拠は `docs/evidence/`。2026-10-09 の新規検証とは区別する。
+- 2026-07-01 の Google / Wikipedia / Hacker News の描画証拠は `docs/evidence/`。2026-10-09 の不完全な描画を記録した `*-wave231.png` とは区別する。
 - Wave 229 までの詳細な開発履歴は `git show 1171fae:docs/next-session-prompt.md` で参照する。

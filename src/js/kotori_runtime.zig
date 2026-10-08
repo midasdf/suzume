@@ -195,6 +195,9 @@ pub const KotoriRuntime = struct {
             const set_fn = try self.vm.createObj(.{ .obj_type = .native_function });
             set_fn.data = .{ .native_fn = &nativeUrlSet };
             try self.vm.globals.put(allocator, try pool.intern("__suzume_url_set"), JsValue.initObject(set_fn));
+            const usv_fn = try self.vm.createObj(.{ .obj_type = .native_function });
+            usv_fn.data = .{ .native_fn = &nativeUsvString };
+            try self.vm.globals.put(allocator, try pool.intern("__suzume_usv_string"), JsValue.initObject(usv_fn));
         }
 
         // WHATWG URL Standard — globalThis.URL constructor + Location
@@ -5790,6 +5793,54 @@ pub const KotoriRuntime = struct {
         return JsValue.initObject(obj);
     }
 
+    fn wtf8SurrogateAt(input: []const u8, pos: usize) ?u16 {
+        if (input.len - pos < 3 or input[pos] != 0xED or
+            input[pos + 1] < 0xA0 or input[pos + 1] > 0xBF or
+            input[pos + 2] < 0x80 or input[pos + 2] > 0xBF) return null;
+        return (@as(u16, input[pos] & 0x0F) << 12) |
+            (@as(u16, input[pos + 1] & 0x3F) << 6) | (input[pos + 2] & 0x3F);
+    }
+
+    /// WebIDL USVString conversion at API boundaries. The JS string pool
+    /// remains WTF-8; a pair split across two WTF-8 sequences is still one
+    /// scalar value and must not be replaced as two lone surrogates.
+    fn nativeUsvString(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = VM.vmFromCtx(ctx);
+        if (args.len == 0 or !args[0].isString()) return error.TypeError;
+        const input = vm.pool.get(args[0].asStringId()) orelse return args[0];
+        var first: usize = 0;
+        while (first < input.len and wtf8SurrogateAt(input, first) == null) : (first += 1) {}
+        if (first == input.len) return args[0];
+
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        defer out.deinit(vm.allocator);
+        try out.ensureTotalCapacity(vm.allocator, input.len);
+        try out.appendSlice(vm.allocator, input[0..first]);
+        var i = first;
+        while (i < input.len) {
+            if (wtf8SurrogateAt(input, i)) |high| {
+                if (high <= 0xDBFF) {
+                    if (wtf8SurrogateAt(input, i + 3)) |low| {
+                        if (low >= 0xDC00) {
+                            const cp: u21 = 0x10000 + ((@as(u21, high) - 0xD800) << 10) + (low - 0xDC00);
+                            var encoded: [4]u8 = undefined;
+                            const len = try std.unicode.utf8Encode(cp, &encoded);
+                            try out.appendSlice(vm.allocator, encoded[0..len]);
+                            i += 6;
+                            continue;
+                        }
+                    }
+                }
+                try out.appendSlice(vm.allocator, "\xEF\xBF\xBD");
+                i += 3;
+            } else {
+                try out.append(vm.allocator, input[i]);
+                i += 1;
+            }
+        }
+        return JsValue.initString(try vm.pool.intern(out.items));
+    }
+
     /// __suzume_url_parse(input, base?) → field object | null.
     /// Runs the WHATWG basic URL parser (full host parsing, IDNA,
     /// percent encoding) from src/url/parser.zig.
@@ -7541,11 +7592,17 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  function cuAt(s,pos){var cp=s.charCodeAt(pos);return cp>=0x10000?0xD800+((cp-0x10000)>>10):pos<s.length?cp:-1;}
         \\  function cuLen(s){var l=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);l+=c>=0x10000?2:1;}return l;}
+        \\  function usvString(value){
+        \\    if(typeof value==='symbol')throw new TypeError('Cannot convert a Symbol to USVString');
+        \\    return __suzume_usv_string(String(value));
+        \\  }
         \\  function URLSearchParams(init){
         \\    this._e=[];
         \\    if(init===undefined||init===null)return;
+        \\    if(typeof init==='symbol')throw new TypeError('Cannot convert a Symbol to USVString');
         \\    if(typeof init==='string'){
-        \\      var s=init.charAt(0)==='?'?init.substring(1):init;
+        \\      var s=usvString(init);
+        \\      if(s.charAt(0)==='?')s=s.substring(1);
         \\      if(s){
         \\        var pairs=s.split('&');
         \\        for(var i=0;i<pairs.length;i++){
@@ -7561,23 +7618,26 @@ pub const KotoriRuntime = struct {
         \\      for(var i=0;i<init.length;i++){
         \\        var p=init[i];
         \\        if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');
-        \\        this._e.push([String(p[0]),String(p[1])]);
+        \\        this._e.push([usvString(p[0]),usvString(p[1])]);
         \\      }
         \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&typeof init[Symbol.iterator]==='function'){
-        \\      // Spec: if init has a [Symbol.iterator], use it (covers custom
-        \\      // iterators on URLSearchParams instances, generators, etc.).
-        \\      // Must run BEFORE the _entries/entries branches because a
-        \\      // URLSearchParams instance also has entries() on its prototype.
+        \\      // A custom iterator takes precedence over the built-in entries().
         \\      var it=init[Symbol.iterator](),r;
-        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([String(p[0]),String(p[1])]);}
-        \\    }else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
+        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([usvString(p[0]),usvString(p[1])]);}
+        \\    }else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([usvString(init._entries[i][0]),usvString(init._entries[i][1])]);}
         \\    else if(init&&typeof init.entries==='function'){
         \\      var it=init.entries();
         \\      var r=it.next?it.next():null;
-        \\      while(r&&!r.done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);r=it.next?it.next():null;}
+        \\      while(r&&!r.done){var p=r.value;this._e.push([usvString(p[0]),usvString(p[1])]);r=it.next?it.next():null;}
         \\    }else if(typeof init==='object'||typeof init==='function'){
-        \\      var keys=Object.keys(init);
-        \\      for(var i=0;i<keys.length;i++)this._e.push([String(keys[i]),String(init[keys[i]])]);
+        \\      var keys=Object.keys(init),seen=new Map();
+        \\      // WebIDL records overwrite colliding converted keys, preserving
+        \\      // first insertion order. Sequences retain duplicate names.
+        \\      for(var i=0;i<keys.length;i++){
+        \\        var n=usvString(keys[i]),v=usvString(init[keys[i]]);
+        \\        if(seen.has(n))this._e[seen.get(n)][1]=v;
+        \\        else{seen.set(n,this._e.length);this._e.push([n,v]);}
+        \\      }
         \\    }
         \\  }
         \\  function formEncode(s){
@@ -7585,12 +7645,7 @@ pub const KotoriRuntime = struct {
         \\    for(var i=0;i<s.length;i++){
         \\      var c=s.charCodeAt(i);
         \\      if(c>=0xD800&&c<=0xDBFF){
-        \\        // High surrogate — peek at next code unit. If it's a low
-        \\        // surrogate (0xDC00-0xDFFF), combine into an astral code
-        \\        // point and encode as 4-byte UTF-8. If NOT (lone high
-        \\        // surrogate, or end-of-string), encode the raw code unit
-        \\        // as 3-byte WTF-8 — matches WHATWG percent-encode-after-encoding
-        \\        // which encodes lone surrogates as their WTF-8 bytes.
+        \\        // A surrogate pair is encoded as one scalar value.
         \\        if(i+1<s.length){
         \\          var lo=s.charCodeAt(i+1);
         \\          if(lo>=0xDC00&&lo<=0xDFFF){
@@ -7603,17 +7658,9 @@ pub const KotoriRuntime = struct {
         \\            continue;
         \\          }
         \\        }
-        \\        // Lone high surrogate — 3-byte WTF-8.
-        \\        out+='%'+(0xE0|((c>>12)&0x0F)).toString(16).toUpperCase();
-        \\        out+='%'+(0x80|((c>>6)&0x3F)).toString(16).toUpperCase();
-        \\        out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\        out+='%EF%BF%BD';
         \\      }else if(c>=0xDC00&&c<=0xDFFF){
-        \\        // Lone low surrogate — encode as 3-byte UTF-8 for the raw
-        \\        // code unit (matches WHATWG percent-encode-after-encoding
-        \\        // which encodes lone surrogates as their WTF-8 bytes).
-        \\        out+='%'+(0xE0|((c>>12)&0x0F)).toString(16).toUpperCase();
-        \\        out+='%'+(0x80|((c>>6)&0x3F)).toString(16).toUpperCase();
-        \\        out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\        out+='%EF%BF%BD';
         \\      }else if(c>=0x80){
         \\        // Non-ASCII BMP — encode as 2 or 3-byte UTF-8 percent-encoded
         \\        if(c>=0x800){
@@ -7638,18 +7685,18 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return formEncode(p[0])+'='+formEncode(p[1]);}).join('&');};
         \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
-        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);if(this._updateURL)this._updateURL();};
+        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([usvString(n),usvString(v)]);if(this._updateURL)this._updateURL();};
         \\  URLSearchParams.prototype["delete"]=function(n,v){
-        \\    n=String(n);var hasVal=v!==undefined;var nv=hasVal?String(v):null;var e=this._e;
+        \\    n=usvString(n);var hasVal=v!==undefined;var nv=hasVal?usvString(v):null;var e=this._e;
         \\    var newE=[];for(var i=0;i<e.length;i++){if(!(e[i][0]===n&&(!hasVal||e[i][1]===nv)))newE.push(e[i]);}
         \\    this._e=newE;
         \\    if(this._updateURL)this._updateURL();
         \\  };
-        \\  URLSearchParams.prototype.get=function(n){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
-        \\  URLSearchParams.prototype.getAll=function(n){n=String(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
-        \\  URLSearchParams.prototype.has=function(n,v){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(v===undefined||this._e[i][1]===String(v)))return true;return false;};
+        \\  URLSearchParams.prototype.get=function(n){n=usvString(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
+        \\  URLSearchParams.prototype.getAll=function(n){n=usvString(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
+        \\  URLSearchParams.prototype.has=function(n,v){n=usvString(n);if(v!==undefined)v=usvString(v);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(v===undefined||this._e[i][1]===v))return true;return false;};
         \\  URLSearchParams.prototype.set=function(n,v){
-        \\    n=String(n);v=String(v);var found=false,e=this._e;
+        \\    n=usvString(n);v=usvString(v);var found=false,e=this._e;
         \\    for(var i=0;i<e.length;i++){
         \\      if(e[i][0]===n){
         \\        if(!found){e[i][1]=v;found=true;}
