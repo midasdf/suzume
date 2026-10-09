@@ -987,6 +987,51 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, font
 /// - CSS Flexbox L1 §9.4  — Cross Size Determination (multi-line = sum of column widths)
 /// - CSS Flexbox L1 §9.5  — Main-Axis Alignment (justify-content along column)
 /// - CSS Flexbox L1 §9.6  — Cross-Axis Alignment (align-items / align-content across columns)
+fn resolveCrossSizeBound(size: @import("../css/computed.zig").ComputedStyle.Dimension, width: f32, font_size: f32) ?f32 {
+    return switch (size) {
+        .px => |value| value,
+        .percent => |percent| percent * width / 100,
+        .calc => |expr| cascade_mod.resolveCalcPct(expr, width, font_size),
+        else => null,
+    };
+}
+
+fn layoutColumnItem(child: *Box, container_width: f32, cursor_y: f32, fonts: *FontCache, container_align: AlignItems) void {
+    block.layoutBlock(child, container_width, cursor_y, fonts);
+    const alignment = resolveAlignment(child, container_align);
+    if (child.style.width != .auto or alignment == .auto or alignment == .stretch or
+        child.box_type == .replaced) return;
+
+    // Flexbox §9.4: a non-stretched automatic cross size is fit-content.
+    // Measure intrinsic widths without falling back to the previous stretched size.
+    const max_content = block.computeIntrinsicMaxContentWidth(child, fonts);
+    const min_content = block.computeIntrinsicMinContentWidth(child, fonts);
+    const edges = child.padding.left + child.padding.right + child.border.left + child.border.right;
+    const available = @max(container_width - edges - child.margin.left - child.margin.right, 0);
+    var used_width = @min(max_content, @max(min_content, available));
+    const border_box_edges = if (child.style.box_sizing == .border_box) edges else 0;
+    if (resolveCrossSizeBound(child.style.max_width, container_width, child.style.font_size_px)) |limit| {
+        used_width = @min(used_width, @max(limit - border_box_edges, 0));
+    }
+    if (resolveCrossSizeBound(child.style.min_width, container_width, child.style.font_size_px)) |limit| {
+        used_width = @max(used_width, @max(limit - border_box_edges, 0));
+    }
+
+    const saved_width = child.style.width;
+    const saved_min_width = child.style.min_width;
+    const saved_max_width = child.style.max_width;
+    const specified_width = used_width + border_box_edges;
+    // Pin the resolved size through block's overflow clamp, without resolving
+    // percentage insets or constraints against a synthetic containing width.
+    child.style.width = .{ .px = specified_width };
+    child.style.min_width = .{ .px = specified_width };
+    child.style.max_width = .{ .px = specified_width };
+    block.layoutBlock(child, container_width, cursor_y, fonts);
+    child.style.width = saved_width;
+    child.style.min_width = saved_min_width;
+    child.style.max_width = saved_max_width;
+}
+
 fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *FontCache) void {
     const style = box.style;
     const container_width = box.content.width;
@@ -1006,7 +1051,7 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, f
     // Phase 1: Layout each child to measure intrinsic heights.
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
-        block.layoutBlock(child, container_width, box.content.y, fonts);
+        layoutColumnItem(child, container_width, box.content.y, fonts, style.align_items);
     }
 
     // Build list of flex-participating child indices.
@@ -1151,7 +1196,7 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, f
         for (l_start..l_end) |fi| {
             const child = children[flex_indices[fi]];
             child.content.height = final_heights_buf[fi];
-            block.layoutBlock(child, container_width, box.content.y, fonts);
+            layoutColumnItem(child, container_width, box.content.y, fonts, style.align_items);
             const child_cross = child.content.width + child.padding.left + child.padding.right +
                 child.border.left + child.border.right + child.margin.left + child.margin.right;
             if (child_cross > line_max_cross) line_max_cross = child_cross;
@@ -1399,7 +1444,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts
     // Phase 1: Layout each child to get intrinsic heights
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
-        block.layoutBlock(child, container_width, box.content.y, fonts);
+        layoutColumnItem(child, container_width, box.content.y, fonts, style.align_items);
     }
 
     const gap_total = if (col_flex_count > 1) gap * @as(f32, @floatFromInt(col_flex_count - 1)) else 0;

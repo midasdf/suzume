@@ -1262,7 +1262,7 @@ pub fn computeIntrinsicMainWidthPublic(box: *Box, fonts: *FontCache) f32 {
 /// laid out at max-content width; for containers whose children stretch to the
 /// parent's width it equals whatever width the previous pass used — exactly the
 /// value we must not trust. This variant recurses instead.
-fn computeIntrinsicMaxContentWidth(box: *Box, fonts: *FontCache) f32 {
+pub fn computeIntrinsicMaxContentWidth(box: *Box, fonts: *FontCache) f32 {
     const is_flex_row = (box.style.display == .flex or box.style.display == .inline_flex) and
         (box.style.flex_direction == .row or box.style.flex_direction == .row_reverse);
 
@@ -1352,7 +1352,7 @@ pub fn computeIntrinsicMinContentWidthPublic(box: *Box, fonts: *FontCache) f32 {
     return computeMinContentWidth(box, fonts);
 }
 
-fn computeIntrinsicMinContentWidth(box: *Box, fonts: *FontCache) f32 {
+pub fn computeIntrinsicMinContentWidth(box: *Box, fonts: *FontCache) f32 {
     const is_flex = box.style.display == .flex or box.style.display == .inline_flex;
     const is_column = is_flex and
         (box.style.flex_direction == .column or box.style.flex_direction == .column_reverse);

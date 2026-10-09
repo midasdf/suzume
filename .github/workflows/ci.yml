@@ -42,7 +42,7 @@ jobs:
       - name: Text editing, navigation and framebuffer tests
         run: zig build test-ui-input test-navigation test-surface -Doptimize=ReleaseSafe
       - name: CSS regression tests
-        run: zig build test-css -Doptimize=ReleaseSafe
+        run: zig build test-css test-flex-basis -Doptimize=ReleaseSafe
       - name: Production DOM, CSS cascade and layout regressions
         run: zig build test-dom-style -Doptimize=ReleaseSafe
       - name: Headless CSS benchmark smoke (no performance threshold)
@@ -93,7 +93,7 @@ jobs:
       - name: CSS regression tests
         run: |
           case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x86_64 ;; esac
-          zig build test-css -Doptimize=ReleaseSafe -Dtarget="$arch-macos.15.0"
+          zig build test-css test-flex-basis -Doptimize=ReleaseSafe -Dtarget="$arch-macos.15.0"
       - name: Production DOM, CSS cascade and layout regressions
         run: zig-out/Suzume.app/Contents/MacOS/suzume --test-dom
       - name: Headless CSS benchmark smoke (no performance threshold)
