@@ -837,9 +837,8 @@ fn resolveContainerAutoMargins(box: *Box, containing_width: f32) void {
     adjustXPositions(box, box.margin.left - old_left);
 }
 
-/// Re-layout a box's block children with a definite containing height.
-/// Used by flex layout after determining a flex item's definite cross size.
-/// Does NOT change the box's own `content.height`.
+/// Re-layout descendants with the flex item's definite content-box height.
+/// Preserve the item's used content box and computed style.
 pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, containing_height: f32) void {
     // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3: re-layout the item's children so
     // that `height: <pct>` descendants resolve against the item's definite
@@ -854,19 +853,36 @@ pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, contai
     // until this pass re-inflated them to 1188).
     const saved_h = box.content.height;
     const saved_w = box.content.width;
+    const saved_x = box.content.x;
+    const saved_y = box.content.y;
 
     switch (box.style.display) {
         .flex, .inline_flex, .grid, .inline_grid => {
-            // Re-enter the formatting algorithm with the item's already-resolved
-            // width pinned as definite, so its children keep their computed sizes.
+            // The parent resolved content-box dimensions, including flex growth
+            // or stretch. Both axes must remain definite during descendant layout.
             const saved_width_style = box.style.width;
+            const saved_height_style = box.style.height;
+            const saved_box_sizing = box.style.box_sizing;
             box.style.width = .{ .px = saved_w };
-            layoutBlock(box, saved_w, box.content.y, fonts);
+            box.style.height = .{ .px = containing_height };
+            box.style.box_sizing = .content_box;
+            const outer_width = saved_w + box.margin.left + box.margin.right +
+                box.padding.left + box.padding.right + box.border.left + box.border.right;
+            // Insets already resolve against the parent, not this synthetic width.
+            switch (box.style.display) {
+                .flex, .inline_flex => flex.layoutFlexVp(box, outer_width, box.content.y, fonts, containing_height),
+                .grid, .inline_grid => grid.layoutGridVp(box, outer_width, box.content.y, fonts, containing_height),
+                else => unreachable,
+            }
             box.style.width = saved_width_style;
+            box.style.height = saved_height_style;
+            box.style.box_sizing = saved_box_sizing;
         },
         else => layoutBlockChildren(box, fonts, containing_height),
     }
 
+    if (box.content.x != saved_x) adjustXPositions(box, saved_x - box.content.x);
+    if (box.content.y != saved_y) adjustYPositions(box, saved_y - box.content.y);
     box.content.height = saved_h;
     box.content.width = saved_w;
 }

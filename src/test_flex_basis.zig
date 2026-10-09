@@ -1,8 +1,7 @@
 //! Test aggregator for flex-basis unit tests.
 //!
-//! The tests themselves live at the bottom of src/layout/flex.zig so they can
-//! call internal helpers (resolveFlexBasis, tfMake*, ...). This module just
-//! forces the Zig test runner to discover them.
+//! Internal flex tests live in src/layout/flex.zig so they can call its helpers.
+//! This module also discovers production relayout geometry tests.
 //!
 //! Build wiring lives in build.zig under the `test-flex-basis` step and
 //! mirrors the main executable's C dependencies (lexbor + freetype +
@@ -11,4 +10,5 @@
 
 comptime {
     _ = @import("layout/flex.zig");
+    _ = @import("test_flex_relayout.zig");
 }

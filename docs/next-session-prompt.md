@@ -1,6 +1,6 @@
 # suzume — 開発引き継ぎ
 
-## READ FIRST — 2026-10-09 / Wave 234
+## READ FIRST — 2026-10-09 / Wave 235
 
 ### 状態スナップショット
 
@@ -35,11 +35,15 @@ Wave 234 は、catch のない try 文が例外を捨てる不具合を修正し
 
 修正の範囲は例外の伝播に限る。finally の本体はまだ実行されず、return/break/continue を含む終了処理も実装していない。完全な try/finally 対応とは呼ばない。証拠は `docs/evidence/wave234-exceptions.md` に記録した。
 
+Wave 235 は、ネストした flex の再配置で親が確定した高さを使うようにした。従来の処理は高さを保存して最後に戻すだけで、配置中の justify-content には反映していなかった。確定した content-box の幅と高さを一時的に指定し、flex/grid の処理へ直接入る。padding/border の二重控除や、親を基準にした percentage inset の再計算を避け、元の座標と computed style も保持する。
+
+自作の viewport fixture で、検索欄の y 座標は 112 から 475 へ変わった。x=400、寸法 480×48、main の高さ 928、footer の y=976 は変わっていない。見出しとボタンの幅が広すぎること、匿名空白が高さを消費することは残っている。比較画像と直接検査は `docs/evidence/wave235-flex-reflow.md` に記録した。
+
 ### 検証結果
 
-| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 234 |
+| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 235 |
 |---|---:|---:|---:|
-| `zig build test` | 2125/2125 | 1858/1858 | 2248/2248 |
+| `zig build test` | 2125/2125 | 1858/1858 | 2254/2254 |
 | ReleaseSafe ビルド | 12/12 steps | 12/12 steps | 12/12 steps |
 | kotori DOM (Debug / ReleaseSafe) | — | 242/242 (Debug) | 245/245 / 245/245 |
 | URL WPT | 5801/7316 (79.3%) | 6661/7316 (91.0%) | 6662/7316 (91.1%) |
@@ -52,15 +56,17 @@ WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。3 回の計測�
 
 統合の証拠とファイルごとの比較は `docs/evidence/wave232-integration.md` に記録した。追加した percent encoding の 2 件と branding の 3 件は、実装前に失敗、実装後に成功した。Wave 233 でも URL WPT は 6662/7316 を維持し、新しい失敗と報告欠落は 0。寸法検証の新しい 2 件は実装前に失敗し、実装後の RAM surface テストは Debug / ReleaseSafe とも 4/4 だった。
 
-Wave 232 は `908d115`、Wave 233 は `af24774` として main に push 済み。GitHub CI の run `37864269467` と `37866706875` は全ジョブで成功した。Wave 234 の CI は push 後に別の実行を確認する。
+Wave 232 は `908d115`、Wave 233 は `af24774`、Wave 234 は `83bcd72` として main に push 済み。GitHub CI の run `37864269467`、`37866706875`、`37877396993` は全ジョブで成功した。Wave 235 の CI は push 後に別の実行を確認する。
 
-Wave 234 の kotori 単体テストは Debug / ReleaseSafe とも 1044/1044。追加した 4 件は修正前にすべて失敗し、修正後に成功した。Debug の test バイナリを直接実行しても 1044/1044 だった。自作のブラウザ検査は 1/6 から 6/6 へ改善した。WPT の検査ヘルパーを使った故意の負例は、修正後に正しく失敗する。URL WPT の 28 報告、分母、失敗行は Wave 233 と一致し、6662/7316 を保持した。スクリプトのない viewport fixture の画像差は AE=0 だった。配置はまだ修正していない。
+Wave 234 の kotori 単体テストは Debug / ReleaseSafe とも 1044/1044。追加した 4 件は修正前にすべて失敗し、修正後に成功した。Debug の test バイナリを直接実行しても 1044/1044 だった。自作のブラウザ検査は 1/6 から 6/6 へ改善した。WPT の検査ヘルパーを使った故意の負例は、修正後に正しく失敗する。URL WPT の 28 報告、分母、失敗行は Wave 233 と一致し、6662/7316 を保持した。Wave 234 の viewport fixture の画像差は AE=0 だった。
+
+Wave 235 の flex 単体テストは Debug / ReleaseSafe とも 51/51。最初の新しい 4 件は実装前にすべて失敗した。row/column と content-box/border-box を組み合わせ、高さ 200→120→200 の再配置、子の中心座標、元の座標と style の保持を検査する。親を基準にした 5% padding の検査も 2 件追加した。既存の 45 件はすべて成功を保持した。production CSS/layout の 17/44 件も成功し、通常の block fixture の画像差は AE=0 だった。URL の 28 報告と flex の 11 報告は、Wave 234 と分母・失敗行とも一致した。
 
 一般利用向けの完成には達していない。Wave 231 の Google は検索欄が初期画面外にあり、Wikipedia にはスタイル適用不足があった。GitHub 側の Google の全ページ PNG は 4096×4156、Wave 233 の新しい撮影は 1280×1084 だった。ただし実ページは保存しておらず、制御された比較ではない。スクリプトの大きさによる拒否も残る。画像取得のタイミングを固定していないため、これらの実サイト画像から退行を断定しない。
 
 ### 次の優先タスク
 
-1. レイアウトの座標を直接検査する回帰テストを追加し、`tests/wpt/benchmark/window-viewport.html` の flex 配置を直す。heading/button の align-items と justify-content、匿名ブロック、ネストした flex の確定サイズを調べる。kotori の offsetWidth/getBoundingClientRect などは実レイアウトへ接続し、取得時の同期も検証する。未対応の寸法を定数で埋めて WPT のスコアだけを戻さない。finally の実行も、通常終了、例外、return/break/continue のテストを先に追加して実装する。Google/Wikipedia の比較には保存した HTML/CSS と最小の自作 fixture を使う。
+1. `tests/wpt/benchmark/window-viewport.html` の heading/button の横方向の auto サイズと匿名空白を直す。column の非 stretch な子の intrinsic width、ブラウザのバーを除いた content-height を、座標の直接検査で確認する。kotori の offsetWidth/getBoundingClientRect などは実レイアウトへ接続し、取得時の同期も検証する。未対応の寸法を定数で埋めて WPT のスコアだけを戻さない。finally の実行も、通常終了、例外、return/break/continue のテストを先に追加して実装する。Google/Wikipedia の比較には保存した HTML/CSS と最小の自作 fixture を使う。
 2. Pi Zero 2W の起動、表示、入力、通信、メモリ使用量を確認する。macOS GUI はこの Linux ホストでは動かしていない。TLS のローカル試験は通ったが、origin/CORS、認証付きアセット、実サイトとの通信も調べる。
 3. URL/要求 API の残りを処理する。埋め込み IPv4 を含む IPv6 の leading zero は既知の失敗。`urlencoded-parser.any.html` の 70 件は Request/Response.formData の未実装。sendBeacon は true を返すスタブ。不正 UTF-8 の formDecode はネイティブの処理へ統合し、NUL、切れた列、範囲外の列に対する境界テストを追加する。
 
@@ -71,6 +77,8 @@ cd /home/midasdf/suzume-integration-20261009
 zig fmt --check build.zig src/paint/surface.zig src/test_surface.zig src/ui/chrome.zig src/main.zig src/js/kotori/compiler.zig src/js/kotori/object.zig src/js/kotori/vm.zig src/js/kotori_dom.zig src/url/host.zig src/url/parser.zig src/url/percent_encode.zig tests/test_kotori_vm.zig tests/test_kotori_dom.zig
 zig build test --summary all
 zig build test-kotori -Doptimize=ReleaseSafe --summary all
+zig fmt --check src/layout/block.zig src/test_flex_basis.zig src/test_flex_relayout.zig
+zig build test-flex-basis test-dom-style -Doptimize=ReleaseSafe --summary all
 zig build test-surface -Doptimize=ReleaseSafe --summary all
 zig build test-kotori-dom -Doptimize=ReleaseSafe --summary all
 zig build test-ui-input test-navigation test-css test-dom-style -Doptimize=ReleaseSafe --summary all
@@ -121,7 +129,7 @@ DISPLAY=:98 SUZUME_JS=kotori timeout 90 ./zig-out/bin/suzume --wpt-mode http://1
 
 - 2026-07-06 以前: kotori が既定で、QuickJS はフォールバック。ネイティブ実装を優先する。
 - 2026-07-06: 引き継ぎは `docs/next-session-prompt.md` を唯一の正とする。
-- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 234 の次は Wave 235。
+- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 235 の次は Wave 236。
 - 2026-10-09: ユーザーの push 指示を受け、検証済みの統合結果を GitHub main へ公開する。元の未コミット変更は保持する。
 
 repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の UB 規律は `~/.claude/skills/zig-gotchas/SKILL.md` に従う。
@@ -138,5 +146,6 @@ repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の U
 - 描画の既知の未完成箇所: `docs/evidence/wave231-smoke.md`。
 - Native window / RAM surface: `src/paint/surface.zig`、`src/test_surface.zig`。自作の描画 fixture は `tests/wpt/benchmark/window-viewport.html`。
 - catch のない try の例外伝播: `src/js/kotori/compiler.zig` の `compileTryCatch`。ブラウザ用回帰テストは `tests/wpt/kotori/catchless-try.html`。詳細は `docs/evidence/wave234-exceptions.md`。
-- 詳細ログ: `/tmp/suzume-wave234-20261009/`。一時ファイルなので再起動で消える。以前のログは `/tmp/suzume-integration-20261009/` と `/tmp/suzume-20261009/`。
+- ネストした formatting context の再配置: `src/layout/block.zig` の `relayoutChildrenWithContainingHeight`。直接検査は `src/test_flex_relayout.zig`、証拠は `docs/evidence/wave235-flex-reflow.md`。
+- 詳細ログ: `/tmp/suzume-wave235-20261009/` と `/tmp/suzume-wave234-20261009/`。一時ファイルなので再起動で消える。以前のログは `/tmp/suzume-integration-20261009/` と `/tmp/suzume-20261009/`。
 - Wave 231 の引き継ぎ: `git show 2978cf7:docs/next-session-prompt.md`。Wave 229 以前の履歴: `git show 1171fae:docs/next-session-prompt.md`。
