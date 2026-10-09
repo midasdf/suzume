@@ -1004,6 +1004,7 @@ pub fn build(b: *std.Build) void {
     });
     flex_basis_mod.link_libc = true;
     flex_basis_mod.addIncludePath(lexbor_dep.path("lib"));
+    flex_basis_mod.addIncludePath(b.path(quickjs_dir));
     flex_basis_mod.addIncludePath(freetype_dep.path("include"));
     flex_basis_mod.addIncludePath(harfbuzz_dep.path("src"));
     const flex_basis_tests = b.addTest(.{ .root_module = flex_basis_mod });

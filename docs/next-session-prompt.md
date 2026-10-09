@@ -1,6 +1,6 @@
 # suzume — 開発引き継ぎ
 
-## READ FIRST — 2026-10-09 / Wave 236
+## READ FIRST — 2026-10-09 / Wave 237
 
 ### 状態スナップショット
 
@@ -43,11 +43,15 @@ Wave 236 は、column flex の非 stretch な auto 幅を intrinsic content か�
 
 直接検査は 8 件を追加し、7 件が実装前に失敗した。修正後の flex は Debug / ReleaseSafe とも 59/59 で、既存の 51 件も保持した。通常の block fixture の画像差は AE=0。URL の 28 報告と flex の 11 報告は、修正前後で分母・失敗行とも一致した。Linux/macOS の CI にも flex の単体検査を加えた。証拠は `docs/evidence/wave236-cross-size.md` に記録した。
 
+Wave 237 は、flex/grid の空白だけの DOM text を box の確保前に除外した。normal/pre/pre-wrap とも適用し、NBSP と非空白の匿名 text item、通常の inline 要素間の空白は保持する。inline-flex でも非空白 text を匿名 item に包む。自作 fixture の box 数は 16 から 12 へ減り、余分な 20px の匿名 item が 2 件なくなった。見出しは y=431、検索欄は y=495、ボタンは y=543。検索欄とボタンの border-box 間隔は指定どおりの 12px になった。
+
+DOM 由来の直接検査を 3 件追加した。うち 2 件は実装前に失敗し、修正後は 62/62 の flex/tree テストが Debug / ReleaseSafe とも成功した。4 種の display と 3 種の white-space を検査し、普通の block fixture の画像差も AE=0 だった。URL/flex WPT の報告と失敗行は Wave 236 と一致した。証拠は `docs/evidence/wave237-whitespace.md` に記録した。
+
 ### 検証結果
 
-| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 236 |
+| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 237 |
 |---|---:|---:|---:|
-| `zig build test` | 2125/2125 | 1858/1858 | 2262/2262 |
+| `zig build test` | 2125/2125 | 1858/1858 | 2265/2265 |
 | ReleaseSafe ビルド | 12/12 steps | 12/12 steps | 12/12 steps |
 | kotori DOM (Debug / ReleaseSafe) | — | 242/242 (Debug) | 245/245 / 245/245 |
 | URL WPT | 5801/7316 (79.3%) | 6661/7316 (91.0%) | 6662/7316 (91.1%) |
@@ -60,7 +64,7 @@ WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。3 回の計測�
 
 統合の証拠とファイルごとの比較は `docs/evidence/wave232-integration.md` に記録した。追加した percent encoding の 2 件と branding の 3 件は、実装前に失敗、実装後に成功した。Wave 233 でも URL WPT は 6662/7316 を維持し、新しい失敗と報告欠落は 0。寸法検証の新しい 2 件は実装前に失敗し、実装後の RAM surface テストは Debug / ReleaseSafe とも 4/4 だった。
 
-Wave 232 は `908d115`、Wave 233 は `af24774`、Wave 234 は `83bcd72`、Wave 235 は `14cb22f` として main に push 済み。GitHub CI の run `37864269467`、`37866706875`、`37877396993`、`37879314062` は全ジョブで成功した。Wave 236 の CI は push 後に別の実行を確認する。
+Wave 232〜236 は main に push 済み。Wave 236 は `648455c`。GitHub CI の run `37864269467`、`37866706875`、`37877396993`、`37879314062`、`37890251982` は全ジョブで成功した。Wave 236 から Linux/macOS の CI は flex の単体検査も実行する。Wave 237 の CI は push 後に別の実行を確認する。
 
 Wave 234 の kotori 単体テストは Debug / ReleaseSafe とも 1044/1044。追加した 4 件は修正前にすべて失敗し、修正後に成功した。Debug の test バイナリを直接実行しても 1044/1044 だった。自作のブラウザ検査は 1/6 から 6/6 へ改善した。WPT の検査ヘルパーを使った故意の負例は、修正後に正しく失敗する。URL WPT の 28 報告、分母、失敗行は Wave 233 と一致し、6662/7316 を保持した。Wave 234 の viewport fixture の画像差は AE=0 だった。
 
@@ -70,7 +74,7 @@ Wave 235 の flex 単体テストは Debug / ReleaseSafe とも 51/51。最初�
 
 ### 次の優先タスク
 
-1. flex/grid の空白だけの匿名 item を取り除き、`tests/wpt/benchmark/window-viewport.html` の余分な高さを直す。非空白の text item と、通常の block/inline の空白は保持する。wrapped column の align-content とブラウザのバーを除いた content-height も、座標の直接検査で確認する。kotori の offsetWidth/getBoundingClientRect などは実レイアウトへ接続し、取得時の同期も検証する。未対応の寸法を定数で埋めて WPT のスコアだけを戻さない。finally の実行も、通常終了、例外、return/break/continue のテストを先に追加して実装する。Google/Wikipedia の比較には保存した HTML/CSS と最小の自作 fixture を使う。
+1. ブラウザのバーを除いた content-height と、wrapped column の align-content を直接検査する。後者は line 全体の幅で空き領域を消している既知の問題がある。`tests/wpt/benchmark/window-viewport.html` の配置はスクリーンショットだけでなく実ウィンドウでも確認する。kotori の offsetWidth/getBoundingClientRect などは実レイアウトへ接続し、取得時の同期も検証する。未対応の寸法を定数で埋めて WPT のスコアだけを戻さない。finally の実行も、通常終了、例外、return/break/continue のテストを先に追加して実装する。Google/Wikipedia の比較には保存した HTML/CSS と最小の自作 fixture を使う。
 2. Pi Zero 2W の起動、表示、入力、通信、メモリ使用量を確認する。macOS GUI はこの Linux ホストでは動かしていない。TLS のローカル試験は通ったが、origin/CORS、認証付きアセット、実サイトとの通信も調べる。
 3. URL/要求 API の残りを処理する。埋め込み IPv4 を含む IPv6 の leading zero は既知の失敗。`urlencoded-parser.any.html` の 70 件は Request/Response.formData の未実装。sendBeacon は true を返すスタブ。不正 UTF-8 の formDecode はネイティブの処理へ統合し、NUL、切れた列、範囲外の列に対する境界テストを追加する。
 
@@ -81,7 +85,7 @@ cd /home/midasdf/suzume-integration-20261009
 zig fmt --check build.zig src/paint/surface.zig src/test_surface.zig src/ui/chrome.zig src/main.zig src/js/kotori/compiler.zig src/js/kotori/object.zig src/js/kotori/vm.zig src/js/kotori_dom.zig src/url/host.zig src/url/parser.zig src/url/percent_encode.zig tests/test_kotori_vm.zig tests/test_kotori_dom.zig
 zig build test --summary all
 zig build test-kotori -Doptimize=ReleaseSafe --summary all
-zig fmt --check src/layout/block.zig src/test_flex_basis.zig src/test_flex_relayout.zig src/test_flex_cross_size.zig
+zig fmt --check src/layout/block.zig src/test_flex_basis.zig src/test_flex_relayout.zig src/test_flex_cross_size.zig src/layout/tree.zig src/test_flex_whitespace.zig
 zig build test-flex-basis test-dom-style -Doptimize=ReleaseSafe --summary all
 zig build test-surface -Doptimize=ReleaseSafe --summary all
 zig build test-kotori-dom -Doptimize=ReleaseSafe --summary all
@@ -133,7 +137,7 @@ DISPLAY=:98 SUZUME_JS=kotori timeout 90 ./zig-out/bin/suzume --wpt-mode http://1
 
 - 2026-07-06 以前: kotori が既定で、QuickJS はフォールバック。ネイティブ実装を優先する。
 - 2026-07-06: 引き継ぎは `docs/next-session-prompt.md` を唯一の正とする。
-- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 236 の次は Wave 237。
+- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 237 の次は Wave 238。
 - 2026-10-09: ユーザーの push 指示を受け、検証済みの統合結果を GitHub main へ公開する。元の未コミット変更は保持する。
 
 repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の UB 規律は `~/.claude/skills/zig-gotchas/SKILL.md` に従う。
@@ -152,5 +156,6 @@ repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の U
 - catch のない try の例外伝播: `src/js/kotori/compiler.zig` の `compileTryCatch`。ブラウザ用回帰テストは `tests/wpt/kotori/catchless-try.html`。詳細は `docs/evidence/wave234-exceptions.md`。
 - ネストした formatting context の再配置: `src/layout/block.zig` の `relayoutChildrenWithContainingHeight`。直接検査は `src/test_flex_relayout.zig`、証拠は `docs/evidence/wave235-flex-reflow.md`。
 - column flex の auto cross size: `src/layout/flex.zig` の `layoutColumnItem`。直接検査は `src/test_flex_cross_size.zig`、証拠は `docs/evidence/wave236-cross-size.md`。
-- 詳細ログ: `/tmp/suzume-wave236-20261009/`、`/tmp/suzume-wave235-20261009/`、`/tmp/suzume-wave234-20261009/`。一時ファイルなので再起動で消える。以前のログは `/tmp/suzume-integration-20261009/` と `/tmp/suzume-20261009/`。
+- 空白だけの flex/grid DOM text: `src/layout/tree.zig` の `buildChildren`。inline-flex の匿名 item は `wrapInlineChildren`。直接検査は `src/test_flex_whitespace.zig`、証拠は `docs/evidence/wave237-whitespace.md`。
+- 詳細ログ: `/tmp/suzume-wave237-20261009/` と `/tmp/suzume-wave236-20261009/`。一時ファイルなので再起動で消える。Wave 234/235 は `/tmp/suzume-wave234-20261009/` と `/tmp/suzume-wave235-20261009/`。統合のログは `/tmp/suzume-integration-20261009/`、元の作業のログは `/tmp/suzume-20261009/`。
 - Wave 231 の引き継ぎ: `git show 2978cf7:docs/next-session-prompt.md`。Wave 229 以前の履歴: `git show 1171fae:docs/next-session-prompt.md`。

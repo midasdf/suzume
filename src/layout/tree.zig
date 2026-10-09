@@ -186,14 +186,12 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
         }
     }
 
-    // Only wrap if this is a block-level container
-    if (parent.box_type != .block and parent.box_type != .anonymous_block) return;
-
     // For flex/grid containers, element children become flex/grid items directly.
     // Only bare text runs (inline_text) need wrapping in anonymous blocks.
     // For block containers, mixed inline+block children need wrapping.
     const is_flex_or_grid = parent.style.display == .flex or parent.style.display == .inline_flex or
         parent.style.display == .grid or parent.style.display == .inline_grid;
+    if (!is_flex_or_grid and parent.box_type != .block and parent.box_type != .anonymous_block) return;
 
     if (is_flex_or_grid) {
         // Flex/grid: promote inline element children to block (flex items),
@@ -955,6 +953,13 @@ fn buildChildren(
             },
             .text => {
                 const text = child.textContent() orelse continue;
+                // Flexbox §4 / Grid §6: whitespace-only anonymous items do not render,
+                // including preformatted whitespace. NBSP is not document whitespace.
+                if (parent_box.style.display == .flex or parent_box.style.display == .inline_flex or
+                    parent_box.style.display == .grid or parent_box.style.display == .inline_grid)
+                {
+                    if (std.mem.trim(u8, text, " \t\n\r\x0c").len == 0) continue;
+                }
 
                 // Handle white-space property
                 const is_pre = parent_box.style.white_space == .pre or

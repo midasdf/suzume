@@ -12,4 +12,5 @@ comptime {
     _ = @import("layout/flex.zig");
     _ = @import("test_flex_relayout.zig");
     _ = @import("test_flex_cross_size.zig");
+    _ = @import("test_flex_whitespace.zig");
 }
