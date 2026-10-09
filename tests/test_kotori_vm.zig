@@ -9159,3 +9159,43 @@ test "closure bug: function decl captures outer const" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
 }
+
+// ── WTF-8 lone surrogate semantics ─────────────────────────────
+// Internal string encoding is WTF-8: a lone surrogate (e.g. "\uD835")
+// is one 3-byte sequence ED A0 B5, one UTF-16 code unit. These tests
+// pin the spec behavior that previously broke via strict utf8Decode.
+
+test "WTF-8: lone surrogate length and code units" {
+    try std.testing.expect((try evalExpr("\"\\uD835x\".length === 2")).asBool());
+    try std.testing.expect((try evalExpr("\"\\uD835x\".charCodeAt(0) === 0xD835")).asBool());
+    try std.testing.expect((try evalExpr("\"\\uD835x\".charCodeAt(1) === 0x78")).asBool());
+    try std.testing.expect((try evalExpr("\"\\uD835x\".codePointAt(0) === 0xD835")).asBool());
+}
+
+test "WTF-8: lone surrogate object key round-trip" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\o["\uD835x"] = 1;
+        \\var k = Object.keys(o)[0];
+        \\k.length === 2 && k === "\uD835x" && k.charCodeAt(0) === 0xD835 && o[k] === 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "WTF-8: lone surrogate iteration and spread" {
+    const result = try evalExpr(
+        \\var s = "\uD835x";
+        \\var arr = [...s];
+        \\arr.length === 2 && arr[0].charCodeAt(0) === 0xD835 && arr[1] === "x"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "WTF-8: lone surrogate comparison and concat" {
+    const result = try evalExpr(
+        \\var a = "\uD835";
+        \\var b = "\uD835";
+        \\a === b && (a + "x").length === 2 && (a + "x").charCodeAt(0) === 0xD835
+    );
+    try std.testing.expect(result.asBool());
+}

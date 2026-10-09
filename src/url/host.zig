@@ -2,7 +2,6 @@
 ///
 /// Parses host strings into domain, IPv4, IPv6, or opaque host representations.
 /// Uses IDNA for domain processing.
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const idna = @import("idna.zig");
@@ -69,6 +68,14 @@ pub fn parseHost(allocator: Allocator, input: []const u8, is_not_special: bool) 
         }
     }
 
+    // WHATWG URL §3.5: empty labels (leading dot, consecutive dots) are
+    // validation errors, NOT failures. The host parser returns the domain
+    // as-is. Tests: `http://./` → host=".", `http://../` → host="..",
+    // `http://foo.09..` → host="foo.09..". The previous Wave 211b rejection
+    // of these was spec-incorrect and caused false failures.
+    // (endsInNumber + parseIpv4 still correctly reject genuinely invalid IPv4
+    // forms like "192.168.1.1.." where parseIpv4 returns failure.)
+
     // 6. Try IPv4 parse (if ends in a number)
     if (ascii_domain.len > 0 and endsInNumber(ascii_domain)) {
         if (try parseIpv4(ascii_domain)) |addr| {
@@ -107,12 +114,19 @@ fn parseOpaqueHost(allocator: Allocator, input: []const u8) !?[]u8 {
 pub fn parseIpv4(input: []const u8) !?u32 {
     if (input.len == 0) return null;
 
+    // WHATWG URL §3.5.2: strip at most ONE trailing dot from the input
+    // before splitting. Multiple trailing dots ("192.168.1.1..") should fail.
+    var trimmed = input;
+    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '.') {
+        trimmed = trimmed[0 .. trimmed.len - 1];
+    }
+
     var parts_buf: [4]u64 = undefined;
     var part_count: usize = 0;
 
-    var it = std.mem.splitScalar(u8, input, '.');
+    var it = std.mem.splitScalar(u8, trimmed, '.');
     while (it.next()) |part| {
-        if (part.len == 0) return null; // empty part
+        if (part.len == 0) return null; // empty part (leading dot or double dot)
         if (part_count >= 4) return null; // too many parts
 
         const num = parseIpv4Number(part) orelse return null;
@@ -142,6 +156,46 @@ pub fn parseIpv4(input: []const u8) !?u32 {
     return @intCast(addr);
 }
 
+/// Parse an IPv4 address embedded in an IPv6 address per WHATWG URL §4.4.5.
+/// Unlike the standalone `parseIpv4`, this does NOT strip a trailing dot —
+/// a trailing dot makes the IPv4 (and thus the IPv6) invalid. Also requires
+/// exactly 4 dot-separated parts (no short forms like "1.2.3" → 1.2.3.0).
+/// Returns null on failure.
+fn parseIpv4ForIpv6(input: []const u8) ?u32 {
+    if (input.len == 0) return null;
+
+    // Reject trailing dot — IPv4 embedded in IPv6 must not have one.
+    if (input[input.len - 1] == '.') return null;
+
+    var parts_buf: [4]u64 = undefined;
+    var part_count: usize = 0;
+
+    var it = std.mem.splitScalar(u8, input, '.');
+    while (it.next()) |part| {
+        if (part.len == 0) return null; // empty part (leading/double/trailing dot)
+        if (part_count >= 4) return null; // too many parts
+
+        const num = parseIpv4Number(part) orelse return null;
+        parts_buf[part_count] = num;
+        part_count += 1;
+    }
+
+    if (part_count != 4) return null; // must be exactly 4 parts
+
+    // All parts must be <= 255 (no short-form last-part expansion in IPv6)
+    for (parts_buf) |p| {
+        if (p > 255) return null;
+    }
+
+    var addr: u64 = 0;
+    for (parts_buf, 0..) |p, i| {
+        const shift: u6 = @intCast(8 * (3 - i));
+        addr += p << shift;
+    }
+
+    return @intCast(addr);
+}
+
 fn parseIpv4Number(input: []const u8) ?u64 {
     if (input.len == 0) return null;
 
@@ -163,7 +217,13 @@ fn parseIpv4Number(input: []const u8) ?u64 {
         return 0;
     }
 
+    // WHATWG URL §3.5.2 IPv4 number parser: return failure only on syntax
+    // errors (non-radix digits). The "mathematical integer value" can exceed
+    // u64 — we saturate to u64 max so endsInNumber still reports true for
+    // valid-syntax numbers like "0xFfFfFfFfFfFfFfFfFfAcE123" (which parseIpv4
+    // then rejects via the final range check).
     var result: u64 = 0;
+    var saturated = false;
     for (input[start..]) |c| {
         const digit: u64 = switch (c) {
             '0'...'9' => c - '0',
@@ -172,29 +232,100 @@ fn parseIpv4Number(input: []const u8) ?u64 {
             else => return null,
         };
         if (digit >= radix) return null;
-        result = std.math.mul(u64, result, radix) catch return null;
-        result = std.math.add(u64, result, digit) catch return null;
+        if (!saturated) {
+            const mul_res = std.math.mul(u64, result, radix) catch {
+                saturated = true;
+                continue;
+            };
+            const add_res = std.math.add(u64, mul_res, digit) catch {
+                saturated = true;
+                continue;
+            };
+            result = add_res;
+        }
     }
 
     return result;
 }
 
 /// Check if the last label of a host string is numeric (triggers IPv4 parsing).
+/// WHATWG URL §3.5.2: a label is numeric if it's a decimal number, OR starts
+/// with 0x/0X (hex), OR starts with 0 followed by octal digits. This covers
+/// forms like "0300", "0xF0", "192", "0" that appear in url-constructor WPT
+/// tests (e.g. http://0300.168.0xF0 → 192.168.0.240).
+/// Wave 210b fix: strip one trailing dot before checking, so hosts like
+/// "192.168.1.1." correctly trigger IPv4 parsing instead of being treated
+/// as domains with an empty last label.
 fn endsInNumber(input: []const u8) bool {
-    // Find the last '.' and check the part after it
-    const last_dot = std.mem.lastIndexOfScalar(u8, input, '.') orelse 0;
-    const last_part = if (last_dot == 0 and input[0] != '.') input else input[last_dot + 1 ..];
+    // WHATWG URL §3.5.2 ends-in-a-number checker:
+    // 1. parts = strictly split input on '.'
+    // 2. If last item is the empty string:
+    //    - If parts.size == 1, return false.
+    //    - Otherwise, remove the last item from parts.
+    // 3. last = last item of parts.
+    // 4. If last is non-empty and contains only ASCII digits, return true.
+    // 5. If parsing last as IPv4 number does not return failure, return true.
+    // 6. Return false.
 
-    if (last_part.len == 0) return false;
+    // Strictly split input on '.': produces N+1 parts for N dots.
+    // "." → ["", ""], ".." → ["", "", ""], "a.b" → ["a", "b"].
+    if (input.len == 0) return false;
 
-    // If it starts with 0x/0X, it's hex
-    if (last_part.len >= 2 and last_part[0] == '0' and (last_part[1] == 'x' or last_part[1] == 'X')) return true;
-
-    // If all digits, it's a number
-    for (last_part) |c| {
-        if (c < '0' or c > '9') return false;
+    // Count dots to determine parts count (parts = dots + 1).
+    var dot_count: usize = 0;
+    for (input) |c| {
+        if (c == '.') dot_count += 1;
     }
-    return true;
+    const parts_count = dot_count + 1;
+
+    // Find the last part start (after the last '.'), but the "last item" in
+    // the spec's parts list is the substring after the final '.'.
+    const last_dot_idx: ?usize = std.mem.lastIndexOfScalar(u8, input, '.');
+
+    // Determine the "last item" of parts, applying step 2 (strip empty last).
+    var last_item_start: usize = 0;
+    var last_item_end: usize = input.len;
+    if (last_dot_idx) |ldi| {
+        last_item_start = ldi + 1;
+    }
+
+    // If last item is empty, apply step 2 (strip it, look at the prior part).
+    if (last_item_start == last_item_end) {
+        if (parts_count == 1) return false; // input was empty (shouldn't reach)
+        // Move to the prior part: find the '.' before last_dot_idx.
+        if (last_dot_idx) |ldi| {
+            // Empty last → remove; if parts now has size 1 (no more dots), the
+            // single remaining part is input[0..ldi]. Otherwise find prev dot.
+            const prev_dot_idx: ?usize = if (ldi == 0) null else std.mem.lastIndexOfScalar(u8, input[0..ldi], '.');
+            if (prev_dot_idx) |pdi| {
+                last_item_start = pdi + 1;
+                last_item_end = ldi;
+            } else {
+                last_item_start = 0;
+                last_item_end = ldi;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    const last = input[last_item_start..last_item_end];
+    if (last.len == 0) return false;
+
+    // Step 4: non-empty and contains only ASCII digits → true.
+    var all_digits = true;
+    for (last) |c| {
+        if (c < '0' or c > '9') {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) return true;
+
+    // Step 5: parse as IPv4 number — failure → false; success → true.
+    if (parseIpv4Number(last) != null) return true;
+
+    return false;
 }
 
 // ── IPv6 ────────────────��────────────────────────────────────────────
@@ -248,13 +379,14 @@ pub fn parseIpv6(input: []const u8) ?[8]u16 {
 
         // Check for IPv4 embedded address (last two pieces)
         if (i < input.len and input[i] == '.' and piece_idx <= 6) {
-            // Backtrack and parse as IPv4
-            // Find the start of this number
+            // Backtrack and parse as IPv4 embedded in IPv6 (WHATWG §4.4.5).
+            // Unlike standalone parseIpv4, the IPv6-embedded variant does NOT
+            // strip a trailing dot and requires exactly 4 parts, so
+            // `[::1.2.3.]` and `[::1.2.3]` are correctly rejected.
             const start = i - digits;
             const remaining = input[start..];
 
-            // Parse IPv4
-            const ipv4 = (parseIpv4(remaining) catch return null) orelse return null;
+            const ipv4 = parseIpv4ForIpv6(remaining) orelse return null;
             addr[piece_idx] = @intCast((ipv4 >> 16) & 0xFFFF);
             addr[piece_idx + 1] = @intCast(ipv4 & 0xFFFF);
             piece_idx += 2;
@@ -407,6 +539,100 @@ test "parseIpv4 two parts" {
 test "parseIpv4 hex parts" {
     const result = (try parseIpv4("0xC0.0xA8.0x01.0x01")).?;
     try std.testing.expectEqual(@as(u32, 0xC0A80101), result);
+}
+
+test "parseIpv4 octal parts" {
+    // 0300 = 192, 0250 = 168, 01 = 1, 01 = 1
+    const result = (try parseIpv4("0300.0250.01.01")).?;
+    try std.testing.expectEqual(@as(u32, 0xC0A80101), result);
+}
+
+test "parseIpv4 mixed octal hex decimal" {
+    // 0300 (octal=192) . 168 (decimal) . 0xF0 (hex=240) . 1 (decimal)
+    const result = (try parseIpv4("0300.168.0xF0.1")).?;
+    try std.testing.expectEqual(@as(u32, 0xC0A8F001), result);
+}
+
+test "parseIpv4 trailing dot" {
+    // WHATWG URL §3.5.2: trailing dot is valid (one trailing dot stripped)
+    const result = (try parseIpv4("192.168.1.1.")).?;
+    try std.testing.expectEqual(@as(u32, 0xC0A80101), result);
+}
+
+test "parseIpv4 double trailing dot fails" {
+    // WHATWG URL §3.5.2: only ONE trailing dot is stripped; ".." should fail
+    // because after stripping one dot, the remaining "192.168.1.1." still has
+    // an empty part when split.
+    const result = try parseIpv4("192.168.1.1..");
+    // After stripping one trailing dot → "192.168.1.1." → split produces
+    // ["192","168","1","1",""] → empty part → null.
+    try std.testing.expect(result == null);
+}
+
+test "parseHost trailing dot IPv4 end-to-end" {
+    // Wave 210b: endsInNumber must strip trailing dot so parseHost recognizes
+    // "192.168.1.1." as IPv4, not a domain with empty last label.
+    const result = try parseHost(std.testing.allocator, "192.168.1.1.", false);
+    try std.testing.expect(result != null);
+    switch (result.?) {
+        .ipv4 => |addr| try std.testing.expectEqual(@as(u32, 0xC0A80101), addr),
+        else => return error.UnexpectedHostType,
+    }
+    freeHost(std.testing.allocator, result.?);
+}
+
+test "parseHost consecutive dots is validation error (WHATWG §3.5)" {
+    // WHATWG URL §3.5: empty labels are validation errors, NOT failures.
+    // `http://192.168.1.1..` would have endsInNumber=true (after stripping one
+    // trailing dot, last part "09"-ish numeric), then parseIpv4 fails on the
+    // empty part — that path still returns failure. But a pure domain with
+    // consecutive dots like "example..com" has no numeric last label, so it
+    // is returned as a domain (validation error only).
+    // Here we verify the non-numeric consecutive-dot case succeeds.
+    const result = try parseHost(std.testing.allocator, "example..com", false);
+    try std.testing.expect(result != null);
+    switch (result.?) {
+        .domain => |d| try std.testing.expectEqualStrings("example..com", d),
+        else => return error.UnexpectedHostType,
+    }
+    freeHost(std.testing.allocator, result.?);
+}
+
+test "parseHost leading dot is validation error (WHATWG §3.5)" {
+    // WHATWG URL §3.5: leading dot is a validation error, not failure.
+    // `http://./` → host="." (per urltestdata.json "Domains with empty labels").
+    const result = try parseHost(std.testing.allocator, ".", false);
+    try std.testing.expect(result != null);
+    switch (result.?) {
+        .domain => |d| try std.testing.expectEqualStrings(".", d),
+        else => return error.UnexpectedHostType,
+    }
+    freeHost(std.testing.allocator, result.?);
+}
+
+test "parseHost double dot is validation error (WHATWG §3.5)" {
+    // WHATWG URL §3.5: `http://../` → host=".." (per urltestdata.json).
+    const result = try parseHost(std.testing.allocator, "..", false);
+    try std.testing.expect(result != null);
+    switch (result.?) {
+        .domain => |d| try std.testing.expectEqualStrings("..", d),
+        else => return error.UnexpectedHostType,
+    }
+    freeHost(std.testing.allocator, result.?);
+}
+
+test "endsInNumber detects octal" {
+    // Wave 210b: endsInNumber must detect octal numbers (starting with 0)
+    try std.testing.expect(endsInNumber("192.168.1.0300"));
+    try std.testing.expect(endsInNumber("192.168.1.0"));
+    try std.testing.expect(endsInNumber("192.168.1.0xF0"));
+    try std.testing.expect(endsInNumber("192.168.1.255"));
+    // Trailing dot should be stripped before checking
+    try std.testing.expect(endsInNumber("192.168.1.1."));
+    try std.testing.expect(endsInNumber("192.168.1.0300."));
+    // Non-numeric last label should NOT trigger
+    try std.testing.expect(!endsInNumber("example.com"));
+    try std.testing.expect(!endsInNumber("192.168.1.abc"));
 }
 
 test "parseIpv6 loopback" {

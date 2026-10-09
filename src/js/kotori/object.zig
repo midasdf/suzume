@@ -152,8 +152,15 @@ pub const JsObject = struct {
         revoked: bool = false,
     };
 
+    pub const DOMExceptionData = struct {
+        name: StringId,
+        message: StringId,
+        code: u8,
+    };
+
     pub const ObjData = union(enum) {
         none,
+        dom_exception_data: DOMExceptionData,
         function: FunctionObj,
         array: std.ArrayListUnmanaged(value_mod.JsValue),
         native_fn: NativeFn,
@@ -196,7 +203,7 @@ pub const JsObject = struct {
             },
             .bytes_data => |b| if (b.len > 0) allocator.free(b),
             .typed_array_data => |ta| if (ta.owned and ta.bytes.len > 0) allocator.free(ta.bytes),
-            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .bytes_view, .proxy_data => {},
+            .none, .dom_exception_data, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .bytes_view, .proxy_data => {},
         }
     }
 
@@ -214,6 +221,28 @@ pub const JsObject = struct {
                 }
             }
             if (obj.properties.contains(name)) return null; // fast-path data shadows prototype accessor
+            cur = obj.prototype;
+        }
+        return null;
+    }
+
+    pub const ChainLookupResult = union(enum) {
+        accessor: struct { get: JsValue, set: JsValue, attrs: PropertyAttrs },
+        data: JsValue,
+    };
+
+    pub fn getWithAccessorInfo(self: *const JsObject, name: StringId) ?ChainLookupResult {
+        var cur: ?*const JsObject = self;
+        while (cur) |obj| {
+            if (obj.descriptors) |*d| {
+                if (d.get(name)) |desc| {
+                    return switch (desc) {
+                        .accessor => |a| .{ .accessor = .{ .get = a.get, .set = a.set, .attrs = a.attrs } },
+                        .data => |dat| .{ .data = dat.value },
+                    };
+                }
+            }
+            if (obj.properties.get(name)) |v| return .{ .data = v };
             cur = obj.prototype;
         }
         return null;

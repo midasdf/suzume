@@ -195,6 +195,9 @@ pub const KotoriRuntime = struct {
             const set_fn = try self.vm.createObj(.{ .obj_type = .native_function });
             set_fn.data = .{ .native_fn = &nativeUrlSet };
             try self.vm.globals.put(allocator, try pool.intern("__suzume_url_set"), JsValue.initObject(set_fn));
+            const usv_fn = try self.vm.createObj(.{ .obj_type = .native_function });
+            usv_fn.data = .{ .native_fn = &nativeUsvString };
+            try self.vm.globals.put(allocator, try pool.intern("__suzume_usv_string"), JsValue.initObject(usv_fn));
         }
 
         // WHATWG URL Standard — globalThis.URL constructor + Location
@@ -2908,12 +2911,26 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  Object.setPrototypeOf(CSSStyleRule.prototype,_CSSGroupingRuleBase.prototype);
         \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{
-        \\    get:function(){return this._sel;},
-        \\    set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=c;}catch(e){}},
+        \\    get:function(){
+        \\      // Normalize on read too — rules parsed from stylesheets may have
+        \\      // comment whitespace in _sel that wasn't normalized at parse time.
+        \\      return this._sel.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\s+([is])\]/g,function(m,g1){return ' '+g1+']';}).replace(/\s+/g,' ').trim();
+        \\    },
+        \\    set:function(v){
+        \\      var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+        \\      c=c.replace(/\s+([is])\]/g,function(m,g1){return ' '+g1+']';});
+        \\      try{document.querySelector(c);this._sel=c;}catch(e){}
+        \\    },
         \\    enumerable:true,configurable:true
         \\  });
         \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{
-        \\    get:function(){return this._sel+' { '+this._body+' }';},
+        \\    get:function(){
+        \\      // Normalize _sel for cssText output too (handles rules parsed
+        \\      // from stylesheets where _sel wasn't normalized at parse time).
+        \\      var s=this._sel;
+        \\      s=s.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\s+([is])\]/g,function(m,g1){return ' '+g1+']';}).replace(/\s+/g,' ').trim();
+        \\      return s+' { '+this._body+' }';
+        \\    },
         \\    enumerable:true,configurable:true
         \\  });
         \\  // style: [SameObject,PutForwards=cssText] — getter returns same proxy, setter forwards to cssText
@@ -5679,13 +5696,12 @@ pub const KotoriRuntime = struct {
             var inner = (url_parser.parse(allocator, inner_str, null) catch null) orelse
                 return allocator.dupe(u8, "null");
             defer inner.deinit();
-            // Guard against blob:blob:... recursion: inner must be special.
-            const inner_special = std.mem.eql(u8, inner.scheme, "http") or
-                std.mem.eql(u8, inner.scheme, "https") or
-                std.mem.eql(u8, inner.scheme, "ws") or
-                std.mem.eql(u8, inner.scheme, "wss") or
-                std.mem.eql(u8, inner.scheme, "ftp");
-            if (!inner_special) return allocator.dupe(u8, "null");
+            // URL Standard §4.8 blob: only an http(s) inner URL contributes
+            // its origin; everything else (ftp/ws/wss/file/blob:blob:...)
+            // is an opaque origin ("null").
+            const inner_http = std.mem.eql(u8, inner.scheme, "http") or
+                std.mem.eql(u8, inner.scheme, "https");
+            if (!inner_http) return allocator.dupe(u8, "null");
             return inner.serializeOrigin(allocator);
         }
         return allocator.dupe(u8, "null");
@@ -5777,6 +5793,54 @@ pub const KotoriRuntime = struct {
         return JsValue.initObject(obj);
     }
 
+    fn wtf8SurrogateAt(input: []const u8, pos: usize) ?u16 {
+        if (input.len - pos < 3 or input[pos] != 0xED or
+            input[pos + 1] < 0xA0 or input[pos + 1] > 0xBF or
+            input[pos + 2] < 0x80 or input[pos + 2] > 0xBF) return null;
+        return (@as(u16, input[pos] & 0x0F) << 12) |
+            (@as(u16, input[pos + 1] & 0x3F) << 6) | (input[pos + 2] & 0x3F);
+    }
+
+    /// WebIDL USVString conversion at API boundaries. The JS string pool
+    /// remains WTF-8; a pair split across two WTF-8 sequences is still one
+    /// scalar value and must not be replaced as two lone surrogates.
+    fn nativeUsvString(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = VM.vmFromCtx(ctx);
+        if (args.len == 0 or !args[0].isString()) return error.TypeError;
+        const input = vm.pool.get(args[0].asStringId()) orelse return args[0];
+        var first: usize = 0;
+        while (first < input.len and wtf8SurrogateAt(input, first) == null) : (first += 1) {}
+        if (first == input.len) return args[0];
+
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        defer out.deinit(vm.allocator);
+        try out.ensureTotalCapacity(vm.allocator, input.len);
+        try out.appendSlice(vm.allocator, input[0..first]);
+        var i = first;
+        while (i < input.len) {
+            if (wtf8SurrogateAt(input, i)) |high| {
+                if (high <= 0xDBFF) {
+                    if (wtf8SurrogateAt(input, i + 3)) |low| {
+                        if (low >= 0xDC00) {
+                            const cp: u21 = 0x10000 + ((@as(u21, high) - 0xD800) << 10) + (low - 0xDC00);
+                            var encoded: [4]u8 = undefined;
+                            const len = try std.unicode.utf8Encode(cp, &encoded);
+                            try out.appendSlice(vm.allocator, encoded[0..len]);
+                            i += 6;
+                            continue;
+                        }
+                    }
+                }
+                try out.appendSlice(vm.allocator, "\xEF\xBF\xBD");
+                i += 3;
+            } else {
+                try out.append(vm.allocator, input[i]);
+                i += 1;
+            }
+        }
+        return JsValue.initString(try vm.pool.intern(out.items));
+    }
+
     /// __suzume_url_parse(input, base?) → field object | null.
     /// Runs the WHATWG basic URL parser (full host parsing, IDNA,
     /// percent encoding) from src/url/parser.zig.
@@ -5860,7 +5924,62 @@ pub const KotoriRuntime = struct {
     const url_polyfill_js =
         \\(function(){
         \\  if(typeof globalThis==='undefined')return;
-        \\  function percentDecode(s){try{return decodeURIComponent(s);}catch(e){var out='';for(var i=0;i<s.length;i++){if(s.charAt(i)==='%'&&i+2<s.length){var h=s.substring(i+1,i+3);if(/^[0-9A-Fa-f]{2}$/.test(h)){out+=decodeURIComponent(s.substring(i,i+3));i+=2;continue;}}out+=s.charAt(i);}return out;}}
+        \\  // WHATWG URL §5.1 form-urlencoded decoder. Reused by _refillSP when
+        \\  // URL.search is set. (Full implementation lives in
+        \\  // url_search_params_polyfill_js; this local copy avoids cross-IIFE
+        \\  // ordering issues.)
+        \\  function formDecode(s){
+        \\    var n=s.length,bytes=[];
+        \\    var i=0;
+        \\    while(i<n){
+        \\      var c=s.charCodeAt(i);
+        \\      if(c===0x2B){bytes.push(0x20);i++;continue;}
+        \\      if(c===0x25&&i+2<n){
+        \\        var h1=s.charCodeAt(i+1),h2=s.charCodeAt(i+2);
+        \\        var d1=(h1>=0x30&&h1<=0x39)?h1-0x30:(h1>=0x41&&h1<=0x46)?h1-0x37:(h1>=0x61&&h1<=0x66)?h1-0x57:-1;
+        \\        var d2=(h2>=0x30&&h2<=0x39)?h2-0x30:(h2>=0x41&&h2<=0x46)?h2-0x37:(h2>=0x61&&h2<=0x66)?h2-0x57:-1;
+        \\        if(d1>=0&&d2>=0){bytes.push((d1<<4)|d2);i+=3;continue;}
+        \\      }
+        \\      var cp=c;
+        \\      if(c>=0xD800&&c<=0xDBFF&&i+1<n){
+        \\        var lo=s.charCodeAt(i+1);
+        \\        if(lo>=0xDC00&&lo<=0xDFFF){cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);i++;}
+        \\      }
+        \\      if(cp<0x80){bytes.push(cp);}
+        \\      else if(cp<0x800){bytes.push(0xC0|(cp>>6),0x80|(cp&0x3F));}
+        \\      else if(cp<0x10000){bytes.push(0xE0|(cp>>12),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      else{bytes.push(0xF0|(cp>>18),0x80|((cp>>12)&0x3F),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      i++;
+        \\    }
+        \\    var out='',p=0,L=bytes.length;
+        \\    while(p<L){
+        \\      var b0=bytes[p++];
+        \\      if(b0<0x80){out+=String.fromCharCode(b0);continue;}
+        \\      var seqlen=0,mask=0x80;
+        \\      while(mask&b0){seqlen++;mask>>=1;}
+        \\      seqlen-=1;
+        \\      if(seqlen<1||seqlen>3){out+='\uFFFD';continue;}
+        \\      if(p+seqlen>L){out+='\uFFFD';continue;}
+        \\      if(b0===0xED&&seqlen===2&&(bytes[p]>=0xA0&&bytes[p]<=0xBF)){
+        \\        out+=String.fromCharCode(0xD800+((bytes[p]-0xA0)<<6)|(bytes[p+1]&0x3F));
+        \\        p+=2;continue;
+        \\      }
+        \\      var ok=true,cp=b0&(0x7F>>seqlen);
+        \\      for(var k=0;k<seqlen;k++){
+        \\        var cb=bytes[p+k];
+        \\        if(cb<0x80||cb>0xBF){ok=false;break;}
+        \\        cp=(cp<<6)|(cb&0x3F);
+        \\      }
+        \\      if(!ok){out+='\uFFFD';continue;}
+        \\      var mincp=[0,0x80,0x800,0x10000][seqlen];
+        \\      if(cp<mincp){out+='\uFFFD';continue;}
+        \\      if(cp>=0xD800&&cp<=0xDFFF){out+='\uFFFD';continue;}
+        \\      p+=seqlen;
+        \\      if(cp<0x10000)out+=String.fromCharCode(cp);
+        \\      else out+=String.fromCharCode(0xD800+((cp-0x10000)>>10),0xDC00+((cp-0x10000)&0x3FF));
+        \\    }
+        \\    return out;
+        \\  }
         \\  // Native-backed parse: full WHATWG basic URL parser. Returns a
         \\  // stub for invalid input so location getters degrade gracefully.
         \\  function parseURL(url){
@@ -5895,7 +6014,7 @@ pub const KotoriRuntime = struct {
         \\        var n,val;
         \\        if(eq>=0){n=pairs[i].substring(0,eq);val=pairs[i].substring(eq+1);}
         \\        else{n=pairs[i];val='';}
-        \\        sp._e.push([percentDecode(n.replace(/\\+/g,' ')),percentDecode(val.replace(/\\+/g,' '))]);
+        \\        sp._e.push([formDecode(n),formDecode(val)]);
         \\      }
         \\    }
         \\  }
@@ -5925,7 +6044,10 @@ pub const KotoriRuntime = struct {
         \\  _def('searchParams',function(){
         \\    if(this._sp)return this._sp;
         \\    var self=this;
-        \\    var sp=new URLSearchParams(this._p.query||'');
+        \\    // Pass the full search (incl. leading '?') so URLSearchParams strips
+        \\    // exactly one '?'. For '??a=b' the query becomes '?a=b' which
+        \\    // percent-encodes the '?' to '%3F' on toString — matching browsers.
+        \\    var sp=new URLSearchParams(this._p.search||'');
         \\    sp._updateURL=function(){_set(self,'search',sp.toString());};
         \\    this._sp=sp;
         \\    return sp;
@@ -6075,23 +6197,22 @@ pub const KotoriRuntime = struct {
         \\})();
     ;
 
-    /// Fetch §4.1: resolve relative request URLs against the document
-    /// URL before calling the native fetch. The native layer (vm.zig
-    /// nativeFetch) hands its URL string verbatim to the HTTP client,
-    /// so a relative fetch("resources/data.json") would otherwise fail
-    /// with a network error. Resolution happens at call time because
-    /// setDocumentUrl stamps document.URL after runtime init.
+    /// Fetch §4.1: validate and resolve request URLs against the API base
+    /// URL before handing them to the transport. Conversion/parse failures
+    /// reject the promise; they must not reach the HTTP client.
     const fetch_resolve_polyfill_js =
         \\(function(){
-        \\  if(typeof fetch!=='function'||typeof URL!=='function')return;
+        \\  if(typeof fetch!=='function')return;
         \\  var _nativeFetch=fetch;
         \\  globalThis.fetch=function(input,init){
-        \\    var u=(input&&typeof input==='object'&&input.url!==undefined)?String(input.url):String(input);
         \\    try{
-        \\      var base=(typeof document!=='undefined'&&document.URL)?String(document.URL):'';
-        \\      u=base?new URL(u,base).href:new URL(u).href;
-        \\    }catch(e){}
-        \\    return _nativeFetch(u,init);
+        \\      if(arguments.length===0)throw new TypeError('fetch requires a URL');
+        \\      var u=(input&&typeof input==='object'&&input.url!==undefined)?String(input.url):String(input);
+        \\      var base=(typeof document!=='undefined')?document.baseURI:undefined;
+        \\      var parsed=__suzume_url_parse(u,base);
+        \\      if(!parsed)throw new TypeError('Invalid request URL');
+        \\    }catch(e){return Promise.reject(e);}
+        \\    return _nativeFetch(parsed.href,init);
         \\  };
         \\})();
     ;
@@ -6116,7 +6237,12 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  XHR.UNSENT=0;XHR.OPENED=1;XHR.HEADERS_RECEIVED=2;XHR.LOADING=3;XHR.DONE=4;
         \\  XHR.prototype.open=function(method,url,async_){
-        \\    this._method=method;this._url=url;this._async=async_!==false;
+        \\    if(arguments.length<2)throw new TypeError('XMLHttpRequest.open requires method and URL');
+        \\    method=String(method);url=String(url);
+        \\    var base=(typeof document!=='undefined')?document.baseURI:undefined;
+        \\    var parsed=__suzume_url_parse(url,base);
+        \\    if(!parsed)throw new DOMException('Invalid request URL','SyntaxError');
+        \\    this._method=method;this._url=parsed.href;this._async=async_!==false;
         \\    this.readyState=1;this._fireReadyState();
         \\  };
         \\  XHR.prototype.setRequestHeader=function(name,value){this._headers[name]=value;};
@@ -6301,6 +6427,10 @@ pub const KotoriRuntime = struct {
         \\  if(typeof requestAnimationFrame==='undefined'){
         \\    globalThis.requestAnimationFrame=function(cb){return setTimeout(function(){cb(Date.now());},16);};
         \\    globalThis.cancelAnimationFrame=function(id){clearTimeout(id);};
+        \\  }
+        \\  if(typeof requestIdleCallback==='undefined'){
+        \\    globalThis.requestIdleCallback=function(cb){var id=setTimeout(function(){cb({timeRemaining:function(){return 50;},didTimeout:false});},1);return id;};
+        \\    globalThis.cancelIdleCallback=function(id){clearTimeout(id);};
         \\  }
         \\  if(typeof Promise==='undefined'||typeof Promise.allSettled==='undefined'){
         \\    if(typeof Promise!=='undefined'){
@@ -7175,6 +7305,18 @@ pub const KotoriRuntime = struct {
         \\  try{if(typeof HTMLFrameSetElement!=='undefined')protos.push(HTMLFrameSetElement.prototype);}catch(e){}
         \\  function makeGetter(name){
         \\    return function(){
+        \\      // HTML §8.1.5.1: if the content attribute is set, compile it
+        \\      // to a function via new Function(body) and return it.
+        \\      // Also forward to window (HTML §8.1.5.4 body/frameset forward).
+        \\      if(this && typeof this.getAttribute==='function' && this.hasAttribute(name)){
+        \\        var body=this.getAttribute(name);
+        \\        try{
+        \\          var fn=new Function(body);
+        \\          globalThis[name]=fn;
+        \\          return fn;
+        \\        }catch(e){ return null; }
+        \\      }
+        \\      // Otherwise return the window-level IDL attribute.
         \\      var v=globalThis[name];
         \\      return (typeof v==='function')?v:null;
         \\    };
@@ -7375,14 +7517,92 @@ pub const KotoriRuntime = struct {
         \\(function(){
         \\  "use strict";
         \\  if(typeof URLSearchParams!=='undefined'&&URLSearchParams.prototype&&URLSearchParams.prototype.sort)return;
-        \\  function percentDecode(s){try{return decodeURIComponent(s);}catch(e){var out='';for(var i=0;i<s.length;i++){if(s.charAt(i)==='%'&&i+2<s.length){var h=s.substring(i+1,i+3);if(/^[0-9A-Fa-f]{2}$/.test(h)){out+=decodeURIComponent(s.substring(i,i+3));i+=2;continue;}}out+=s.charAt(i);}return out;}}
+        \\  // WHATWG URL §5.1 application/x-www-form-urlencoded decoder.
+        \\  // Step 1: turn input string into a byte sequence:
+        \\  //   '+' -> 0x20; '%XX' (both hex) -> byte 0xXX; otherwise UTF-8
+        \\  //   encode the current code unit (lone surrogates → WTF-8 bytes).
+        \\  // Step 2: decode the byte sequence as UTF-8 with replacement:
+        \\  //   - well-formed multi-byte → code point
+        \\  //   - invalid/lone continuation/overlong/truncated → one U+FFFD per
+        \\  //     error (encoder-error-replacement mode)
+        \\  //   - WTF-8 lone surrogates (0xED 0xA0..0xBF 0x80..0xBF) preserved
+        \\  //     as lone surrogate code units (so `\uD800` round-trips).
+        \\  function formDecode(s){
+        \\    var n=s.length,bytes=[];
+        \\    var i=0;
+        \\    while(i<n){
+        \\      var c=s.charCodeAt(i);
+        \\      if(c===0x2B){bytes.push(0x20);i++;continue;}
+        \\      if(c===0x25&&i+2<n){
+        \\        var h1=s.charCodeAt(i+1),h2=s.charCodeAt(i+2);
+        \\        var d1=(h1>=0x30&&h1<=0x39)?h1-0x30:(h1>=0x41&&h1<=0x46)?h1-0x37:(h1>=0x61&&h1<=0x66)?h1-0x57:-1;
+        \\        var d2=(h2>=0x30&&h2<=0x39)?h2-0x30:(h2>=0x41&&h2<=0x46)?h2-0x37:(h2>=0x61&&h2<=0x66)?h2-0x57:-1;
+        \\        if(d1>=0&&d2>=0){bytes.push((d1<<4)|d2);i+=3;continue;}
+        \\      }
+        \\      // UTF-8 encode the code unit (handles BMP + surrogate pairs).
+        \\      // Lone surrogates use WTF-8 (3-byte form matching UTF-8 of the
+        \\      // surrogate code unit itself), so they round-trip below.
+        \\      var cp=c;
+        \\      if(c>=0xD800&&c<=0xDBFF&&i+1<n){
+        \\        var lo=s.charCodeAt(i+1);
+        \\        if(lo>=0xDC00&&lo<=0xDFFF){cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);i++;}
+        \\      }
+        \\      if(cp<0x80){bytes.push(cp);}
+        \\      else if(cp<0x800){bytes.push(0xC0|(cp>>6),0x80|(cp&0x3F));}
+        \\      else if(cp<0x10000){bytes.push(0xE0|(cp>>12),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      else{bytes.push(0xF0|(cp>>18),0x80|((cp>>12)&0x3F),0x80|((cp>>6)&0x3F),0x80|(cp&0x3F));}
+        \\      i++;
+        \\    }
+        \\    // Decode bytes as UTF-8 with replacement + WTF-8 lone surrogates.
+        \\    var out='',p=0,L=bytes.length;
+        \\    while(p<L){
+        \\      var b0=bytes[p++];
+        \\      if(b0<0x80){out+=String.fromCharCode(b0);continue;}
+        \\      // Count leading 1-bits to get sequence length (1 = 0xC0..0xDF, etc.)
+        \\      var seqlen=0,mask=0x80;
+        \\      while(mask&b0){seqlen++;mask>>=1;}
+        \\      seqlen-=1; // leading 1-bit count minus the first byte
+        \\      if(seqlen<1||seqlen>3){out+='\uFFFD';continue;}
+        \\      // Need seqlen continuation bytes, each in 0x80..0xBF
+        \\      if(p+seqlen>L){out+='\uFFFD';continue;}
+        \\      // WTF-8 lone surrogate: 0xED 0xA0..0xBF 0x80..0xBF
+        \\      if(b0===0xED&&seqlen===2&&(bytes[p]>=0xA0&&bytes[p]<=0xBF)){
+        \\        // Emit the lone high surrogate code unit directly.
+        \\        out+=String.fromCharCode(0xD800+((bytes[p]-0xA0)<<6)|(bytes[p+1]&0x3F));
+        \\        p+=2;continue;
+        \\      }
+        \\      // Validate continuation bytes
+        \\      var ok=true,cp=b0&(0x7F>>seqlen);
+        \\      for(var k=0;k<seqlen;k++){
+        \\        var cb=bytes[p+k];
+        \\        if(cb<0x80||cb>0xBF){ok=false;break;}
+        \\        cp=(cp<<6)|(cb&0x3F);
+        \\      }
+        \\      if(!ok){out+='\uFFFD';continue;}
+        \\      // Reject overlong encodings
+        \\      var mincp=[0,0x80,0x800,0x10000][seqlen];
+        \\      if(cp<mincp){out+='\uFFFD';continue;}
+        \\      // Reject surrogates (U+D800..U+DFFF) — handled via WTF-8 above
+        \\      if(cp>=0xD800&&cp<=0xDFFF){out+='\uFFFD';continue;}
+        \\      p+=seqlen;
+        \\      if(cp<0x10000)out+=String.fromCharCode(cp);
+        \\      else out+=String.fromCharCode(0xD800+((cp-0x10000)>>10),0xDC00+((cp-0x10000)&0x3FF));
+        \\    }
+        \\    return out;
+        \\  }
         \\  function cuAt(s,pos){var cp=s.charCodeAt(pos);return cp>=0x10000?0xD800+((cp-0x10000)>>10):pos<s.length?cp:-1;}
         \\  function cuLen(s){var l=0;for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);l+=c>=0x10000?2:1;}return l;}
+        \\  function usvString(value){
+        \\    if(typeof value==='symbol')throw new TypeError('Cannot convert a Symbol to USVString');
+        \\    return __suzume_usv_string(String(value));
+        \\  }
         \\  function URLSearchParams(init){
         \\    this._e=[];
         \\    if(init===undefined||init===null)return;
+        \\    if(typeof init==='symbol')throw new TypeError('Cannot convert a Symbol to USVString');
         \\    if(typeof init==='string'){
-        \\      var s=init.charAt(0)==='?'?init.substring(1):init;
+        \\      var s=usvString(init);
+        \\      if(s.charAt(0)==='?')s=s.substring(1);
         \\      if(s){
         \\        var pairs=s.split('&');
         \\        for(var i=0;i<pairs.length;i++){
@@ -7391,38 +7611,92 @@ pub const KotoriRuntime = struct {
         \\          var n,v;
         \\          if(eq>=0){n=pairs[i].substring(0,eq);v=pairs[i].substring(eq+1);}
         \\          else{n=pairs[i];v='';}
-        \\          var replP=function(t){return t.split('+').join(' ');};
-        \\          this._e.push([percentDecode(replP(n)),percentDecode(replP(v))]);
+        \\          this._e.push([formDecode(n),formDecode(v)]);
         \\        }
         \\      }
-        \\    }else if(Array.isArray(init)){for(var i=0;i<init.length;i++)this._e.push([String(init[i][0]),String(init[i][1])]);}
-        \\    else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([String(init._entries[i][0]),String(init._entries[i][1])]);}
+        \\    }else if(Array.isArray(init)){
+        \\      for(var i=0;i<init.length;i++){
+        \\        var p=init[i];
+        \\        if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');
+        \\        this._e.push([usvString(p[0]),usvString(p[1])]);
+        \\      }
+        \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&typeof init[Symbol.iterator]==='function'){
+        \\      // A custom iterator takes precedence over the built-in entries().
+        \\      var it=init[Symbol.iterator](),r;
+        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length!==2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([usvString(p[0]),usvString(p[1])]);}
+        \\    }else if(init&&init._entries&&typeof init._entries.length==='number'){for(var i=0;i<init._entries.length;i++)this._e.push([usvString(init._entries[i][0]),usvString(init._entries[i][1])]);}
         \\    else if(init&&typeof init.entries==='function'){
         \\      var it=init.entries();
         \\      var r=it.next?it.next():null;
-        \\      while(r&&!r.done){var p=r.value;this._e.push([String(p[0]),String(p[1])]);r=it.next?it.next():null;}
-        \\    }else if(typeof Symbol!=='undefined'&&Symbol.iterator&&init[Symbol.iterator]){
-        \\      var it=init[Symbol.iterator](),r;
-        \\      while(!(r=it.next()).done){var p=r.value;if(!p||typeof p.length!=='number'||p.length<2)throw new TypeError('URLSearchParams: expected a sequence of name-value pairs');this._e.push([String(p[0]),String(p[1])]);}
+        \\      while(r&&!r.done){var p=r.value;this._e.push([usvString(p[0]),usvString(p[1])]);r=it.next?it.next():null;}
         \\    }else if(typeof init==='object'||typeof init==='function'){
-        \\      var keys=Object.keys(init);
-        \\      for(var i=0;i<keys.length;i++)this._e.push([String(keys[i]),String(init[keys[i]])]);
+        \\      var keys=Object.keys(init),seen=new Map();
+        \\      // WebIDL records overwrite colliding converted keys, preserving
+        \\      // first insertion order. Sequences retain duplicate names.
+        \\      for(var i=0;i<keys.length;i++){
+        \\        var n=usvString(keys[i]),v=usvString(init[keys[i]]);
+        \\        if(seen.has(n))this._e[seen.get(n)][1]=v;
+        \\        else{seen.set(n,this._e.length);this._e.push([n,v]);}
+        \\      }
         \\    }
         \\  }
-        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return encodeURIComponent(p[0]).replace(/%20/g,'+').replace(/%2A/g,'*')+'='+encodeURIComponent(p[1]).replace(/%20/g,'+').replace(/%2A/g,'*');}).join('&');};
+        \\  function formEncode(s){
+        \\    var out='';
+        \\    for(var i=0;i<s.length;i++){
+        \\      var c=s.charCodeAt(i);
+        \\      if(c>=0xD800&&c<=0xDBFF){
+        \\        // A surrogate pair is encoded as one scalar value.
+        \\        if(i+1<s.length){
+        \\          var lo=s.charCodeAt(i+1);
+        \\          if(lo>=0xDC00&&lo<=0xDFFF){
+        \\            i++;
+        \\            var cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);
+        \\            out+='%'+(0xF0|((cp>>18)&0x07)).toString(16).toUpperCase();
+        \\            out+='%'+(0x80|((cp>>12)&0x3F)).toString(16).toUpperCase();
+        \\            out+='%'+(0x80|((cp>>6)&0x3F)).toString(16).toUpperCase();
+        \\            out+='%'+(0x80|(cp&0x3F)).toString(16).toUpperCase();
+        \\            continue;
+        \\          }
+        \\        }
+        \\        out+='%EF%BF%BD';
+        \\      }else if(c>=0xDC00&&c<=0xDFFF){
+        \\        out+='%EF%BF%BD';
+        \\      }else if(c>=0x80){
+        \\        // Non-ASCII BMP — encode as 2 or 3-byte UTF-8 percent-encoded
+        \\        if(c>=0x800){
+        \\          out+='%'+(0xE0|((c>>12)&0x0F)).toString(16).toUpperCase();
+        \\          out+='%'+(0x80|((c>>6)&0x3F)).toString(16).toUpperCase();
+        \\          out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\        }else{
+        \\          out+='%'+(0xC0|((c>>6)&0x1F)).toString(16).toUpperCase();
+        \\          out+='%'+(0x80|(c&0x3F)).toString(16).toUpperCase();
+        \\        }
+        \\      }else if(c===0x20){
+        \\        out+='+';
+        \\      }else if(c===0x2A||c===0x2D||c===0x2E||(c>=0x30&&c<=0x39)||(c>=0x41&&c<=0x5A)||c===0x5F||(c>=0x61&&c<=0x7A)){
+        \\        // form_urlencoded safe set: * - . 0-9 A-Z _ a-z
+        \\        out+=s.charAt(i);
+        \\      }else{
+        \\        // Everything else (including ! ~ ' ( ) etc.) must be percent-encoded
+        \\        out+='%'+(c>>4).toString(16).toUpperCase()+(c&0x0F).toString(16).toUpperCase();
+        \\      }
+        \\    }
+        \\    return out;
+        \\  }
+        \\  URLSearchParams.prototype.toString=function(){return this._e.map(function(p){return formEncode(p[0])+'='+formEncode(p[1]);}).join('&');};
         \\  URLSearchParams.prototype.valueOf=function(){return this.toString();};
-        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([String(n),String(v)]);if(this._updateURL)this._updateURL();};
+        \\  URLSearchParams.prototype.append=function(n,v){this._e.push([usvString(n),usvString(v)]);if(this._updateURL)this._updateURL();};
         \\  URLSearchParams.prototype["delete"]=function(n,v){
-        \\    n=String(n);var hasVal=v!==undefined;var nv=hasVal?String(v):null;var e=this._e;
+        \\    n=usvString(n);var hasVal=v!==undefined;var nv=hasVal?usvString(v):null;var e=this._e;
         \\    var newE=[];for(var i=0;i<e.length;i++){if(!(e[i][0]===n&&(!hasVal||e[i][1]===nv)))newE.push(e[i]);}
         \\    this._e=newE;
         \\    if(this._updateURL)this._updateURL();
         \\  };
-        \\  URLSearchParams.prototype.get=function(n){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
-        \\  URLSearchParams.prototype.getAll=function(n){n=String(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
-        \\  URLSearchParams.prototype.has=function(n,v){n=String(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(v===undefined||this._e[i][1]===String(v)))return true;return false;};
+        \\  URLSearchParams.prototype.get=function(n){n=usvString(n);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)return this._e[i][1];return null;};
+        \\  URLSearchParams.prototype.getAll=function(n){n=usvString(n);var r=[];for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n)r.push(this._e[i][1]);return r;};
+        \\  URLSearchParams.prototype.has=function(n,v){n=usvString(n);if(v!==undefined)v=usvString(v);for(var i=0;i<this._e.length;i++)if(this._e[i][0]===n&&(v===undefined||this._e[i][1]===v))return true;return false;};
         \\  URLSearchParams.prototype.set=function(n,v){
-        \\    n=String(n);v=String(v);var found=false,e=this._e;
+        \\    n=usvString(n);v=usvString(v);var found=false,e=this._e;
         \\    for(var i=0;i<e.length;i++){
         \\      if(e[i][0]===n){
         \\        if(!found){e[i][1]=v;found=true;}
@@ -8569,6 +8843,48 @@ pub const KotoriRuntime = struct {
         if (self.pool.intern("href")) |k| {
             loc_obj.setProperty(self.allocator, k, JsValue.initString(url_sid)) catch {};
         } else |_| {}
+    }
+
+    /// Wave 208c: Inject actual viewport dimensions into the kotori VM so the
+    /// `screen` polyfill and `innerWidth`/`innerHeight`/`outerWidth`/`outerHeight`
+    /// return real values instead of hardcoded 1280×800. Called from main.zig
+    /// after window resize or initial layout, mirroring web_api.setViewportSize.
+    pub fn setViewportSize(self: *KotoriRuntime, content_w: u32, content_h: u32) void {
+        const chrome_h: u32 = 36 + 28 + 24; // url_bar + tab_bar + status_bar
+        const outer_w: u32 = content_w;
+        const outer_h: u32 = content_h + chrome_h;
+
+        // Update the `screen` object if it exists (created by the polyfill).
+        const screen_sid = self.pool.intern("screen") catch return;
+        const screen_val = self.vm.globals.get(screen_sid) orelse return;
+        if (!screen_val.isObject()) return;
+        const screen_obj = screen_val.asJsObject();
+
+        const w_sid = self.pool.intern("width") catch return;
+        const h_sid = self.pool.intern("height") catch return;
+        const aw_sid = self.pool.intern("availWidth") catch return;
+        const ah_sid = self.pool.intern("availHeight") catch return;
+
+        screen_obj.setProperty(self.allocator, w_sid, JsValue.initNumber(@floatFromInt(outer_w))) catch {};
+        screen_obj.setProperty(self.allocator, h_sid, JsValue.initNumber(@floatFromInt(outer_h))) catch {};
+        screen_obj.setProperty(self.allocator, aw_sid, JsValue.initNumber(@floatFromInt(content_w))) catch {};
+        screen_obj.setProperty(self.allocator, ah_sid, JsValue.initNumber(@floatFromInt(content_h))) catch {};
+
+        // Also set innerWidth/innerHeight/outerWidth/outerHeight on window.
+        const window_sid = self.pool.intern("window") catch return;
+        const window_val = self.vm.globals.get(window_sid) orelse return;
+        if (!window_val.isObject()) return;
+        const window_obj = window_val.asJsObject();
+
+        const iw_sid = self.pool.intern("innerWidth") catch return;
+        const ih_sid = self.pool.intern("innerHeight") catch return;
+        const ow_sid = self.pool.intern("outerWidth") catch return;
+        const oh_sid = self.pool.intern("outerHeight") catch return;
+
+        window_obj.setProperty(self.allocator, iw_sid, JsValue.initNumber(@floatFromInt(content_w))) catch {};
+        window_obj.setProperty(self.allocator, ih_sid, JsValue.initNumber(@floatFromInt(content_h))) catch {};
+        window_obj.setProperty(self.allocator, ow_sid, JsValue.initNumber(@floatFromInt(outer_w))) catch {};
+        window_obj.setProperty(self.allocator, oh_sid, JsValue.initNumber(@floatFromInt(outer_h))) catch {};
     }
 
     /// Evaluate a JS source string. Returns the result or error message.

@@ -3419,6 +3419,193 @@ test "CSSStyleDeclaration.item index converts with ToUint32" {
     try std.testing.expect(result.isBool() and result.asBool());
 }
 
+fn echoRequestUrl(_: *anyopaque, allocator: std.mem.Allocator, url: []const u8, _: []const u8, _: ?[]const u8) ?VM.HttpFetchResult {
+    return .{ .status = 200, .body = allocator.dupe(u8, url) catch return null, .content_type = "" };
+}
+
+fn expectRequestResult(source: []const u8) !void {
+    kotori.io.io = std.testing.io;
+    defer kotori.io.io = null;
+    const html = "<html><head><base href=\"https://assets.example/static/pages/\"></head><body></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+    rt.setDocumentUrl("https://page.example/index.html");
+    rt.setHttpFetcher(doc, &echoRequestUrl);
+    try std.testing.expect(rt.eval(source).isOk());
+    _ = rt.runMicrotasks();
+    const result = rt.eval("requestResult");
+    try std.testing.expect(result.isOk());
+    try std.testing.expectEqualStrings("ok", result.ok orelse "undefined");
+}
+
+test "KotoriRuntime URLSearchParams respects DOMException prototype branding" {
+    try expectRequestResult(
+        \\var threw = false;
+        \\try { new URLSearchParams(DOMException.prototype); }
+        \\catch (e) { threw = e instanceof TypeError; }
+        \\var requestResult = threw && new URLSearchParams(DOMException).size === 25 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime DOMException getters reject unbranded receivers" {
+    try expectRequestResult(
+        \\var exception = new DOMException('test', 'SyntaxError');
+        \\var properties = ['name', 'message', 'code'], rejected = 0, valid = true;
+        \\for (var i = 0; i < properties.length; i++) {
+        \\  var getter = Object.getOwnPropertyDescriptor(DOMException.prototype, properties[i]).get;
+        \\  var receivers = [DOMException.prototype, {}, Object.create(exception), {name:'SyntaxError',message:'test',code:12}];
+        \\  for (var j = 0; j < receivers.length; j++) {
+        \\    try { getter.call(receivers[j]); } catch (e) { if (e instanceof TypeError) rejected++; }
+        \\  }
+        \\  valid = valid && getter.call(exception) === exception[properties[i]];
+        \\}
+        \\exception.name = 'changed'; exception.message = 'changed'; exception.code = 0;
+        \\var requestResult = valid && rejected === 12 && exception.name === 'SyntaxError' &&
+        \\  exception.message === 'test' && exception.code === 12 && String(exception) === 'SyntaxError: test' &&
+        \\  exception instanceof DOMException && exception instanceof Error && Object.keys(exception).length === 0 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime DOMException converts constructor arguments" {
+    try expectRequestResult(
+        \\var exception = new DOMException(123, {toString:function(){return 'AbortError';}});
+        \\var defaults = new DOMException(undefined, undefined);
+        \\var requestResult = exception.name === 'AbortError' && exception.message === '123' &&
+        \\  exception.code === 20 && defaults.name === 'Error' && defaults.message === '' ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams record keys collide after USVString conversion" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams({'\uD835x': '1', xx: '2', '\uD83Dx': '3'});
+        \\var entries = Array.from(params);
+        \\var requestResult = params.size === 2 && entries[0][0] === '\uFFFDx' &&
+        \\  entries[0][1] === '3' && entries[1][0] === 'xx' &&
+        \\  params.toString() === '%EF%BF%BDx=3&xx=2' ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams sequences normalize without deduplicating" {
+    try expectRequestResult(
+        \\var hi = String.fromCharCode(0xD83D), lo = String.fromCharCode(0xDCA9);
+        \\var params = new URLSearchParams([['\uD800', '\uDC00'], ['\uDC00', 'two'], [hi + lo, '日本語']]);
+        \\var values = params.getAll('\uFFFD');
+        \\var requestResult = params.size === 3 && values.length === 2 &&
+        \\  values[0] === '\uFFFD' && values[1] === 'two' &&
+        \\  params.get('\uD83D\uDCA9') === '日本語' &&
+        \\  hi.charCodeAt(0) === 0xD83D && lo.charCodeAt(0) === 0xDCA9 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams methods convert names and values to USVString" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams();
+        \\params.append('\uD800', '\uDC00');
+        \\var valid = params.get('\uD900') === '\uFFFD' && params.has('\uDC00', '\uD800');
+        \\params.append('\uDC00', 'other');
+        \\params.set('\uD800', '\uD800');
+        \\valid = valid && params.size === 1 && params.getAll('\uDC00')[0] === '\uFFFD';
+        \\params.delete('\uDC00', '\uDC00');
+        \\var requestResult = valid && params.size === 0 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams string input replaces lone surrogates" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams('a=\uD800&\uDC00=x&emoji=\uD83D\uDCA9');
+        \\var requestResult = params.get('a') === '\uFFFD' && params.get('\uFFFD') === 'x' &&
+        \\  params.get('emoji') === '\uD83D\uDCA9' &&
+        \\  params.toString() === 'a=%EF%BF%BD&%EF%BF%BD=x&emoji=%F0%9F%92%A9' ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime URLSearchParams rejects symbols during USVString conversion" {
+    try expectRequestResult(
+        \\var params = new URLSearchParams(), threw = 0, symbol = Symbol('test');
+        \\try { params.append(symbol, 'value'); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\try { params.get(symbol); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\try { new URLSearchParams({key: symbol}); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\try { new URLSearchParams([[symbol, 'value']]); } catch (e) { if (e instanceof TypeError) threw++; }
+        \\var requestResult = threw === 4 && params.size === 0 ? 'ok' : 'bad';
+    );
+}
+
+test "KotoriRuntime XHR rejects invalid URLs before changing state" {
+    try expectRequestResult(
+        \\var inputs = ['http://[::1', 'https://ex ample.org/', 'file://example:1/', 'http://host:65536/'];
+        \\var requestResult = 'ok';
+        \\for (var i = 0; i < inputs.length; i++) {
+        \\  var xhr = new XMLHttpRequest(), events = 0, threw = false;
+        \\  xhr.onreadystatechange = function() { events++; };
+        \\  try { xhr.open('GET', inputs[i]); }
+        \\  catch (e) { threw = e instanceof DOMException && e.name === 'SyntaxError' && e.code === 12; }
+        \\  if (!threw || xhr.readyState !== 0 || events !== 0) requestResult = 'bad';
+        \\}
+    );
+}
+
+test "KotoriRuntime invalid XHR reopen preserves an opened request" {
+    try expectRequestResult(
+        \\var xhr = new XMLHttpRequest(), events = 0;
+        \\xhr.onreadystatechange = function() { events++; };
+        \\xhr.open('GET', 'https://valid.example/data');
+        \\var threw = false;
+        \\try { xhr.open('POST', 'http://[bad'); } catch (e) { threw = e.name === 'SyntaxError'; }
+        \\var requestResult = threw && xhr.readyState === 1 && events === 1 ? 'pending' : 'bad';
+        \\xhr.onload = function() {
+        \\  requestResult = requestResult === 'pending' && xhr.responseText === 'https://valid.example/data' ? 'ok' : 'bad';
+        \\};
+        \\xhr.send();
+    );
+}
+
+test "KotoriRuntime XHR resolves against baseURI at open time" {
+    try expectRequestResult(
+        \\var xhr = new XMLHttpRequest(), requestResult = 'pending';
+        \\xhr.open('GET', '../data a.json?x=1');
+        \\document.querySelector('base').setAttribute('href', 'https://changed.example/');
+        \\xhr.onload = function() {
+        \\  var expected = 'https://assets.example/static/data%20a.json?x=1';
+        \\  requestResult = xhr.responseText === expected && xhr.responseURL === expected ? 'ok' : 'bad';
+        \\};
+        \\xhr.send();
+    );
+}
+
+test "KotoriRuntime fetch rejects invalid URLs without calling transport" {
+    try expectRequestResult(
+        \\var requestResult = 'pending';
+        \\fetch('http://[bad').then(function() { requestResult = 'bad'; }, function(e) {
+        \\  requestResult = e instanceof TypeError ? 'ok' : 'bad';
+        \\});
+    );
+}
+
+test "KotoriRuntime fetch rejects URL conversion exceptions asynchronously" {
+    try expectRequestResult(
+        \\var marker = {}, requestResult = 'pending';
+        \\var input = { toString: function() { throw marker; } };
+        \\try {
+        \\  fetch(input).then(function() { requestResult = 'bad'; }, function(e) {
+        \\    requestResult = e === marker ? 'ok' : 'bad';
+        \\  });
+        \\} catch (e) { requestResult = 'bad'; }
+    );
+}
+
+test "KotoriRuntime fetch uses baseURI and the native URL parser" {
+    try expectRequestResult(
+        \\globalThis.URL = function() { throw new Error('page replaced URL'); };
+        \\var requestResult = 'pending';
+        \\fetch('../data a.json?x=1').then(function(response) {
+        \\  requestResult = response.url === 'https://assets.example/static/data%20a.json?x=1' ? 'ok' : 'bad';
+        \\}, function() { requestResult = 'bad'; });
+    );
+}
+
 test "KotoriRuntime CSSOM item index converts with ToUint32" {
     kotori.io.io = std.testing.io;
     const html = "<html><body></body></html>";

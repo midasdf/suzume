@@ -2,7 +2,6 @@
 ///
 /// 19-state state machine that parses URL strings into URL records.
 /// Supports relative URL resolution via a base URL parameter.
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const host_mod = @import("host.zig");
@@ -178,8 +177,16 @@ const State = enum {
 
 /// Parse a URL string. Returns null on failure.
 pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?Url {
-    // Step 1: Preprocess input — strip leading/trailing C0+space, remove tabs/newlines
-    const input = preprocessInput(raw_input);
+    // Step 1: Preprocess input — strip leading/trailing C0+space, remove ALL
+    // tabs/newlines (WHATWG URL §4.1). Removing tabs/newlines upfront (rather
+    // than skipping them per-iteration) avoids backtracking bugs where
+    // `ptr -= buf.items.len` in .authority state doesn't account for skipped
+    // tab bytes between authority chars (e.g. "http://example\t." was parsed
+    // with host="example." instead of host="example" because the tab offset
+    // the backtracking pointer).
+    const pp = preprocessInput(allocator, raw_input) catch return null;
+    defer if (pp.owned) allocator.free(pp.data);
+    const input = pp.data;
 
     var url = Url{
         .scheme = try allocator.alloc(u8, 0),
@@ -256,7 +263,10 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
             },
 
             .no_scheme => {
-                if (base == null) { parse_failed = true; return null; }
+                if (base == null) {
+                    parse_failed = true;
+                    return null;
+                }
                 if (base.?.path == .opaque_path) {
                     if (c != null and c.? == '#') {
                         // Copy base, set fragment
@@ -264,7 +274,10 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                         url.fragment = try allocator.alloc(u8, 0);
                         state = .fragment;
                     } else {
-                        { parse_failed = true; return null; }
+                        {
+                            parse_failed = true;
+                            return null;
+                        }
                     }
                 } else if (std.mem.eql(u8, base.?.scheme, "file")) {
                     state = .file;
@@ -341,12 +354,24 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                         state = .path;
                         continue;
                     }
-                } else { parse_failed = true; return null; }
+                } else {
+                    parse_failed = true;
+                    return null;
+                }
             },
 
             .relative_slash => {
                 if (c != null and (c.? == '/' or (isSpecialScheme(url.scheme) and c.? == '\\'))) {
-                    state = .special_authority_ignore_slashes;
+                    if (isSpecialScheme(url.scheme)) {
+                        state = .special_authority_ignore_slashes;
+                    } else {
+                        // WHATWG URL §4.4 relative slash state: non-special
+                        // scheme with '/' goes to authority state (so `///`
+                        // against `sc://x/` re-parses authority with empty
+                        // host → `sc:///`). The next '/' is the authority
+                        // indicator, not a path separator.
+                        state = .authority;
+                    }
                 } else {
                     if (base) |b| {
                         url.host = if (b.host) |h| try cloneHost(allocator, h) else null;
@@ -399,7 +424,10 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                 } else if (c == null or c.? == '/' or c.? == '?' or c.? == '#' or
                     (isSpecialScheme(url.scheme) and c.? == '\\'))
                 {
-                    if (at_sign_seen and buf.items.len == 0) { parse_failed = true; return null; }
+                    if (at_sign_seen and buf.items.len == 0) {
+                        parse_failed = true;
+                        return null;
+                    }
                     // Buffer contains host (and maybe port)
                     ptr -= buf.items.len;
                     buf.clearRetainingCapacity();
@@ -412,16 +440,38 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
 
             .host_state => {
                 if (c != null and c.? == ':' and !inside_brackets) {
-                    if (isSpecialScheme(url.scheme) and buf.items.len == 0) { parse_failed = true; return null; }
-                    const h = try host_mod.parseHost(allocator, buf.items, !isSpecialScheme(url.scheme)) orelse { parse_failed = true; return null; };
+                    if (isSpecialScheme(url.scheme) and buf.items.len == 0) {
+                        parse_failed = true;
+                        return null;
+                    }
+                    // WHATWG URL §4.4 host state: non-special scheme with an
+                    // empty host followed by ':' is a failure (host-missing).
+                    // Tests: "sc://:/" → failure, "sc://:12/" → failure.
+                    // (file scheme is exempted — empty file host with port is
+                    // not tested; leave the existing special-scheme branch to
+                    // handle file's empty host.)
+                    if (!isSpecialScheme(url.scheme) and !std.mem.eql(u8, url.scheme, "file") and buf.items.len == 0) {
+                        parse_failed = true;
+                        return null;
+                    }
+                    const h = try host_mod.parseHost(allocator, buf.items, !isSpecialScheme(url.scheme)) orelse {
+                        parse_failed = true;
+                        return null;
+                    };
                     url.host = h;
                     buf.clearRetainingCapacity();
                     state = .port;
                 } else if (c == null or c.? == '/' or c.? == '?' or c.? == '#' or
                     (isSpecialScheme(url.scheme) and c.? == '\\'))
                 {
-                    if (isSpecialScheme(url.scheme) and buf.items.len == 0) { parse_failed = true; return null; }
-                    const h = try host_mod.parseHost(allocator, buf.items, !isSpecialScheme(url.scheme)) orelse { parse_failed = true; return null; };
+                    if (isSpecialScheme(url.scheme) and buf.items.len == 0) {
+                        parse_failed = true;
+                        return null;
+                    }
+                    const h = try host_mod.parseHost(allocator, buf.items, !isSpecialScheme(url.scheme)) orelse {
+                        parse_failed = true;
+                        return null;
+                    };
                     url.host = h;
                     buf.clearRetainingCapacity();
                     state = .path_start;
@@ -440,14 +490,20 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                     (isSpecialScheme(url.scheme) and c.? == '\\'))
                 {
                     if (buf.items.len > 0) {
-                        const port_num = std.fmt.parseInt(u16, buf.items, 10) catch { parse_failed = true; return null; };
+                        const port_num = std.fmt.parseInt(u16, buf.items, 10) catch {
+                            parse_failed = true;
+                            return null;
+                        };
                         url.port = if (getDefaultPort(url.scheme)) |dp| (if (port_num == dp) null else port_num) else port_num;
                     }
                     buf.clearRetainingCapacity();
                     state = .path_start;
                     continue;
                 } else {
-                    { parse_failed = true; return null; }
+                    {
+                        parse_failed = true;
+                        return null;
+                    }
                 }
             },
 
@@ -527,7 +583,10 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
                         buf.clearRetainingCapacity();
                         continue;
                     } else {
-                        const h = try host_mod.parseHost(allocator, buf.items, false) orelse { parse_failed = true; return null; };
+                        const h = try host_mod.parseHost(allocator, buf.items, false) orelse {
+                            parse_failed = true;
+                            return null;
+                        };
                         // Free the empty host set in .file
                         if (url.host) |old_h| host_mod.freeHost(allocator, old_h);
                         // URL §4.3 file host state: "localhost" maps to the
@@ -946,7 +1005,13 @@ fn flushPathSegment(allocator: Allocator, url: *Url, seg: []const u8, at_seg_del
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-fn preprocessInput(input: []const u8) []const u8 {
+/// Result of preprocessing: the cleaned input and whether we own it.
+const PreprocessedInput = struct {
+    data: []const u8,
+    owned: bool,
+};
+
+fn preprocessInput(allocator: Allocator, input: []const u8) !PreprocessedInput {
     var start: usize = 0;
     var end: usize = input.len;
 
@@ -955,7 +1020,26 @@ fn preprocessInput(input: []const u8) []const u8 {
     // Strip trailing C0 control + space
     while (end > start and (input[end - 1] <= 0x20)) : (end -= 1) {}
 
-    return input[start..end];
+    const trimmed = input[start..end];
+
+    // Fast path: no tabs/newlines/CR in the trimmed input → return slice directly.
+    var has_tab_nl = false;
+    for (trimmed) |b| {
+        if (b == 0x09 or b == 0x0A or b == 0x0D) {
+            has_tab_nl = true;
+            break;
+        }
+    }
+    if (!has_tab_nl) return .{ .data = trimmed, .owned = false };
+
+    // Slow path: allocate a copy with all tabs/newlines/CR removed (WHATWG §4.1).
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (trimmed) |b| {
+        if (b == 0x09 or b == 0x0A or b == 0x0D) continue;
+        try out.append(allocator, b);
+    }
+    return .{ .data = try out.toOwnedSlice(allocator), .owned = true };
 }
 
 fn isDoubleDot(seg: []const u8) bool {

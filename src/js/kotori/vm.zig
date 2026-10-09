@@ -50,10 +50,15 @@ pub const VM = struct {
     global_this_val: JsValue = JsValue.undefined_val,
     // Heap tracking for cleanup
     objects: std.ArrayListUnmanaged(*JsObject) = .empty,
+    /// Owned bytecodes created by compileFunctionBody (kept alive for the
+    /// VM's lifetime since function objects reference them).
+    owned_bytecodes: std.ArrayListUnmanaged(Bytecode) = .empty,
     upvalue_cells: std.ArrayListUnmanaged(*UpvalueCell) = .empty,
     // Only the still-open cells — closed cells stay in upvalue_cells (ownership)
     // but must not be scanned on every capture/close.
-    open_upvalues: std.ArrayListUnmanaged(*UpvalueCell) = .empty,
+    // Wave 206a: keyed by stack_index for O(1) getOrCreateUpvalue / closeUpvalueAt.
+    // closeUpvaluesAbove iterates all entries (only on frame exit, not per-capture).
+    open_upvalues: std.AutoArrayHashMapUnmanaged(u32, *UpvalueCell) = .{},
     closure_entries: std.AutoHashMapUnmanaged(*JsObject, []?*UpvalueCell) = .empty,
     // Built-in prototypes
     array_proto: ?*JsObject = null,
@@ -63,6 +68,16 @@ pub const VM = struct {
     typed_array_proto: ?*JsObject = null,
     function_proto: ?*JsObject = null,
     element_proto: ?*JsObject = null,
+
+    // Well-known property names interned once at initBuiltins so the
+    // get_prop/get_elem/set_prop hot paths can compare StringId (u32) instead
+    // of doing pool.get + std.mem.eql on every property access. See Wave 204.
+    sid_length: StringId = 0,
+    sid_size: StringId = 0,
+    sid_byteLength: StringId = 0,
+    sid_buffer: StringId = 0,
+    sid_proto: StringId = 0,
+
     // DOM property interception (set by kotori_dom.zig)
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
     dom_set_prop: ?*const fn (*VM, *JsObject, StringId, JsValue) bool = null,
@@ -619,11 +634,11 @@ pub const VM = struct {
                         }
                         // Array special: "length" and numeric index strings are virtual properties
                         if (obj.obj_type == .array) {
-                            const name_str = self.pool.get(lhs.asStringId()) orelse "";
-                            if (std.mem.eql(u8, name_str, "length")) {
+                            if (lhs.asStringId() == self.sid_length) {
                                 self.push(JsValue.initBool(true));
                                 continue;
                             }
+                            const name_str = self.pool.get(lhs.asStringId()) orelse "";
                             // Check numeric index (e.g. "0", "1", ...)
                             if (std.fmt.parseInt(usize, name_str, 10)) |idx| {
                                 self.push(JsValue.initBool(idx < obj.data.array.items.len));
@@ -636,19 +651,16 @@ pub const VM = struct {
                         // access (L1171-1180, L1451-1461) and must therefore
                         // also report HasProperty==true per §10.1.9.
                         if (obj.obj_type == .typed_array or obj.obj_type == .array_buffer) {
-                            const name_str = self.pool.get(lhs.asStringId()) orelse "";
-                            if (std.mem.eql(u8, name_str, "length")) {
-                                self.push(JsValue.initBool(true));
-                                continue;
-                            }
-                            if (std.mem.eql(u8, name_str, "byteLength")) {
+                            const sid = lhs.asStringId();
+                            if (sid == self.sid_length or sid == self.sid_byteLength) {
                                 self.push(JsValue.initBool(true));
                                 continue;
                             }
                             // Numeric index (e.g. "0", "1", …) — within bounds?
                             // (TypedArrays only; ArrayBuffer has no indexed access.)
                             if (obj.obj_type == .typed_array) {
-                                if (std.fmt.parseInt(usize, name_str, 10)) |idx| {
+                                const idx_name = self.pool.get(sid) orelse "";
+                                if (std.fmt.parseInt(usize, idx_name, 10)) |idx| {
                                     self.push(JsValue.initBool(idx < typedArrayLen(obj)));
                                     continue;
                                 } else |_| {}
@@ -1222,60 +1234,65 @@ pub const VM = struct {
                                 continue;
                             }
                         }
-                        // Check for accessor descriptor (own or prototype chain)
-                        if (obj.findAccessorDescriptor(name_id)) |acc| {
-                            if (!acc.get.isUndefined()) {
-                                const result = try self.callJsFunction(acc.get, obj_val, &.{});
-                                self.push(result);
-                                continue;
-                            }
-                            self.push(JsValue.undefined_val);
-                            continue;
-                        }
-                        // Array .length
-                        if (obj.obj_type == .array) {
-                            if (self.pool.get(name_id)) |name_str| {
-                                if (std.mem.eql(u8, name_str, "length")) {
-                                    self.push(JsValue.initNumber(@floatFromInt(obj.data.array.items.len)));
+                        // Wave 206b: single prototype-chain walk via getWithAccessorInfo.
+                        // Replaces the previous double-walk (findAccessorDescriptor +
+                        // getProperty) that traversed the chain twice per property access.
+                        if (obj.getWithAccessorInfo(name_id)) |result| {
+                            switch (result) {
+                                .accessor => |acc| {
+                                    if (!acc.get.isUndefined()) {
+                                        const getter_result = try self.callJsFunction(acc.get, obj_val, &.{});
+                                        self.push(getter_result);
+                                    } else {
+                                        self.push(JsValue.undefined_val);
+                                    }
                                     continue;
-                                }
+                                },
+                                .data => |val| {
+                                    self.push(val);
+                                    continue;
+                                },
+                            }
+                        }
+                        // Array .length (virtual property — not in descriptors/properties)
+                        if (obj.obj_type == .array) {
+                            if (name_id == self.sid_length) {
+                                self.push(JsValue.initNumber(@floatFromInt(obj.data.array.items.len)));
+                                continue;
                             }
                         }
                         if (obj.obj_type == .map or obj.obj_type == .set) {
-                            if (self.pool.get(name_id)) |name_str| {
-                                if (std.mem.eql(u8, name_str, "size")) {
-                                    const len = switch (obj.data) {
-                                        .map_data => |m| m.items.len,
-                                        .set_data => |s| s.items.len,
-                                        else => 0,
-                                    };
-                                    self.push(JsValue.initNumber(@floatFromInt(len)));
-                                    continue;
-                                }
+                            if (name_id == self.sid_size) {
+                                const len = switch (obj.data) {
+                                    .map_data => |m| m.items.len,
+                                    .set_data => |s| s.items.len,
+                                    else => 0,
+                                };
+                                self.push(JsValue.initNumber(@floatFromInt(len)));
+                                continue;
                             }
                         }
                         if (obj.obj_type == .typed_array or obj.obj_type == .array_buffer) {
-                            if (self.pool.get(name_id)) |name_str| {
-                                if (std.mem.eql(u8, name_str, "length")) {
-                                    // typed array: element count; array_buffer: byte length
-                                    const len = typedArrayLen(obj);
-                                    self.push(JsValue.initNumber(@floatFromInt(len)));
-                                    continue;
-                                }
-                                if (std.mem.eql(u8, name_str, "byteLength")) {
-                                    const len = objectBytesLen(obj);
-                                    self.push(JsValue.initNumber(@floatFromInt(len)));
-                                    continue;
-                                }
-                                if (std.mem.eql(u8, name_str, "buffer")) {
-                                    self.push(obj_val); // self-reference for simplicity
-                                    continue;
-                                }
+                            if (name_id == self.sid_length) {
+                                // typed array: element count; array_buffer: byte length
+                                const len = typedArrayLen(obj);
+                                self.push(JsValue.initNumber(@floatFromInt(len)));
+                                continue;
+                            }
+                            if (name_id == self.sid_byteLength) {
+                                const len = objectBytesLen(obj);
+                                self.push(JsValue.initNumber(@floatFromInt(len)));
+                                continue;
+                            }
+                            if (name_id == self.sid_buffer) {
+                                self.push(obj_val); // self-reference for simplicity
+                                continue;
                             }
                         }
-                        if (obj.getProperty(name_id)) |val| {
-                            self.push(val);
-                        } else if ((obj.obj_type == .function or obj.obj_type == .native_function) and self.function_proto != null) {
+                        // Property not found on this object or its prototype chain.
+                        // Fall back to function_proto / object_proto (belt-and-suspenders
+                        // for cases where the prototype chain may not be fully linked).
+                        if ((obj.obj_type == .function or obj.obj_type == .native_function) and self.function_proto != null) {
                             if (self.function_proto.?.getProperty(name_id)) |val| {
                                 self.push(val);
                             } else if (self.object_proto) |obj_p| {
@@ -1299,15 +1316,13 @@ pub const VM = struct {
                         }
                     } else if (obj_val.isString()) {
                         // String .length — UTF-16 code units per ECMA-262 §6.1.4
-                        if (self.pool.get(name_id)) |name_str| {
-                            if (std.mem.eql(u8, name_str, "length")) {
-                                if (self.pool.get(obj_val.asStringId())) |s| {
-                                    self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
-                                } else {
-                                    self.push(JsValue.initNumber(0));
-                                }
-                                continue;
+                        if (name_id == self.sid_length) {
+                            if (self.pool.get(obj_val.asStringId())) |s| {
+                                self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
+                            } else {
+                                self.push(JsValue.initNumber(0));
                             }
+                            continue;
                         }
                         // String prototype methods
                         if (self.string_proto) |sp| {
@@ -1433,12 +1448,10 @@ pub const VM = struct {
                             }
                         }
                         // __proto__ assignment → set prototype
-                        if (self.pool.get(name_id)) |name_str| {
-                            if (std.mem.eql(u8, name_str, "__proto__") and val.isObject()) {
-                                obj.prototype = val.asJsObject();
-                                self.push(val);
-                                continue;
-                            }
+                        if (name_id == self.sid_proto and val.isObject()) {
+                            obj.prototype = val.asJsObject();
+                            self.push(val);
+                            continue;
                         }
                         try obj.setProperty(self.allocator, name_id, val);
                     }
@@ -1561,12 +1574,12 @@ pub const VM = struct {
                             }
                             // .length / .byteLength for typed arrays
                             if (key.isString()) {
-                                const name = self.pool.get(key.asStringId()) orelse "";
-                                if (std.mem.eql(u8, name, "length")) {
+                                const sid = key.asStringId();
+                                if (sid == self.sid_length) {
                                     self.push(JsValue.initNumber(@floatFromInt(typedArrayLen(obj))));
                                     continue;
                                 }
-                                if (std.mem.eql(u8, name, "byteLength")) {
+                                if (sid == self.sid_byteLength) {
                                     self.push(JsValue.initNumber(@floatFromInt(objectBytesLen(obj))));
                                     continue;
                                 }
@@ -1590,23 +1603,31 @@ pub const VM = struct {
                         // `undefined` even when the trap itself matched.
                         const name_id_opt: ?StringId = if (key.isString())
                             key.asStringId()
-                        else if (key.isInt() or key.isNumber())
-                            try self.keyToStringId(key)
+                        else if (key.isSymbol())
+                            null // Symbol keys handled above
                         else
-                            null;
+                            try self.keyToStringId(key);
                         if (name_id_opt) |name_id| {
-                            if (obj.findAccessorDescriptor(name_id)) |acc| {
-                                if (!acc.get.isUndefined()) {
-                                    const result = try self.callJsFunction(acc.get, obj_val, &.{});
-                                    self.push(result);
-                                    continue;
+                            // Wave 207a: single prototype-chain walk via
+                            // getWithAccessorInfo (same pattern as Wave 206b
+                            // in get_prop). Replaces the double-walk
+                            // (findAccessorDescriptor + getProperty).
+                            if (obj.getWithAccessorInfo(name_id)) |result| {
+                                switch (result) {
+                                    .accessor => |acc| {
+                                        if (!acc.get.isUndefined()) {
+                                            const getter_result = try self.callJsFunction(acc.get, obj_val, &.{});
+                                            self.push(getter_result);
+                                        } else {
+                                            self.push(JsValue.undefined_val);
+                                        }
+                                        continue;
+                                    },
+                                    .data => |val| {
+                                        self.push(val);
+                                        continue;
+                                    },
                                 }
-                                self.push(JsValue.undefined_val);
-                                continue;
-                            }
-                            if (obj.getProperty(name_id)) |val| {
-                                self.push(val);
-                                continue;
                             }
                             // Object.prototype fallback for string keys.
                             if (self.object_proto) |obj_p| {
@@ -1676,15 +1697,13 @@ pub const VM = struct {
                         // Non-integer key: check "length" and string_proto.
                         if (key.isString()) {
                             const k_sid = key.asStringId();
-                            if (self.pool.get(k_sid)) |k_str| {
-                                if (std.mem.eql(u8, k_str, "length")) {
-                                    if (self.pool.get(obj_val.asStringId())) |s| {
-                                        self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
-                                    } else {
-                                        self.push(JsValue.initNumber(0));
-                                    }
-                                    continue;
+                            if (k_sid == self.sid_length) {
+                                if (self.pool.get(obj_val.asStringId())) |s| {
+                                    self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
+                                } else {
+                                    self.push(JsValue.initNumber(0));
                                 }
+                                continue;
                             }
                             if (self.string_proto) |sp| {
                                 if (sp.getProperty(k_sid)) |val| {
@@ -1813,11 +1832,11 @@ pub const VM = struct {
                             }
                         } else if (key.isString()) {
                             try obj.setProperty(self.allocator, key.asStringId(), val);
-                        } else if (key.isInt() or key.isNumber()) {
-                            // ECMA-262 §7.1.19 ToPropertyKey: numeric bracket
-                            // keys on plain objects stringify (e.g. `obj[0] = x`
-                            // stores under `"0"`). Paired with the get_elem
-                            // int-key stringification so round-trips work.
+                        } else {
+                            // ECMA-262 §7.1.19 ToPropertyKey: null → "null",
+                            // undefined → "undefined", true → "true", etc.
+                            // Numeric keys already handled above; this catches
+                            // null/bool/undefined bracket keys.
                             const sid = try self.keyToStringId(key);
                             try obj.setProperty(self.allocator, sid, val);
                         }
@@ -2087,6 +2106,44 @@ pub const VM = struct {
 
                     const func = &obj.data.function;
                     const base = self.sp - arg_count;
+
+                    // Generator function called as method: create generator
+                    // object instead of executing. Mirrors the .call handler
+                    // (line 1051) — without this, `obj[Symbol.iterator]()`
+                    // where the property is a `function*` runs the body once
+                    // and returns undefined instead of an iterator.
+                    if (func.is_generator and !func.is_async) {
+                        var init_args: []JsValue = &.{};
+                        if (arg_count > 0) {
+                            init_args = self.allocator.alloc(JsValue, arg_count) catch null orelse {
+                                self.sp = this_pos;
+                                self.push(JsValue.undefined_val);
+                                continue;
+                            };
+                            @memcpy(init_args, self.stack[base..self.sp]);
+                        }
+                        self.sp = this_pos;
+                        const gen_obj = try self.createGeneratorObject(obj);
+                        gen_obj.data.generator_data.init_args = init_args;
+                        self.push(JsValue.initObject(gen_obj));
+                        continue;
+                    }
+                    if (func.is_generator and func.is_async) {
+                        var init_args: []JsValue = &.{};
+                        if (arg_count > 0) {
+                            init_args = self.allocator.alloc(JsValue, arg_count) catch null orelse {
+                                self.sp = this_pos;
+                                self.push(JsValue.undefined_val);
+                                continue;
+                            };
+                            @memcpy(init_args, self.stack[base..self.sp]);
+                        }
+                        self.sp = this_pos;
+                        const ag_obj = try self.createAsyncGeneratorObject(obj);
+                        ag_obj.data.generator_data.init_args = init_args;
+                        self.push(JsValue.initObject(ag_obj));
+                        continue;
+                    }
 
                     var rest_args_saved2: ?[]JsValue = null;
                     var all_args_saved2: ?[]JsValue = null;
@@ -2768,10 +2825,9 @@ pub const VM = struct {
     }
 
     fn getOrCreateUpvalue(self: *VM, stack_idx: u32) !*UpvalueCell {
-        // Check existing open upvalues
-        for (self.open_upvalues.items) |cell| {
-            if (cell.stack_index == stack_idx) return cell;
-        }
+        // O(1) hash lookup — was O(n) linear scan in Wave 205 and earlier.
+        const gop = try self.open_upvalues.getOrPut(self.allocator, stack_idx);
+        if (gop.found_existing) return gop.value_ptr.*;
         // Create new
         const cell = try self.allocator.create(UpvalueCell);
         cell.* = .{
@@ -2780,19 +2836,26 @@ pub const VM = struct {
             .stack_index = stack_idx,
         };
         try self.upvalue_cells.append(self.allocator, cell);
-        try self.open_upvalues.append(self.allocator, cell);
+        gop.value_ptr.* = cell;
         return cell;
     }
 
     fn closeUpvaluesAbove(self: *VM, min_slot: u32) void {
-        var i: usize = self.open_upvalues.items.len;
-        while (i > 0) {
-            i -= 1;
-            const cell = self.open_upvalues.items[i];
-            if (cell.stack_index >= min_slot) {
+        // Iterate all open upvalues; close those at or above min_slot.
+        // This runs on frame exit, not per-capture, so O(open_count) is fine.
+        var to_close: std.ArrayListUnmanaged(u32) = .empty;
+        defer to_close.deinit(self.allocator);
+        var it = self.open_upvalues.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* >= min_slot) {
+                to_close.append(self.allocator, entry.key_ptr.*) catch break;
+            }
+        }
+        for (to_close.items) |idx| {
+            if (self.open_upvalues.get(idx)) |cell| {
                 cell.value = self.stack[cell.stack_index];
                 cell.is_open = false;
-                _ = self.open_upvalues.swapRemove(i);
+                _ = self.open_upvalues.swapRemove(idx);
             }
         }
     }
@@ -2803,15 +2866,11 @@ pub const VM = struct {
     }
 
     fn closeUpvalueAt(self: *VM, slot: u32) void {
-        var i: usize = self.open_upvalues.items.len;
-        while (i > 0) {
-            i -= 1;
-            const cell = self.open_upvalues.items[i];
-            if (cell.stack_index == slot) {
-                cell.value = self.stack[slot];
-                cell.is_open = false;
-                _ = self.open_upvalues.swapRemove(i);
-            }
+        // O(1) hash lookup — was O(n) linear scan.
+        if (self.open_upvalues.get(slot)) |cell| {
+            cell.value = self.stack[slot];
+            cell.is_open = false;
+            _ = self.open_upvalues.swapRemove(slot);
         }
     }
 
@@ -2831,6 +2890,14 @@ pub const VM = struct {
     }
 
     fn arrayElementValue(self: *VM, obj: *JsObject, idx: usize) !JsValue {
+        // Fast path: plain array with no descriptors → direct slot read.
+        // This is the overwhelmingly common case (Array.prototype.forEach/map/
+        // filter/reduce/indexOf/includes/find/join/slice/concat/etc. on arrays
+        // that never had Object.defineProperty called on an indexed slot).
+        // Avoids per-element pool.intern + getOwnDescriptor hash lookup.
+        if (obj.obj_type == .array and obj.descriptors == null) {
+            return if (idx < obj.data.array.items.len) obj.data.array.items[idx] else JsValue.undefined_val;
+        }
         var buf: [20]u8 = undefined;
         const key = try self.pool.intern(std.fmt.bufPrint(&buf, "{d}", .{idx}) catch return JsValue.undefined_val);
         if (obj.getOwnDescriptor(key)) |pd| {
@@ -3193,6 +3260,16 @@ pub const VM = struct {
     // ── Built-in objects ────────────────────────────────────────────
 
     pub fn initBuiltins(self: *VM) !void {
+        // Pre-intern well-known property names so get_prop/get_elem/set_prop
+        // can compare StringId (u32) directly instead of pool.get + std.mem.eql
+        // on every property access. intern() is idempotent on the shared pool,
+        // so repeated VM inits just do O(1) hash lookups.
+        self.sid_length = try self.pool.intern("length");
+        self.sid_size = try self.pool.intern("size");
+        self.sid_byteLength = try self.pool.intern("byteLength");
+        self.sid_buffer = try self.pool.intern("buffer");
+        self.sid_proto = try self.pool.intern("__proto__");
+
         // ── console ──
         const console_obj = try self.createObj(.{});
         try self.registerNativeMethod(console_obj, "log", &nativeConsoleLog);
@@ -3720,15 +3797,36 @@ pub const VM = struct {
             const name_sid_de = try self.pool.intern("name");
             const msg_sid_de = try self.pool.intern("message");
             const code_sid = try self.pool.intern("code");
-            try dom_exc_proto.setProperty(self.allocator, name_sid_de, JsValue.initString(try self.pool.intern("Error")));
-            try dom_exc_proto.setProperty(self.allocator, msg_sid_de, JsValue.initString(try self.pool.intern("")));
-            try dom_exc_proto.setProperty(self.allocator, code_sid, JsValue.initNumber(0));
-            try self.registerNativeMethod(dom_exc_proto, "toString", &nativeErrorToString);
+            const getters = [_]struct { sid: StringId, name: []const u8, func: NativeFn }{
+                .{ .sid = name_sid_de, .name = "get name", .func = &nativeDOMExceptionName },
+                .{ .sid = msg_sid_de, .name = "get message", .func = &nativeDOMExceptionMessage },
+                .{ .sid = code_sid, .name = "get code", .func = &nativeDOMExceptionCode },
+            };
+            for (getters) |getter| {
+                _ = try dom_exc_proto.defineOwnProperty(self.allocator, getter.sid, .{ .accessor = .{
+                    .get = JsValue.initObject(try self.createNamedNativeFn(getter.name, getter.func, 0)),
+                    .set = JsValue.undefined_val,
+                    .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+                } });
+            }
             // WebIDL §3.14 DOMException(message, name) → length 2; name set
             // with spec-correct descriptor via createNamedNativeFn.
             const dom_exc_ctor = try self.createNamedNativeFn("DOMException", &nativeDOMExceptionConstructor, 2);
-            try dom_exc_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(dom_exc_proto));
-            try dom_exc_proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(dom_exc_ctor));
+            // `prototype` and legacy code constants are non-enumerable per
+            // ECMA-262 §20.2.1.1 (constructor attributes default to
+            // { writable: true, enumerable: false, configurable: true }).
+            // Using defineOwnProperty so Object.keys(DOMException) excludes
+            // `prototype` (required by urlsearchparams-constructor WPT).
+            _ = try dom_exc_ctor.defineOwnProperty(self.allocator, try self.pool.intern("prototype"), .{
+                .data = .{
+                    .value = JsValue.initObject(dom_exc_proto),
+                    .attrs = .{ .writable = true, .enumerable = false, .configurable = true },
+                },
+            });
+            _ = try dom_exc_proto.defineOwnProperty(self.allocator, try self.pool.intern("constructor"), .{ .data = .{
+                .value = JsValue.initObject(dom_exc_ctor),
+                .attrs = .{ .writable = true, .enumerable = false, .configurable = true },
+            } });
             if (self.function_proto) |fn_p| dom_exc_ctor.prototype = fn_p;
             // WebIDL §3.14.5 — legacy code constants on both the interface
             // object (constructor) and the prototype, so that
@@ -3763,6 +3861,10 @@ pub const VM = struct {
             };
             for (legacy_codes) |lc| {
                 const sid = try self.pool.intern(lc.name);
+                // Legacy code constants on the constructor ARE enumerable
+                // (browsers return them from Object.keys(DOMException); the
+                // urlsearchparams-constructor WPT relies on this). Only
+                // `prototype` is non-enumerable.
                 try dom_exc_ctor.setProperty(self.allocator, sid, JsValue.initNumber(lc.code));
                 try dom_exc_proto.setProperty(self.allocator, sid, JsValue.initNumber(lc.code));
             }
@@ -4064,18 +4166,11 @@ pub const VM = struct {
 
     /// Create a DOMException-like error object and throw it.
     fn throwDOMException(self: *VM, name: []const u8, message: []const u8) !bool {
-        const err = try self.createObj(.{});
-        if (self.error_proto) |ep| err.prototype = ep;
-        try err.setProperty(self.allocator, try self.pool.intern("name"), JsValue.initString(try self.pool.intern(name)));
-        try err.setProperty(self.allocator, try self.pool.intern("message"), JsValue.initString(try self.pool.intern(message)));
-        // Set DOMException code for legacy constants
-        const code: f64 = if (std.mem.eql(u8, name, "NotFoundError")) 8 else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, name, "NotSupportedError")) 9 else if (std.mem.eql(u8, name, "InvalidStateError")) 11 else if (std.mem.eql(u8, name, "SyntaxError")) 12 else if (std.mem.eql(u8, name, "WrongDocumentError")) 4 else 0;
-        try err.setProperty(self.allocator, try self.pool.intern("code"), JsValue.initNumber(code));
-        return self.throwJsErrorVal(JsValue.initObject(err));
+        return self.throwJsErrorVal(try self.createDOMException(name, message));
     }
 
     /// Create a JS error object with proper prototype chain (for pending_throw).
-    fn createErrorObj(self: *VM, err_name: []const u8) !JsValue {
+    pub fn createErrorObj(self: *VM, err_name: []const u8) !JsValue {
         const err = try self.createObj(.{});
         const name_sid = try self.pool.intern(err_name);
         // Look up constructor prototype for correct instanceof chain
@@ -4321,12 +4416,34 @@ pub const VM = struct {
     // ── Array methods ───────────────────────────────────────────────
 
     fn nativeArrayPush(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject()) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        for (args) |arg| try obj.data.array.append(vm.allocator, arg);
-        return JsValue.initNumber(@floatFromInt(obj.data.array.items.len));
+        if (!this.isObject()) return JsValue.initNumber(0);
+        const obj = this.asJsObject();
+
+        // Fast path: real array
+        if (obj.obj_type == .array) {
+            for (args) |arg| try obj.data.array.append(vm.allocator, arg);
+            return JsValue.initNumber(@floatFromInt(obj.data.array.items.len));
+        }
+
+        // ECMA-262 §23.1.3.21: Array.prototype.push works on any array-like
+        // object. Read length, set index properties, update length.
+        const length_sid = try vm.pool.intern("length");
+        var len: f64 = 0;
+        if (obj.getProperty(length_sid)) |len_val| {
+            if (len_val.isNumber()) len = len_val.toNumber();
+        }
+
+        for (args) |arg| {
+            const idx_str = try std.fmt.allocPrint(vm.allocator, "{d}", .{len});
+            defer vm.allocator.free(idx_str);
+            const idx_sid = try vm.pool.intern(idx_str);
+            try obj.setProperty(vm.allocator, idx_sid, arg);
+            len += 1;
+        }
+
+        try obj.setProperty(vm.allocator, length_sid, JsValue.initNumber(len));
+        return JsValue.initNumber(len);
     }
 
     fn nativeArrayPop(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
@@ -5119,6 +5236,32 @@ pub const VM = struct {
         if (obj.obj_type != .function) return JsValue.undefined_val;
 
         const func = &obj.data.function;
+
+        // Generator function called via callJsFunction (e.g. through
+        // Function.prototype.call / .apply, or host callbacks): create a
+        // generator object instead of executing the body. Without this,
+        // `genFn.call(this)` runs the body once and returns undefined.
+        if (func.is_generator and !func.is_async) {
+            var init_args: []JsValue = &.{};
+            if (args.len > 0) {
+                init_args = self.allocator.alloc(JsValue, args.len) catch return JsValue.undefined_val;
+                @memcpy(init_args, args);
+            }
+            const gen_obj = try self.createGeneratorObject(obj);
+            gen_obj.data.generator_data.init_args = init_args;
+            return JsValue.initObject(gen_obj);
+        }
+        if (func.is_generator and func.is_async) {
+            var init_args: []JsValue = &.{};
+            if (args.len > 0) {
+                init_args = self.allocator.alloc(JsValue, args.len) catch return JsValue.undefined_val;
+                @memcpy(init_args, args);
+            }
+            const ag_obj = try self.createAsyncGeneratorObject(obj);
+            ag_obj.data.generator_data.init_args = init_args;
+            return JsValue.initObject(ag_obj);
+        }
+
         const target = self.frame_count;
 
         self.push(func_val); // function slot (popped by return)
@@ -5563,35 +5706,68 @@ pub const VM = struct {
         if (items.len <= 1) return this;
         const has_comparefn = args.len > 0 and args[0].isObject();
         const vm = vmFromCtx(ctx);
-        // Simple insertion sort (stable, fine for typical array sizes)
-        var i: usize = 1;
-        while (i < items.len) : (i += 1) {
-            const key = items[i];
-            var j: usize = i;
-            while (j > 0) {
-                const cmp = if (has_comparefn) blk: {
-                    const cb_args = [_]JsValue{ items[j - 1], key };
-                    const r = try vm.callJsFunction(args[0], JsValue.undefined_val, &cb_args);
-                    break :blk vm.coerceNumeric(r).toNumber();
-                } else blk: {
-                    // Default: lexicographic comparison
+
+        // Wave 206c: O(n log n) sort via std.sort.block with a runtime-comparator
+        // context. Replaces the previous O(n²) insertion sort that became a
+        // bottleneck on arrays >100 elements (common in DOM node lists, WPT
+        // test fixtures, and real pages sorting attribute/data collections).
+        //
+        // std.sort.block requires a comptime lessThan function but accepts a
+        // runtime Context; we use a context struct that holds the VM pointer
+        // and optional JS comparefn, and the comptime lessThan delegates to
+        // the runtime comparator. The sort is stable (block sort = stable
+        // merge sort variant), matching ECMA-262 §23.1.3.30's stability requirement.
+        const SortCtx = struct {
+            vm: *VM,
+            comparefn: ?JsValue,
+
+            fn lt(self: @This(), a: JsValue, b: JsValue) bool {
+                if (self.comparefn) |fn_val| {
+                    const cb_args = [_]JsValue{ a, b };
+                    const r = self.vm.callJsFunction(fn_val, JsValue.undefined_val, &cb_args) catch return false;
+                    const n = self.vm.coerceNumeric(r).toNumber();
+                    // Return true if a should come before b (comparator returns < 0)
+                    return n < 0;
+                } else {
+                    // Default: lexicographic comparison per ECMA-262 §23.1.3.30.4
                     var buf_a: [64]u8 = undefined;
                     var buf_b: [64]u8 = undefined;
-                    const a_bytes = formatValue(vm.pool, items[j - 1], &buf_a);
-                    const b_bytes = formatValue(vm.pool, key, &buf_b);
-                    const order = std.mem.order(u8, a_bytes, b_bytes);
-                    break :blk switch (order) {
-                        .gt => @as(f64, 1),
-                        .lt => @as(f64, -1),
-                        .eq => @as(f64, 0),
-                    };
-                };
-                if (cmp <= 0) break;
-                items[j] = items[j - 1];
-                j -= 1;
+                    const a_bytes = formatValue(self.vm.pool, a, &buf_a);
+                    const b_bytes = formatValue(self.vm.pool, b, &buf_b);
+                    return std.mem.order(u8, a_bytes, b_bytes) == .lt;
+                }
             }
-            items[j] = key;
+        };
+
+        const sort_ctx = SortCtx{
+            .vm = vm,
+            .comparefn = if (has_comparefn) args[0] else null,
+        };
+
+        // ECMA-262 §23.1.3.30.1: undefined values are sorted to the end,
+        // regardless of comparator. Partition them out first, sort the rest,
+        // then they're already at the end.
+        var undef_start: usize = items.len;
+        var write_idx: usize = 0;
+        for (items) |item| {
+            if (item.isUndefined()) {
+                // skip — will be placed at end
+            } else {
+                items[write_idx] = item;
+                write_idx += 1;
+            }
         }
+        undef_start = write_idx;
+        // Fill the tail with undefined
+        while (write_idx < items.len) : (write_idx += 1) {
+            items[write_idx] = JsValue.undefined_val;
+        }
+
+        // Sort only the defined portion
+        if (undef_start > 1) {
+            std.sort.block(JsValue, items[0..undef_start], sort_ctx, SortCtx.lt);
+        }
+
         return this;
     }
 
@@ -5954,6 +6130,44 @@ pub const VM = struct {
             return JsValue.undefined_val;
         }
         return obj.getProperty(name);
+    }
+
+    /// ECMA-262 §20.2.3 — CreateDynamicFunction: compile `body` as a function
+    /// body and return the resulting function object. Used by `new Function(body)`.
+    /// We wrap the body in `(function(){ ... })` and compile, then extract the
+    /// inner function object from the compiler's function list — WITHOUT
+    /// executing the wrapper (which would corrupt VM state when called
+    /// recursively from a native function during dispatch).
+    pub fn compileFunctionBody(self: *VM, body: []const u8) !JsValue {
+        var src: std.ArrayListUnmanaged(u8) = .empty;
+        defer src.deinit(self.allocator);
+        try src.appendSlice(self.allocator, "(function(){");
+        try src.appendSlice(self.allocator, body);
+        try src.appendSlice(self.allocator, "})");
+
+        var compiler = Compiler.initWithPool(self.allocator, src.items, self.pool);
+        _ = compiler.compile() catch {
+            compiler.deinit();
+            return error.SyntaxError;
+        };
+
+        // The inner function object is the last (or only) function created.
+        // For `(function(){BODY})`, functions.items[0] is the anonymous function.
+        if (compiler.functions.items.len == 0) {
+            compiler.deinit();
+            return JsValue.undefined_val;
+        }
+
+        // Take ownership of ALL function objects (they own their bytecode
+        // via FunctionObj.owns_bytecode=true, embedded directly in the object).
+        const func_obj = compiler.functions.items[compiler.functions.items.len - 1];
+        for (compiler.functions.items) |obj| {
+            try self.objects.append(self.allocator, obj);
+        }
+        compiler.functions.items.len = 0; // prevent deinit from freeing the objects
+
+        compiler.deinit();
+        return JsValue.initObject(func_obj);
     }
 
     fn createPromiseObj(self: *VM) !*JsObject {
@@ -6630,13 +6844,29 @@ pub const VM = struct {
                 try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s)));
             }
         }
-        // Fast-path: all-default attrs are enumerable=true.
-        for (obj.properties.keys()) |key_id| {
-            try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+        // Fast-path: all-default attrs are enumerable=true. But skip keys
+        // that have a descriptor with enumerable=false (e.g. constructors'
+        // `prototype` property is non-enumerable per ECMA-262 §20.2.1.1).
+        if (obj.descriptors) |*d| {
+            for (obj.properties.keys()) |key_id| {
+                const enumerable = if (d.get(key_id)) |pd| pd.attrs().enumerable else true;
+                if (enumerable) {
+                    try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+                }
+            }
+        } else {
+            for (obj.properties.keys()) |key_id| {
+                try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+            }
         }
         // Slow-path: filter by enumerable.
         if (obj.descriptors) |*d| {
             for (d.keys(), d.values()) |key_id, pd| {
+                // Skip keys already covered by the properties walk above
+                // (properties holds data properties; descriptors holds
+                // accessor + overridden-attr data properties — but a key
+                // can live in both, so dedup via a contains check).
+                if (obj.properties.contains(key_id)) continue;
                 if (pd.attrs().enumerable) {
                     try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
                 }
@@ -6657,13 +6887,23 @@ pub const VM = struct {
                 try new_arr.data.array.append(vm.allocator, val);
             }
         }
-        // Fast-path: all-default attrs are enumerable=true.
-        for (obj.properties.values()) |val| {
-            try new_arr.data.array.append(vm.allocator, val);
+        // Fast-path with descriptor filter (mirror nativeObjectKeys fix).
+        if (obj.descriptors) |*d| {
+            for (obj.properties.keys(), obj.properties.values()) |key_id, val| {
+                const enumerable = if (d.get(key_id)) |pd| pd.attrs().enumerable else true;
+                if (enumerable) {
+                    try new_arr.data.array.append(vm.allocator, val);
+                }
+            }
+        } else {
+            for (obj.properties.values()) |val| {
+                try new_arr.data.array.append(vm.allocator, val);
+            }
         }
         // Slow-path: filter by enumerable.
         if (obj.descriptors) |*d| {
-            for (d.values()) |pd| {
+            for (d.keys(), d.values()) |key_id, pd| {
+                if (obj.properties.contains(key_id)) continue;
                 if (pd.attrs().enumerable) {
                     const val = try vm.ownDescriptorValue(obj, pd);
                     try new_arr.data.array.append(vm.allocator, val);
@@ -6690,18 +6930,34 @@ pub const VM = struct {
                 try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
             }
         }
-        // Fast-path: all-default attrs are enumerable=true.
-        const keys = obj.properties.keys();
-        const vals = obj.properties.values();
-        for (keys, vals) |key_id, val| {
-            const pair = try vm.createArray();
-            try pair.data.array.append(vm.allocator, JsValue.initString(key_id));
-            try pair.data.array.append(vm.allocator, val);
-            try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+        // Fast-path with descriptor filter (mirror nativeObjectKeys fix).
+        if (obj.descriptors) |*d| {
+            const keys = obj.properties.keys();
+            const vals = obj.properties.values();
+            for (keys, vals) |key_id, val| {
+                const enumerable = if (d.get(key_id)) |pd| pd.attrs().enumerable else true;
+                if (enumerable) {
+                    const pair = try vm.createArray();
+                    try pair.data.array.append(vm.allocator, JsValue.initString(key_id));
+                    try pair.data.array.append(vm.allocator, val);
+                    try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+                }
+            }
+        } else {
+            const keys = obj.properties.keys();
+            const vals = obj.properties.values();
+            for (keys, vals) |key_id, val| {
+                const pair = try vm.createArray();
+                try pair.data.array.append(vm.allocator, JsValue.initString(key_id));
+                try pair.data.array.append(vm.allocator, val);
+                try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+            }
         }
-        // Slow-path: filter by enumerable.
+        // Slow-path: filter by enumerable. Skip keys already covered by
+        // the properties walk above (dedup — see nativeObjectKeys comment).
         if (obj.descriptors) |*d| {
             for (d.keys(), d.values()) |key_id, pd| {
+                if (obj.properties.contains(key_id)) continue;
                 if (pd.attrs().enumerable) {
                     const val = try vm.ownDescriptorValue(obj, pd);
                     const pair = try vm.createArray();
@@ -6917,13 +7173,11 @@ pub const VM = struct {
             return JsValue.undefined_val;
         }
         if (obj.obj_type == .array) {
-            if (vm.pool.get(name_id)) |name| {
-                if (std.mem.eql(u8, name, "length")) {
-                    return try vm.descriptorToObject(.{ .data = .{
-                        .value = JsValue.initNumber(@floatFromInt(obj.data.array.items.len)),
-                        .attrs = .{ .writable = true, .enumerable = false, .configurable = false },
-                    } });
-                }
+            if (name_id == vm.sid_length) {
+                return try vm.descriptorToObject(.{ .data = .{
+                    .value = JsValue.initNumber(@floatFromInt(obj.data.array.items.len)),
+                    .attrs = .{ .writable = true, .enumerable = false, .configurable = false },
+                } });
             }
         }
         // For dom_node objects, trigger the dom_get_prop hook so HTML
@@ -10353,7 +10607,13 @@ pub const VM = struct {
         const byte_off = utf16IdxToByteOff(s, pos) orelse return JsValue.undefined_val;
         if (byte_off >= s.len) return JsValue.undefined_val;
         const cp_len = std.unicode.utf8ByteSequenceLength(s[byte_off]) catch 1;
-        const cp = std.unicode.utf8Decode(s[byte_off..@min(byte_off + cp_len, s.len)]) catch return JsValue.undefined_val;
+        const cp = std.unicode.utf8Decode(s[byte_off..@min(byte_off + cp_len, s.len)]) catch {
+            // Strings are WTF-8: a lone surrogate is a valid 3-byte sequence
+            // that strict utf8Decode rejects. Per spec (ES2015 §21.1.3.3),
+            // codePointAt returns the unpaired code unit itself.
+            const cu = utf16CodeUnitAt(s, pos) orelse return JsValue.undefined_val;
+            return JsValue.initNumber(@floatFromInt(cu));
+        };
         return JsValue.initNumber(@floatFromInt(cp));
     }
 
@@ -10384,15 +10644,47 @@ pub const VM = struct {
     fn nativeStringFromCharCode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         var buf: std.ArrayListUnmanaged(u8) = .empty;
-        for (args) |a| {
-            const n = vm.coerceNumeric(a).toNumber();
-            const i: i32 = if (std.math.isNan(n) or std.math.isInf(n)) 0 else @intFromFloat(@trunc(n));
-            const code: u21 = @intCast(@as(u32, @bitCast(i)) & 0xFFFF);
-            var tmp: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(code, &tmp) catch continue;
-            buf.appendSlice(vm.allocator, tmp[0..len]) catch continue;
-        }
         defer buf.deinit(vm.allocator);
+        var i: usize = 0;
+        while (i < args.len) : (i += 1) {
+            const n = vm.coerceNumeric(args[i]).toNumber();
+            const val: i32 = if (std.math.isNan(n) or std.math.isInf(n)) 0 else @intFromFloat(@trunc(n));
+            const cu: u16 = @intCast(@as(u32, @bitCast(val)) & 0xFFFF);
+            // High surrogate followed by low surrogate → combine into a code
+            // point and encode as 4-byte UTF-8 (the surrogate pair forms one
+            // supplementary character per ECMAScript §22.1.2.1).
+            if (cu >= 0xD800 and cu <= 0xDBFF and i + 1 < args.len) {
+                const n2 = vm.coerceNumeric(args[i + 1]).toNumber();
+                const val2: i32 = if (std.math.isNan(n2) or std.math.isInf(n2)) 0 else @intFromFloat(@trunc(n2));
+                const cu2: u16 = @intCast(@as(u32, @bitCast(val2)) & 0xFFFF);
+                if (cu2 >= 0xDC00 and cu2 <= 0xDFFF) {
+                    const cp: u21 = 0x10000 + (@as(u21, cu - 0xD800) << 10) + (@as(u21, cu2 - 0xDC00));
+                    var tmp: [4]u8 = undefined;
+                    const len = std.unicode.utf8Encode(cp, &tmp) catch {
+                        // Unreachable for valid surrogate pair.
+                        continue;
+                    };
+                    buf.appendSlice(vm.allocator, tmp[0..len]) catch continue;
+                    i += 1; // consume the low surrogate
+                    continue;
+                }
+            }
+            if (cu >= 0xD800 and cu <= 0xDFFF) {
+                // Lone surrogate — encode as WTF-8 (3-byte form matching the
+                // surrogate code unit's UTF-8 bytes). Required so JS code
+                // that constructs lone surrogates via String.fromCharCode
+                // round-trips through URLSearchParams / percent-encoding.
+                var tmp: [3]u8 = undefined;
+                tmp[0] = 0xE0 | @as(u8, @intCast((cu >> 12) & 0x0F));
+                tmp[1] = 0x80 | @as(u8, @intCast((cu >> 6) & 0x3F));
+                tmp[2] = 0x80 | @as(u8, @intCast(cu & 0x3F));
+                buf.appendSlice(vm.allocator, &tmp) catch continue;
+            } else {
+                var tmp: [4]u8 = undefined;
+                const len = std.unicode.utf8Encode(cu, &tmp) catch continue;
+                buf.appendSlice(vm.allocator, tmp[0..len]) catch continue;
+            }
+        }
         return JsValue.initString(try vm.pool.intern(if (buf.items.len > 0) buf.items else ""));
     }
 
@@ -11751,31 +12043,49 @@ pub const VM = struct {
 
     // ── Error methods ───────────────────────────────────────────────
 
-    /// DOMException(message, name) constructor — DOM §4.3
+    pub fn createDOMException(self: *VM, name: []const u8, message: []const u8) !JsValue {
+        const code: u8 = if (std.mem.eql(u8, name, "IndexSizeError")) 1 else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, name, "WrongDocumentError")) 4 else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, name, "NoModificationAllowedError")) 7 else if (std.mem.eql(u8, name, "NotFoundError")) 8 else if (std.mem.eql(u8, name, "NotSupportedError")) 9 else if (std.mem.eql(u8, name, "InUseAttributeError")) 10 else if (std.mem.eql(u8, name, "InvalidStateError")) 11 else if (std.mem.eql(u8, name, "SyntaxError")) 12 else if (std.mem.eql(u8, name, "InvalidModificationError")) 13 else if (std.mem.eql(u8, name, "NamespaceError")) 14 else if (std.mem.eql(u8, name, "InvalidAccessError")) 15 else if (std.mem.eql(u8, name, "TypeMismatchError")) 17 else if (std.mem.eql(u8, name, "SecurityError")) 18 else if (std.mem.eql(u8, name, "NetworkError")) 19 else if (std.mem.eql(u8, name, "AbortError")) 20 else if (std.mem.eql(u8, name, "URLMismatchError")) 21 else if (std.mem.eql(u8, name, "QuotaExceededError")) 22 else if (std.mem.eql(u8, name, "TimeoutError")) 23 else if (std.mem.eql(u8, name, "InvalidNodeTypeError")) 24 else if (std.mem.eql(u8, name, "DataCloneError")) 25 else 0;
+        const err = try self.createObj(.{});
+        err.data = .{ .dom_exception_data = .{
+            .name = try self.pool.intern(name),
+            .message = try self.pool.intern(message),
+            .code = code,
+        } };
+        if (self.globals.get(try self.pool.intern("DOMException"))) |ctor| {
+            if (ctor.isObject()) {
+                if (ctor.asJsObject().getProperty(try self.pool.intern("prototype"))) |proto| {
+                    if (proto.isObject()) err.prototype = proto.asJsObject();
+                }
+            }
+        }
+        if (err.prototype == null) err.prototype = self.error_proto;
+        return JsValue.initObject(err);
+    }
+
+    fn domExceptionData(this: JsValue) !JsObject.DOMExceptionData {
+        if (!this.isObject() or this.asJsObject().data != .dom_exception_data) return error.TypeError;
+        return this.asJsObject().data.dom_exception_data;
+    }
+
+    fn nativeDOMExceptionName(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initString((try domExceptionData(this)).name);
+    }
+
+    fn nativeDOMExceptionMessage(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initString((try domExceptionData(this)).message);
+    }
+
+    fn nativeDOMExceptionCode(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initNumber(@floatFromInt((try domExceptionData(this)).code));
+    }
+
     fn nativeDOMExceptionConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
-        const err_obj = try vm.createObj(.{});
-        if (vm.error_proto) |ep| err_obj.prototype = ep;
-        // message (1st arg)
-        const msg_sid = try vm.pool.intern("message");
-        if (args.len > 0 and args[0].isString()) {
-            try err_obj.setProperty(vm.allocator, msg_sid, args[0]);
-        } else {
-            try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
-        }
-        // name (2nd arg, default "Error")
-        const name_sid = try vm.pool.intern("name");
-        if (args.len > 1 and args[1].isString()) {
-            try err_obj.setProperty(vm.allocator, name_sid, args[1]);
-            // Set legacy code based on name
-            const n = vm.pool.get(args[1].asStringId()) orelse "";
-            const code: f64 = if (std.mem.eql(u8, n, "IndexSizeError")) 1 else if (std.mem.eql(u8, n, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, n, "WrongDocumentError")) 4 else if (std.mem.eql(u8, n, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, n, "NoModificationAllowedError")) 7 else if (std.mem.eql(u8, n, "NotFoundError")) 8 else if (std.mem.eql(u8, n, "NotSupportedError")) 9 else if (std.mem.eql(u8, n, "InUseAttributeError")) 10 else if (std.mem.eql(u8, n, "InvalidStateError")) 11 else if (std.mem.eql(u8, n, "SyntaxError")) 12 else if (std.mem.eql(u8, n, "InvalidModificationError")) 13 else if (std.mem.eql(u8, n, "NamespaceError")) 14 else if (std.mem.eql(u8, n, "InvalidAccessError")) 15 else if (std.mem.eql(u8, n, "TypeMismatchError")) 17 else if (std.mem.eql(u8, n, "SecurityError")) 18 else if (std.mem.eql(u8, n, "NetworkError")) 19 else if (std.mem.eql(u8, n, "AbortError")) 20 else if (std.mem.eql(u8, n, "URLMismatchError")) 21 else if (std.mem.eql(u8, n, "QuotaExceededError")) 22 else if (std.mem.eql(u8, n, "TimeoutError")) 23 else if (std.mem.eql(u8, n, "InvalidNodeTypeError")) 24 else if (std.mem.eql(u8, n, "DataCloneError")) 25 else 0;
-            try err_obj.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(code));
-        } else {
-            try err_obj.setProperty(vm.allocator, name_sid, JsValue.initString(try vm.pool.intern("Error")));
-            try err_obj.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(0));
-        }
-        return JsValue.initObject(err_obj);
+        if ((args.len > 0 and args[0].isSymbol()) or (args.len > 1 and args[1].isSymbol())) return error.TypeError;
+        var buf: [64]u8 = undefined;
+        const message = try vm.pool.intern(if (args.len > 0 and !args[0].isUndefined()) try vm.toStringValue(args[0], &buf) else "");
+        const name = try vm.pool.intern(if (args.len > 1 and !args[1].isUndefined()) try vm.toStringValue(args[1], &buf) else "Error");
+        return vm.createDOMException(vm.pool.get(name).?, vm.pool.get(message).?);
     }
 
     fn nativeErrorConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -12428,6 +12738,15 @@ pub const VM = struct {
             const s = std.fmt.bufPrint(&buf, "{d}", .{key.asNumber()}) catch return try self.pool.intern("undefined");
             return try self.pool.intern(s);
         }
+        // ECMA-262 §7.1.19 ToPropertyKey: null → "null", undefined → "undefined",
+        // true → "true", false → "false". Without this, obj[null] returns
+        // undefined instead of obj["null"], breaking Wikipedia's batchRequest
+        // which does splits[bSource][bGroup].push() where bGroup can be null/0.
+        if (key.isNull()) return try self.pool.intern("null");
+        if (key.isUndefined()) return try self.pool.intern("undefined");
+        if (key.isBool()) {
+            return try self.pool.intern(if (key.asBool()) "true" else "false");
+        }
         return try self.pool.intern("undefined");
     }
 
@@ -12757,8 +13076,8 @@ pub const VM = struct {
         const obj = this.asJsObject();
         const name_sid = try vm.pool.intern("name");
         const msg_sid = try vm.pool.intern("message");
-        const name_val = obj.getProperty(name_sid) orelse JsValue.initString(try vm.pool.intern("Error"));
-        const msg_val = obj.getProperty(msg_sid) orelse JsValue.initString(try vm.pool.intern(""));
+        const name_val = (try vm.getPropertyWithAccessors(obj, name_sid, this)) orelse JsValue.initString(try vm.pool.intern("Error"));
+        const msg_val = (try vm.getPropertyWithAccessors(obj, msg_sid, this)) orelse JsValue.initString(try vm.pool.intern(""));
         const name_str = if (name_val.isString()) vm.pool.get(name_val.asStringId()) orelse "Error" else "Error";
         const msg_str = if (msg_val.isString()) vm.pool.get(msg_val.asStringId()) orelse "" else "";
         if (msg_str.len == 0) {

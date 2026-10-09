@@ -10689,25 +10689,8 @@ fn countAttrs(elem: *lxb.lxb_dom_element_t) usize {
 // ── CharacterData mutation methods ──────────────────────────────────
 
 fn createDOMExceptionObj(vm: *VM, err_name: []const u8) !JsValue {
-    const err = try vm.createObj(.{});
-    if (vm.error_proto) |ep| err.prototype = ep;
-    try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern(err_name)));
-    try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern(err_name)));
-    // DOM §2.7: Legacy error code mapping (WebIDL §2.8.1)
-    const code: f64 = if (std.mem.eql(u8, err_name, "IndexSizeError")) 1 else if (std.mem.eql(u8, err_name, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, err_name, "WrongDocumentError")) 4 else if (std.mem.eql(u8, err_name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, err_name, "NoModificationAllowedError")) 7 else if (std.mem.eql(u8, err_name, "NotFoundError")) 8 else if (std.mem.eql(u8, err_name, "NotSupportedError")) 9 else if (std.mem.eql(u8, err_name, "InUseAttributeError")) 10 else if (std.mem.eql(u8, err_name, "InvalidStateError")) 11 else if (std.mem.eql(u8, err_name, "SyntaxError")) 12 else if (std.mem.eql(u8, err_name, "InvalidModificationError")) 13 else if (std.mem.eql(u8, err_name, "NamespaceError")) 14 else if (std.mem.eql(u8, err_name, "InvalidAccessError")) 15 else if (std.mem.eql(u8, err_name, "TypeMismatchError")) 17 else if (std.mem.eql(u8, err_name, "SecurityError")) 18 else if (std.mem.eql(u8, err_name, "NetworkError")) 19 else if (std.mem.eql(u8, err_name, "AbortError")) 20 else if (std.mem.eql(u8, err_name, "URLMismatchError")) 21 else if (std.mem.eql(u8, err_name, "QuotaExceededError")) 22 else if (std.mem.eql(u8, err_name, "TimeoutError")) 23 else if (std.mem.eql(u8, err_name, "InvalidNodeTypeError")) 24 else if (std.mem.eql(u8, err_name, "DataCloneError")) 25 else 0;
-    try err.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(code));
-    // Set constructor to DOMException
-    const de_sid = try vm.pool.intern("DOMException");
-    if (vm.globals.get(de_sid)) |de_ctor| {
-        try err.setProperty(vm.allocator, try vm.pool.intern("constructor"), de_ctor);
-        // Set prototype to DOMException.prototype for instanceof
-        if (de_ctor.isObject()) {
-            if (de_ctor.asJsObject().getProperty(try vm.pool.intern("prototype"))) |pv| {
-                if (pv.isObject()) err.prototype = pv.asJsObject();
-            }
-        }
-    }
-    return JsValue.initObject(err);
+    if (std.mem.eql(u8, err_name, "TypeError")) return vm.createErrorObj(err_name);
+    return vm.createDOMException(err_name, err_name);
 }
 
 fn getCharData(vm: *VM, this: JsValue) ?struct { node: *lxb.lxb_dom_node_t, text: []const u8 } {

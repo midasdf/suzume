@@ -37,15 +37,52 @@ pub fn inEncodeSet(byte: u8, set: EncodeSet) bool {
             else => false,
         },
         .userinfo => switch (byte) {
-            ' ', '"', '#', '<', '>', '?', '`', '{', '}',
-            '/', ':', ';', '=', '@', '[', '\\', ']', '^', '|',
+            ' ',
+            '"',
+            '#',
+            '<',
+            '>',
+            '?',
+            '`',
+            '{',
+            '}',
+            '/',
+            ':',
+            ';',
+            '=',
+            '@',
+            '[',
+            '\\',
+            ']',
+            '^',
+            '|',
             => true,
             else => false,
         },
         .component => switch (byte) {
-            ' ', '"', '#', '<', '>', '?', '`', '{', '}',
-            '/', ':', ';', '=', '@', '[', '\\', ']', '^', '|',
-            '$', '&', '+', ',',
+            ' ',
+            '"',
+            '#',
+            '<',
+            '>',
+            '?',
+            '`',
+            '{',
+            '}',
+            '/',
+            ':',
+            ';',
+            '=',
+            '@',
+            '[',
+            '\\',
+            ']',
+            '^',
+            '|',
+            '$',
+            '&',
+            '+',
+            ',',
             => true,
             else => false,
         },
@@ -63,7 +100,35 @@ pub fn percentEncode(allocator: Allocator, input: []const u8, set: EncodeSet) ![
     var result: std.ArrayListUnmanaged(u8) = .empty;
     errdefer result.deinit(allocator);
 
-    for (input) |byte| {
+    var i: usize = 0;
+    while (i < input.len) {
+        // URL input is scalar-value text even when the JS pool contains WTF-8.
+        if (input.len - i >= 3 and input[i] == 0xED and
+            input[i + 1] >= 0xA0 and input[i + 1] <= 0xBF and
+            input[i + 2] >= 0x80 and input[i + 2] <= 0xBF)
+        {
+            if (input[i + 1] < 0xB0 and input.len - i >= 6 and input[i + 3] == 0xED and
+                input[i + 4] >= 0xB0 and input[i + 4] <= 0xBF and
+                input[i + 5] >= 0x80 and input[i + 5] <= 0xBF)
+            {
+                const high: u21 = (@as(u21, input[i + 1] - 0xA0) << 6) | (input[i + 2] & 0x3F);
+                const low: u21 = (@as(u21, input[i + 4] - 0xB0) << 6) | (input[i + 5] & 0x3F);
+                var encoded: [4]u8 = undefined;
+                const len = try std.unicode.utf8Encode(0x10000 + (high << 10) + low, &encoded);
+                for (encoded[0..len]) |byte| {
+                    try result.append(allocator, '%');
+                    try result.append(allocator, hex_upper[byte >> 4]);
+                    try result.append(allocator, hex_upper[byte & 0x0F]);
+                }
+                i += 6;
+            } else {
+                try result.appendSlice(allocator, "%EF%BF%BD");
+                i += 3;
+            }
+            continue;
+        }
+        const byte = input[i];
+        i += 1;
         if (set == .form_urlencoded and byte == ' ') {
             try result.append(allocator, '+');
         } else if (inEncodeSet(byte, set)) {
@@ -127,6 +192,34 @@ fn hexVal(c: u8) ?u4 {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
+
+test "percentEncode combines split WTF-8 surrogate pairs" {
+    const alloc = std.testing.allocator;
+    const encoded = try percentEncode(alloc, "\xed\xa0\xbd\xed\xb2\xa9", .path);
+    defer alloc.free(encoded);
+    try std.testing.expectEqualStrings("%F0%9F%92%A9", encoded);
+}
+
+test "percentEncode replaces lone WTF-8 surrogates" {
+    const alloc = std.testing.allocator;
+    const encoded = try percentEncode(alloc, "a\xed\xa0\x80b\xed\xbf\xbfc", .path);
+    defer alloc.free(encoded);
+    try std.testing.expectEqualStrings("a%EF%BF%BDb%EF%BF%BDc", encoded);
+}
+
+test "percentEncode does not discard malformed surrogate continuation bytes" {
+    const alloc = std.testing.allocator;
+    const encoded = try percentEncode(alloc, "\xed\xa0A", .component);
+    defer alloc.free(encoded);
+    try std.testing.expectEqualStrings("%ED%A0A", encoded);
+}
+
+test "percentDecodeForm preserves NUL" {
+    const alloc = std.testing.allocator;
+    const decoded = try percentDecodeForm(alloc, "a%00b");
+    defer alloc.free(decoded);
+    try std.testing.expectEqualStrings("a\x00b", decoded);
+}
 
 test "percentEncode c0_control passes ASCII printable" {
     const alloc = std.testing.allocator;
