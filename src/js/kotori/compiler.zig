@@ -2319,8 +2319,8 @@ pub const Compiler = struct {
                 else => {},
             }
         } else {
-            // No catch clause — pop thrown value
-            try self.emitOp(.pop);
+            // A catchless try must not convert an exception into normal completion.
+            try self.emitOp(.throw_);
         }
 
         // Patch end jump

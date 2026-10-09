@@ -1,6 +1,6 @@
 # suzume — 開発引き継ぎ
 
-## READ FIRST — 2026-10-09 / Wave 233
+## READ FIRST — 2026-10-09 / Wave 234
 
 ### 状態スナップショット
 
@@ -29,11 +29,17 @@ Wave 233 は Linux の初期ウィンドウを実際の画面サイズへ収め�
 
 0 と負の寸法はバックエンドの確保前に拒否する。不正な resize では既存の framebuffer を保持する。RAM surface のテストを Linux でも有効にし、全テストと Linux CI に加えた。証拠は `docs/evidence/wave233-viewport.md` と比較画像に記録した。
 
+Wave 234 は、catch のない try 文が例外を捨てる不具合を修正した。flex WPT の調査で、幅を故意に間違えた負例が成功と報告されたために見つかった。数値判定の `isNaN(undefined)` は正常だった。コンパイラが catch のない例外経路で値を pop していたので、同じ値を rethrow する。
+
+選んだ flex WPT は 38/38 から 1/38 へ変わった。37 件は捕捉されて捨てられた検査エラーを報告するようになった。残る 1 件も、未対応の offsetWidth を 2 回読んで undefined 同士を比較している。これらを配置の成功とは扱わない。kotori の CSSOM を実際のレイアウトへ接続し、正例と負例をそろえて検証する必要がある。
+
+修正の範囲は例外の伝播に限る。finally の本体はまだ実行されず、return/break/continue を含む終了処理も実装していない。完全な try/finally 対応とは呼ばない。証拠は `docs/evidence/wave234-exceptions.md` に記録した。
+
 ### 検証結果
 
-| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 233 |
+| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 234 |
 |---|---:|---:|---:|
-| `zig build test` | 2125/2125 | 1858/1858 | 2244/2244 |
+| `zig build test` | 2125/2125 | 1858/1858 | 2248/2248 |
 | ReleaseSafe ビルド | 12/12 steps | 12/12 steps | 12/12 steps |
 | kotori DOM (Debug / ReleaseSafe) | — | 242/242 (Debug) | 245/245 / 245/245 |
 | URL WPT | 5801/7316 (79.3%) | 6661/7316 (91.0%) | 6662/7316 (91.1%) |
@@ -46,13 +52,15 @@ WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。3 回の計測�
 
 統合の証拠とファイルごとの比較は `docs/evidence/wave232-integration.md` に記録した。追加した percent encoding の 2 件と branding の 3 件は、実装前に失敗、実装後に成功した。Wave 233 でも URL WPT は 6662/7316 を維持し、新しい失敗と報告欠落は 0。寸法検証の新しい 2 件は実装前に失敗し、実装後の RAM surface テストは Debug / ReleaseSafe とも 4/4 だった。
 
-Wave 232 は `908d115` として main に push 済み。GitHub CI の run `37864269467` は、Linux、macOS、HTTP、security-audit の全ジョブで成功した。Wave 233 の CI は別の実行なので、その結果も確認する。
+Wave 232 は `908d115`、Wave 233 は `af24774` として main に push 済み。GitHub CI の run `37864269467` と `37866706875` は全ジョブで成功した。Wave 234 の CI は push 後に別の実行を確認する。
+
+Wave 234 の kotori 単体テストは Debug / ReleaseSafe とも 1044/1044。追加した 4 件は修正前にすべて失敗し、修正後に成功した。Debug の test バイナリを直接実行しても 1044/1044 だった。自作のブラウザ検査は 1/6 から 6/6 へ改善した。WPT の検査ヘルパーを使った故意の負例は、修正後に正しく失敗する。URL WPT の 28 報告、分母、失敗行は Wave 233 と一致し、6662/7316 を保持した。スクリプトのない viewport fixture の画像差は AE=0 だった。配置はまだ修正していない。
 
 一般利用向けの完成には達していない。Wave 231 の Google は検索欄が初期画面外にあり、Wikipedia にはスタイル適用不足があった。GitHub 側の Google の全ページ PNG は 4096×4156、Wave 233 の新しい撮影は 1280×1084 だった。ただし実ページは保存しておらず、制御された比較ではない。スクリプトの大きさによる拒否も残る。画像取得のタイミングを固定していないため、これらの実サイト画像から退行を断定しない。
 
 ### 次の優先タスク
 
-1. `tests/wpt/benchmark/window-viewport.html` で残る flex の配置を直す。heading/button の align-items と justify-content が指定どおりになっていない。匿名ブロックの扱いと、ブラウザのバーを除いた content-height も調べる。Google/Wikipedia の HTML/CSS はまず一時ファイルに保存し、公開する fixture は最小の自作 HTML/CSS にする。CSS の取得・適用と画像完了のタイミングも分けて確認する。
+1. レイアウトの座標を直接検査する回帰テストを追加し、`tests/wpt/benchmark/window-viewport.html` の flex 配置を直す。heading/button の align-items と justify-content、匿名ブロック、ネストした flex の確定サイズを調べる。kotori の offsetWidth/getBoundingClientRect などは実レイアウトへ接続し、取得時の同期も検証する。未対応の寸法を定数で埋めて WPT のスコアだけを戻さない。finally の実行も、通常終了、例外、return/break/continue のテストを先に追加して実装する。Google/Wikipedia の比較には保存した HTML/CSS と最小の自作 fixture を使う。
 2. Pi Zero 2W の起動、表示、入力、通信、メモリ使用量を確認する。macOS GUI はこの Linux ホストでは動かしていない。TLS のローカル試験は通ったが、origin/CORS、認証付きアセット、実サイトとの通信も調べる。
 3. URL/要求 API の残りを処理する。埋め込み IPv4 を含む IPv6 の leading zero は既知の失敗。`urlencoded-parser.any.html` の 70 件は Request/Response.formData の未実装。sendBeacon は true を返すスタブ。不正 UTF-8 の formDecode はネイティブの処理へ統合し、NUL、切れた列、範囲外の列に対する境界テストを追加する。
 
@@ -60,8 +68,9 @@ Wave 232 は `908d115` として main に push 済み。GitHub CI の run `37864
 
 ```bash
 cd /home/midasdf/suzume-integration-20261009
-zig fmt --check build.zig src/paint/surface.zig src/test_surface.zig src/ui/chrome.zig src/main.zig src/js/kotori/object.zig src/js/kotori/vm.zig src/js/kotori_dom.zig src/url/host.zig src/url/parser.zig src/url/percent_encode.zig tests/test_kotori_dom.zig
+zig fmt --check build.zig src/paint/surface.zig src/test_surface.zig src/ui/chrome.zig src/main.zig src/js/kotori/compiler.zig src/js/kotori/object.zig src/js/kotori/vm.zig src/js/kotori_dom.zig src/url/host.zig src/url/parser.zig src/url/percent_encode.zig tests/test_kotori_vm.zig tests/test_kotori_dom.zig
 zig build test --summary all
+zig build test-kotori -Doptimize=ReleaseSafe --summary all
 zig build test-surface -Doptimize=ReleaseSafe --summary all
 zig build test-kotori-dom -Doptimize=ReleaseSafe --summary all
 zig build test-ui-input test-navigation test-css test-dom-style -Doptimize=ReleaseSafe --summary all
@@ -85,6 +94,8 @@ Xvfb :98 -screen 0 1280x1024x24 -ac
 # 別ターミナル
 cd /home/midasdf/suzume-integration-20261009
 DISPLAY=:98 SUZUME_JS=kotori timeout 120 ./zig-out/bin/suzume --wpt-mode http://127.0.0.1:9876/url/failure.html
+ln -s "$PWD/tests/wpt/kotori/catchless-try.html" /tmp/wpt/__suzume_catchless_try_20261009.html
+DISPLAY=:98 SUZUME_JS=kotori timeout 90 ./zig-out/bin/suzume --wpt-mode http://127.0.0.1:9876/__suzume_catchless_try_20261009.html
 ```
 
 `zig build test` は Debug バイナリをインストールする。WPT と閲覧前には必ず ReleaseSafe をビルドし直す。版が変わった WPT のスコアは直接比較せず、before を取り直す。
@@ -102,7 +113,7 @@ DISPLAY=:98 SUZUME_JS=kotori timeout 120 ./zig-out/bin/suzume --wpt-mode http://
 - DOMException の branding を JS のプロパティで代用しない。例外の内部データを持たない受信側は TypeError にする。一般の TypeError を DOMException として生成しない。
 - prototype を拡張する際は freeze を確認する。必要なら kotori_dom.zig の `unfrozen_html_protos` に追加する。
 - Zig 0.16 の test runner 終了時には shutdown race がある。全テスト成功後の SIGABRT は、報告と test バイナリの直接実行を確認してから判断する。
-- WPT の 0 件報告、タイムアウト、exit 0、DOM の存在だけで成功としない。報告数、分母、画像、実際の操作も確認する。
+- WPT の 0 件報告、タイムアウト、exit 0、DOM の存在だけで成功としない。報告数、分母、画像、実際の操作も確認する。成功する検査にも、故意に失敗させる負例を入れる。undefined 同士の比較や、try 内で捨てられた例外でも成功と報告されることがある。
 - iframe/contentWindow、window.open、Beacon、Request/Response を、成功するだけのスタブで埋めない。
 - スクリプトの上限は、512MB の実機メモリを測るまで引き上げない。
 
@@ -110,7 +121,7 @@ DISPLAY=:98 SUZUME_JS=kotori timeout 120 ./zig-out/bin/suzume --wpt-mode http://
 
 - 2026-07-06 以前: kotori が既定で、QuickJS はフォールバック。ネイティブ実装を優先する。
 - 2026-07-06: 引き継ぎは `docs/next-session-prompt.md` を唯一の正とする。
-- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 233 の次は Wave 234。
+- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 234 の次は Wave 235。
 - 2026-10-09: ユーザーの push 指示を受け、検証済みの統合結果を GitHub main へ公開する。元の未コミット変更は保持する。
 
 repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の UB 規律は `~/.claude/skills/zig-gotchas/SKILL.md` に従う。
@@ -126,5 +137,6 @@ repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の U
 - Wave 230/231 の要求 URL と USVString の証拠: `docs/evidence/wave230-url-results.txt`、`wave231-url-results.txt`。
 - 描画の既知の未完成箇所: `docs/evidence/wave231-smoke.md`。
 - Native window / RAM surface: `src/paint/surface.zig`、`src/test_surface.zig`。自作の描画 fixture は `tests/wpt/benchmark/window-viewport.html`。
-- 詳細ログ: `/tmp/suzume-integration-20261009/`。一時ファイルなので再起動で消える。以前のログは `/tmp/suzume-20261009/`。
+- catch のない try の例外伝播: `src/js/kotori/compiler.zig` の `compileTryCatch`。ブラウザ用回帰テストは `tests/wpt/kotori/catchless-try.html`。詳細は `docs/evidence/wave234-exceptions.md`。
+- 詳細ログ: `/tmp/suzume-wave234-20261009/`。一時ファイルなので再起動で消える。以前のログは `/tmp/suzume-integration-20261009/` と `/tmp/suzume-20261009/`。
 - Wave 231 の引き継ぎ: `git show 2978cf7:docs/next-session-prompt.md`。Wave 229 以前の履歴: `git show 1171fae:docs/next-session-prompt.md`。

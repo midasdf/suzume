@@ -1589,6 +1589,46 @@ test "eval: forEach with index" {
 
 // ── Phase 1g: try/catch/throw ─────────────────────────────────
 
+test "eval: catchless try preserves thrown value identity" {
+    const result = try evalExpr(
+        \\var marker = {}, caught = false;
+        \\try { try { throw marker; } finally {} }
+        \\catch (e) { caught = e === marker; }
+        \\caught;
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: catchless try propagates native errors" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { try { Array.from(null); } finally {} }
+        \\catch (e) { caught = e instanceof TypeError; }
+        \\caught;
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: catchless try in array callback does not turn failure into success" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1].forEach(function() { try { throw 7; } finally {} }); }
+        \\catch (e) { caught = e === 7; }
+        \\caught;
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: catchless try leaves following statements unreachable after throw" {
+    const result = try evalExpr(
+        \\var reached = false, caught = false;
+        \\try { (function() { try { throw 7; } finally {} reached = true; })(); }
+        \\catch (e) { caught = e === 7; }
+        \\caught && !reached;
+    );
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: try catch basic" {
     const result = try evalExpr(
         \\var x = 0;

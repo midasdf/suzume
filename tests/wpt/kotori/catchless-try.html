@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Catchless try exception propagation</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+const marker = {};
+
+test(function() {
+  assert_throws_exactly(marker, function() {
+    try { throw marker; } finally {}
+  });
+}, 'Catchless try preserves the thrown value');
+
+test(function() {
+  assert_throws_js(TypeError, function() {
+    try { Array.from(null); } finally {}
+  });
+}, 'Catchless try preserves native TypeError');
+
+test(function() {
+  assert_throws_exactly(marker, function() {
+    [1].forEach(function() { try { throw marker; } finally {} });
+  });
+}, 'Catchless try in a native array callback propagates failure');
+
+test(function() {
+  let reached = false;
+  assert_throws_exactly(marker, function() {
+    try { throw marker; } finally {}
+    reached = true;
+  });
+  assert_false(reached);
+}, 'Statements after a thrown value remain unreachable');
+
+function checkedDimension(actual, expected) {
+  try {
+    if (isNaN(expected) || isNaN(actual) || Math.abs(actual - expected) >= 1)
+      throw marker;
+  } finally {}
+}
+
+test(function() {
+  assert_throws_exactly(marker, function() { checkedDimension(undefined, 100); });
+}, 'A missing geometry value cannot pass a tolerance check');
+
+test(function() {
+  checkedDimension(100, 100);
+  assert_true(isNaN(undefined));
+}, 'Matching geometry and the global NaN guard remain valid');
+</script>
