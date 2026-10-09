@@ -46,7 +46,8 @@ pub fn initWindowSize() void {
 
 /// Compute the content area height from the actual window height.
 pub fn contentHeight(window_h: i32) i32 {
-    return window_h - url_bar_height - tab_bar_height - status_bar_height;
+    const chrome_height = content_y + status_bar_height;
+    return if (window_h <= chrome_height) 0 else window_h - chrome_height;
 }
 
 // Tab bar layout

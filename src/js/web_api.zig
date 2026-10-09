@@ -383,11 +383,13 @@ fn jsLocationAssign(
 /// Defaults match the HyperPixel4 720×720 display minus chrome bars.
 var viewport_width: u32 = 720;
 var viewport_height: u32 = 632; // 720 - url_bar(36) - tab_bar(28) - status_bar(24)
+var window_height: u32 = 720;
 
 /// Call from main.zig after window resize or initial layout.
-pub fn setViewportSize(w: u32, h: u32) void {
+pub fn setViewportSize(w: u32, h: u32, outer_h: u32) void {
     viewport_width = w;
     viewport_height = h;
+    window_height = outer_h;
 }
 
 pub fn getViewportWidth() u32 {
@@ -395,6 +397,9 @@ pub fn getViewportWidth() u32 {
 }
 pub fn getViewportHeight() u32 {
     return viewport_height;
+}
+pub fn getWindowHeight() u32 {
+    return window_height;
 }
 
 // ── Timer system ────────────────────────────────────────────────────
@@ -1650,7 +1655,7 @@ fn jsGetInnerWidth(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, @intCast(viewport_width));
+    return qjs.JS_NewFloat64(c, @floatFromInt(viewport_width));
 }
 
 fn jsGetInnerHeight(
@@ -1660,7 +1665,7 @@ fn jsGetInnerHeight(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, @intCast(viewport_height));
+    return qjs.JS_NewFloat64(c, @floatFromInt(viewport_height));
 }
 
 fn jsGetOuterWidth(
@@ -1670,7 +1675,7 @@ fn jsGetOuterWidth(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, 720); // full physical screen width
+    return qjs.JS_NewFloat64(c, @floatFromInt(viewport_width));
 }
 
 fn jsGetOuterHeight(
@@ -1680,7 +1685,7 @@ fn jsGetOuterHeight(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, 720); // full physical screen height
+    return qjs.JS_NewFloat64(c, @floatFromInt(window_height));
 }
 
 fn defineGetter(

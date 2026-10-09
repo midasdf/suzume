@@ -583,6 +583,7 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
         std.debug.print("[kotori] Failed to init kotori runtime\n", .{});
         return;
     };
+    krt.setViewportSize(web_api.getViewportWidth(), web_api.getViewportHeight(), web_api.getWindowHeight());
 
     // HTML §4.1.4: propagate the page URL to document.URL / documentURI /
     // window.location.href. Without this the bootstrap default (about:blank)

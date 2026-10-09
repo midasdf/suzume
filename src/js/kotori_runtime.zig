@@ -8845,46 +8845,26 @@ pub const KotoriRuntime = struct {
         } else |_| {}
     }
 
-    /// Wave 208c: Inject actual viewport dimensions into the kotori VM so the
-    /// `screen` polyfill and `innerWidth`/`innerHeight`/`outerWidth`/`outerHeight`
-    /// return real values instead of hardcoded 1280×800. Called from main.zig
-    /// after window resize or initial layout, mirroring web_api.setViewportSize.
-    pub fn setViewportSize(self: *KotoriRuntime, content_w: u32, content_h: u32) void {
-        const chrome_h: u32 = 36 + 28 + 24; // url_bar + tab_bar + status_bar
-        const outer_w: u32 = content_w;
-        const outer_h: u32 = content_h + chrome_h;
-
-        // Update the `screen` object if it exists (created by the polyfill).
-        const screen_sid = self.pool.intern("screen") catch return;
-        const screen_val = self.vm.globals.get(screen_sid) orelse return;
-        if (!screen_val.isObject()) return;
-        const screen_obj = screen_val.asJsObject();
-
-        const w_sid = self.pool.intern("width") catch return;
-        const h_sid = self.pool.intern("height") catch return;
-        const aw_sid = self.pool.intern("availWidth") catch return;
-        const ah_sid = self.pool.intern("availHeight") catch return;
-
-        screen_obj.setProperty(self.allocator, w_sid, JsValue.initNumber(@floatFromInt(outer_w))) catch {};
-        screen_obj.setProperty(self.allocator, h_sid, JsValue.initNumber(@floatFromInt(outer_h))) catch {};
-        screen_obj.setProperty(self.allocator, aw_sid, JsValue.initNumber(@floatFromInt(content_w))) catch {};
-        screen_obj.setProperty(self.allocator, ah_sid, JsValue.initNumber(@floatFromInt(content_h))) catch {};
-
-        // Also set innerWidth/innerHeight/outerWidth/outerHeight on window.
+    /// Publish window geometry before scripts and after layout/resize.
+    /// Screen dimensions are independent of window geometry.
+    pub fn setViewportSize(self: *KotoriRuntime, content_w: u32, content_h: u32, window_h: u32) void {
         const window_sid = self.pool.intern("window") catch return;
         const window_val = self.vm.globals.get(window_sid) orelse return;
         if (!window_val.isObject()) return;
         const window_obj = window_val.asJsObject();
 
-        const iw_sid = self.pool.intern("innerWidth") catch return;
-        const ih_sid = self.pool.intern("innerHeight") catch return;
-        const ow_sid = self.pool.intern("outerWidth") catch return;
-        const oh_sid = self.pool.intern("outerHeight") catch return;
-
-        window_obj.setProperty(self.allocator, iw_sid, JsValue.initNumber(@floatFromInt(content_w))) catch {};
-        window_obj.setProperty(self.allocator, ih_sid, JsValue.initNumber(@floatFromInt(content_h))) catch {};
-        window_obj.setProperty(self.allocator, ow_sid, JsValue.initNumber(@floatFromInt(outer_w))) catch {};
-        window_obj.setProperty(self.allocator, oh_sid, JsValue.initNumber(@floatFromInt(outer_h))) catch {};
+        const dimensions = [_]struct { name: []const u8, value: u32 }{
+            .{ .name = "innerWidth", .value = content_w },
+            .{ .name = "innerHeight", .value = content_h },
+            .{ .name = "outerWidth", .value = content_w },
+            .{ .name = "outerHeight", .value = window_h },
+        };
+        for (dimensions) |dimension| {
+            const sid = self.pool.intern(dimension.name) catch return;
+            const value = JsValue.initNumber(@floatFromInt(dimension.value));
+            window_obj.setProperty(self.allocator, sid, value) catch {};
+            self.vm.globals.put(self.allocator, sid, value) catch {};
+        }
     }
 
     /// Evaluate a JS source string. Returns the result or error message.

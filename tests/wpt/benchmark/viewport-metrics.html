@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Viewport metrics regression</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: #eef2f7; }
+  #page { height: 100vh; background: #dbe4ee; }
+  #half { height: 50vh; }
+  @media (max-height: 950px) { #half { width: 200px; } }
+  @media (min-height: 951px) { #half { width: 300px; } }
+</style>
+<div id="page"><div id="half"></div></div>
+<script>
+  function reportViewport() {
+    var page = getComputedStyle(document.getElementById('page'));
+    var half = getComputedStyle(document.getElementById('half'));
+    console.log('VIEWPORT_METRICS ' + JSON.stringify({
+      innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+      outerWidth: window.outerWidth, outerHeight: window.outerHeight,
+      globalInnerHeight: typeof innerHeight === 'number' ? innerHeight : null,
+      pageHeight: page.height, halfHeight: half.height, mediaWidth: half.width
+    }));
+  }
+  reportViewport();
+  setInterval(function() {
+    document.getElementById('half').style.backgroundColor = '#aaccee';
+    reportViewport();
+  }, 500);
+</script>

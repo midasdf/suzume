@@ -75,8 +75,15 @@ const http_status = @import("net/http_status.zig");
 var g_restyle_page: ?*PageState = null;
 var g_restyle_allocator: std.mem.Allocator = undefined;
 var g_restyle_fonts: ?*painter_mod.FontCache = null;
+// Keep native dimensions here: every restyle converts them exactly once.
 var g_restyle_width: i32 = 800;
 var g_restyle_height: i32 = 600;
+// Full-page capture renders the document without browser chrome.
+var g_capture_mode = false;
+
+fn documentViewportHeight(window_height: i32) i32 {
+    return if (g_capture_mode) @max(0, window_height) else chrome.contentHeight(window_height);
+}
 
 fn syncRestyle() void {
     if (g_restyle_page) |page| {
@@ -396,7 +403,8 @@ fn sanitizeBoxGeometry(box: *Box) void {
     for (box.children.items) |child| sanitizeBoxGeometry(child);
 }
 
-fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32, layout_height: i32) void {
+fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32, window_height: i32) void {
+    const layout_height = documentViewportHeight(window_height);
     const doc = &(page.doc orelse return);
 
     const root_node = doc.root() orelse return;
@@ -444,6 +452,12 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     dom_api.setStyles(&page.styles.?.styles);
     dom_api.setCustomProps(&page.styles.?.custom_props);
     dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
+    g_restyle_width = layout_width;
+    g_restyle_height = window_height;
+    web_api.setViewportSize(@intCast(layout_width), @intCast(layout_height), @intCast(window_height));
+    if (page.kotori_rt) |*krt| {
+        krt.setViewportSize(@intCast(layout_width), @intCast(layout_height), @intCast(window_height));
+    }
 
     std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
         page.total_height, page.total_width, new_root_box.children.items.len,
@@ -857,8 +871,9 @@ fn navigateTo(
     page: *PageState,
     storage: ?*Storage,
     layout_width: i32,
-    layout_height: i32,
+    window_height: i32,
 ) bool {
+    const layout_height = documentViewportHeight(window_height);
     // Clean up iframes before page
     dom_api.iframe.resetIframes();
     // Clean up old page
@@ -1016,13 +1031,14 @@ fn navigateTo(
     dom_api.setStyles(if (page.styles) |*s| &s.styles else null);
     dom_api.setCustomProps(if (page.styles) |*s| &s.custom_props else null);
     dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
+    web_api.setViewportSize(@intCast(layout_width), @intCast(layout_height), @intCast(window_height));
 
     // Set up sync restyle context for getComputedStyle during JS execution
     g_restyle_page = page;
     g_restyle_allocator = allocator;
     g_restyle_fonts = fonts;
     g_restyle_width = layout_width;
-    g_restyle_height = layout_height;
+    g_restyle_height = window_height;
     dom_api.restyle_fn = &syncRestyle;
 
     // Bridge kotori.getComputedStyle to the same cascade result the QuickJS
@@ -1702,6 +1718,20 @@ fn testDomJs() !void {
         if (result.isOk()) std.debug.print("DOM JS smoke got: {s}\n", .{result.value()});
         return error.DomJsSmokeFailed;
     }
+    web_api.registerWebApis(&js_rt);
+    for ([_]struct { width: u32, height: u32, window_height: u32, expected: []const u8 }{
+        .{ .width = 1280, .height = 936, .window_height = 1024, .expected = "[1280,936,1280,1024]" },
+        .{ .width = 640, .height = 480, .window_height = 480, .expected = "[640,480,640,480]" },
+    }) |size| {
+        web_api.setViewportSize(size.width, size.height, size.window_height);
+        const viewport_result = js_rt.eval("JSON.stringify([innerWidth, innerHeight, outerWidth, outerHeight])");
+        defer viewport_result.deinit();
+        if (!viewport_result.isOk() or !std.mem.eql(u8, viewport_result.value(), size.expected)) {
+            std.debug.print("DOM JS viewport got: {s}, expected: {s}\n", .{ viewport_result.value(), size.expected });
+            return error.ViewportSmokeFailed;
+        }
+    }
+    std.debug.print("DOM JS viewport PASS (2/2)\n", .{});
     std.debug.print("DOM JS smoke PASS\n", .{});
 }
 
@@ -1815,6 +1845,8 @@ pub fn main(init: std.process.Init) !void {
             initial_url = arg;
         }
     }
+
+    g_capture_mode = screenshot_path != null or dump_layout_path != null;
 
     if (run_css_bench) return @import("bench_css.zig").run(allocator, init.io);
     if (run_text_bench) return @import("bench_text.zig").run(allocator, init.io);
@@ -2046,7 +2078,8 @@ pub fn main(init: std.process.Init) !void {
     // Set initial JS viewport dimensions before first navigation
     web_api.setViewportSize(
         @intCast(surface.width),
-        @intCast(@max(0, chrome.contentHeight(surface.height))),
+        @intCast(documentViewportHeight(surface.height)),
+        @intCast(surface.height),
     );
 
     // First launch has no saved session or explicit URL. Load the configured
@@ -2917,7 +2950,8 @@ pub fn main(init: std.process.Init) !void {
                     // Update JS viewport dimensions
                     web_api.setViewportSize(
                         @intCast(surface.width),
-                        @intCast(@max(0, chrome.contentHeight(surface.height))),
+                        @intCast(documentViewportHeight(surface.height)),
+                        @intCast(surface.height),
                     );
                     // Re-layout page content for new width
                     const resize_pg = activePageState(&tab_mgr, &page_states);
@@ -4472,6 +4506,26 @@ fn webDriverEvalResponse(allocator: std.mem.Allocator, val: []const u8) webdrive
         val[0] == '-' or val[0] == '{' or val[0] == '[' or val[0] == '"');
     if (raw) return webDriverRawValueResponse(allocator, val);
     return webDriverStringResponse(allocator, val);
+}
+
+test "document viewport excludes chrome and clamps small native windows" {
+    const capture_mode = g_capture_mode;
+    defer g_capture_mode = capture_mode;
+    g_capture_mode = false;
+    try std.testing.expectEqual(@as(i32, 936), documentViewportHeight(1024));
+    try std.testing.expectEqual(@as(i32, 392), documentViewportHeight(480));
+    try std.testing.expectEqual(@as(i32, 0), documentViewportHeight(64));
+    try std.testing.expectEqual(@as(i32, 0), documentViewportHeight(std.math.minInt(i32)));
+    try std.testing.expectEqual(std.math.maxInt(i32) - 88, documentViewportHeight(std.math.maxInt(i32)));
+}
+
+test "capture viewport retains the full height without chrome" {
+    const capture_mode = g_capture_mode;
+    defer g_capture_mode = capture_mode;
+    g_capture_mode = true;
+    try std.testing.expectEqual(@as(i32, 1024), documentViewportHeight(1024));
+    try std.testing.expectEqual(@as(i32, 480), documentViewportHeight(480));
+    try std.testing.expectEqual(@as(i32, 64), documentViewportHeight(64));
 }
 
 test "webDriverStringResponse escapes JSON strings without fixed buffer cap" {

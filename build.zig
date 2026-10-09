@@ -457,6 +457,22 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run suzume");
     run_step.dependOn(&run_cmd.step);
 
+    if (target.result.os.tag == .linux) {
+        const resize_tool = b.addExecutable(.{
+            .name = "resize-x11-test-window",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/resize_x11_test_window.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        resize_tool.root_module.linkSystemLibrary("xcb", .{});
+        const resize_cmd = b.addRunArtifact(resize_tool);
+        if (b.args) |args| resize_cmd.addArgs(args);
+        b.step("resize-x11-test-window", "Resize the sole window on a dedicated Xvfb display").dependOn(&resize_cmd.step);
+    }
+
     const run_test_js = b.addRunArtifact(exe);
     run_test_js.step.dependOn(b.getInstallStep());
     run_test_js.addArg("--test-js");

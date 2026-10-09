@@ -3635,6 +3635,49 @@ test "KotoriRuntime CSSOM item index converts with ToUint32" {
     try std.testing.expectEqualStrings("ok", result.ok.?);
 }
 
+test "KotoriRuntime viewport dimensions update window and global bindings on resize" {
+    kotori.io.io = std.testing.io;
+    const html = "<html><body></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+    for ([_][3]u32{ .{ 1280, 936, 1024 }, .{ 640, 392, 480 }, .{ 1280, 936, 1024 } }) |size| {
+        rt.setViewportSize(size[0], size[1], size[2]);
+        const js = try std.fmt.allocPrint(std.testing.allocator,
+            \\window.innerWidth === {d} && innerWidth === {d} &&
+            \\window.innerHeight === {d} && innerHeight === {d} &&
+            \\window.outerWidth === {d} && outerWidth === {d} &&
+            \\window.outerHeight === {d} && outerHeight === {d} &&
+            \\globalThis.innerHeight === innerHeight ? 'ok' : 'bad';
+        , .{ size[0], size[0], size[1], size[1], size[0], size[0], size[2], size[2] });
+        defer std.testing.allocator.free(js);
+        const result = rt.eval(js);
+        try std.testing.expect(result.isOk());
+        try std.testing.expectEqualStrings("ok", result.ok.?);
+    }
+}
+
+test "KotoriRuntime capture viewport does not add a synthetic chrome height" {
+    kotori.io.io = std.testing.io;
+    const html = "<html><body></body></html>";
+    const doc = lxb_html_document_create() orelse return error.LexborFailed;
+    defer _ = lxb_html_document_destroy(doc);
+    if (lxb_html_document_parse(doc, html.ptr, html.len) != 0) return error.LexborParseFailed;
+
+    var rt = try kotori_runtime.KotoriRuntime.init(std.heap.page_allocator, doc);
+    defer rt.deinit();
+    rt.setViewportSize(640, 480, 480);
+    const result = rt.eval(
+        \\window.innerHeight === 480 && window.outerHeight === 480 &&
+        \\innerHeight === 480 && outerHeight === 480 ? 'ok' : 'bad';
+    );
+    try std.testing.expect(result.isOk());
+    try std.testing.expectEqualStrings("ok", result.ok.?);
+}
+
 test "KotoriRuntime FileList item index converts with ToUint32" {
     kotori.io.io = std.testing.io;
     const html = "<html><body></body></html>";
