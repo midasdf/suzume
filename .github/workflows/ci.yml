@@ -39,8 +39,8 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Text editing and per-tab navigation tests
-        run: zig build test-ui-input test-navigation -Doptimize=ReleaseSafe
+      - name: Text editing, navigation and framebuffer tests
+        run: zig build test-ui-input test-navigation test-surface -Doptimize=ReleaseSafe
       - name: CSS regression tests
         run: zig build test-css -Doptimize=ReleaseSafe
       - name: Production DOM, CSS cascade and layout regressions

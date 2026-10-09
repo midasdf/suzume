@@ -2,6 +2,9 @@ const std = @import("std");
 const nsfb = @import("../bindings/nsfb.zig");
 const c = nsfb.c;
 const is_macos = @import("builtin").os.tag == .macos;
+const xcb = if (is_macos) struct {} else @cImport({
+    @cInclude("xcb/xcb.h");
+});
 
 extern fn suzume_cocoa_create(width: c_int, height: c_int) ?*anyopaque;
 extern fn suzume_cocoa_destroy(window: *anyopaque) void;
@@ -49,24 +52,34 @@ pub const Surface = struct {
 
     /// Create and initialize an X11 window surface.
     pub fn init(width: i32, height: i32) !Surface {
+        if (width <= 0 or height <= 0) return error.InvalidGeometry;
         if (is_macos) {
             var surface = try initBackend("ram", width, height);
             errdefer surface.deinit();
             surface.native_window = suzume_cocoa_create(width, height) orelse return error.NativeWindowFailed;
             return surface;
+        } else {
+            const connection = xcb.xcb_connect(null, null) orelse return error.InitFailed;
+            defer xcb.xcb_disconnect(connection);
+            if (xcb.xcb_connection_has_error(connection) != 0) return error.InitFailed;
+            // Match the first root selected by libnsfb's XCB backend.
+            const roots = xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(connection));
+            if (roots.rem <= 0 or roots.data == null) return error.InitFailed;
+            const screen = roots.data[0];
+            if (screen.width_in_pixels == 0 or screen.height_in_pixels == 0) return error.InitFailed;
+            return initBackend("x", @min(width, @as(i32, screen.width_in_pixels)), @min(height, @as(i32, screen.height_in_pixels)));
         }
-        return initBackend("x", width, height);
     }
 
     /// Create a RAM (off-screen) surface with no X11 window. Used by the
-    /// screenshot path when the page is taller than the visible window — the
-    /// X backend refuses to grow past the screen size, so a RAM surface is
-    /// the only way to render the full page in one image.
+    /// screenshot path when the page is taller than the visible window.
+    /// Unlike a native window, its initial dimensions are not screen-limited.
     pub fn initRam(width: i32, height: i32) !Surface {
         return initBackend("ram", width, height);
     }
 
     fn initBackend(backend_name: []const u8, width: i32, height: i32) !Surface {
+        if (width <= 0 or height <= 0) return error.InvalidGeometry;
         // Register surface backends (Zig linker doesn't run C constructors)
         nsfb_surface_init_all();
 
@@ -118,6 +131,7 @@ pub const Surface = struct {
     /// positioned below the viewport. Existing content is lost — callers must
     /// re-render after resizing.
     pub fn resize(self: *Surface, width: i32, height: i32) !void {
+        if (width <= 0 or height <= 0) return error.InvalidGeometry;
         if (c.nsfb_set_geometry(self.fb, width, height, c.NSFB_FMT_XRGB8888) != 0) {
             return error.SetGeometryFailed;
         }

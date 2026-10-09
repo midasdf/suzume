@@ -15,7 +15,7 @@ pub const status_bar_height: i32 = 24;
 pub const content_y: i32 = url_bar_height + tab_bar_height;
 
 /// Default initial window size (used at Surface.init time).
-/// Large values let the WM/X server clamp to actual screen size.
+/// X11 requests are screen-bounded before allocating the framebuffer.
 /// Override with SUZUME_WIDTH/SUZUME_HEIGHT env vars for testing.
 pub var default_window_w: i32 = if (@import("builtin").os.tag == .macos) 1200 else 4096;
 pub var default_window_h: i32 = if (@import("builtin").os.tag == .macos) 800 else 4096;

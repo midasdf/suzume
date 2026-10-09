@@ -2331,12 +2331,8 @@ pub fn main(init: std.process.Init) !void {
             if (!did_work) break;
         }
 
-        // Render. The visible window may be smaller than the page content
-        // (e.g. Google's flex layout overflows past body height:100% and the
-        // search form sits below the viewport). The X backend refuses to grow
-        // past the screen size, so for screenshot we render to a fresh RAM
-        // surface sized to the full page height. The visible X surface stays
-        // untouched (the screenshot path exits immediately afterwards anyway).
+        // Full-page captures use a separate RAM surface when needed,
+        // without changing the native window's screen-bounded geometry.
         //
         // Clamp the page height to a sane maximum: 16384px is well above any
         // realistic page (a 1280-wide page would need ~16 screens of content)

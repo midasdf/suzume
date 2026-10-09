@@ -16,3 +16,30 @@ test "RAM framebuffer uses little-endian BGRX and preserves RGB channels" {
     try std.testing.expectEqual(@as(i32, 12), surface.width);
     try std.testing.expectEqual(@as(i32, 10), surface.height);
 }
+
+test "surfaces reject non-positive dimensions before backend allocation" {
+    const sizes = [_][2]i32{ .{ 0, 8 }, .{ 8, 0 }, .{ -1, 8 }, .{ 8, -1 } };
+    for (sizes) |size| {
+        try std.testing.expectError(error.InvalidGeometry, Surface.initRam(size[0], size[1]));
+        try std.testing.expectError(error.InvalidGeometry, Surface.init(size[0], size[1]));
+    }
+}
+
+test "invalid resize preserves the framebuffer" {
+    var surface = try Surface.initRam(8, 8);
+    defer surface.deinit();
+    const sizes = [_][2]i32{ .{ 0, 8 }, .{ 8, 0 }, .{ -1, 8 }, .{ 8, -1 } };
+    for (sizes) |size| {
+        try std.testing.expectError(error.InvalidGeometry, surface.resize(size[0], size[1]));
+        try std.testing.expectEqual(@as(i32, 8), surface.width);
+        try std.testing.expectEqual(@as(i32, 8), surface.height);
+    }
+}
+
+test "RAM screenshot surfaces retain dimensions beyond the screen" {
+    var surface = try Surface.initRam(64, 6000);
+    defer surface.deinit();
+    surface.refreshGeometry();
+    try std.testing.expectEqual(@as(i32, 64), surface.width);
+    try std.testing.expectEqual(@as(i32, 6000), surface.height);
+}

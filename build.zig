@@ -486,22 +486,32 @@ pub fn build(b: *std.Build) void {
     const test_text_step = b.step("test-text-fallback", "Run CJK font fallback regression tests");
     test_text_step.dependOn(&b.addRunArtifact(text_tests).step);
 
+    const surface_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test_surface.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    surface_tests.root_module.addIncludePath(b.path("deps/libnsfb/include"));
+    surface_tests.root_module.addCSourceFile(.{ .file = b.path("src/nsfb_surface_init.c"), .flags = &.{} });
+    surface_tests.root_module.linkLibrary(libnsfb);
     if (target.result.os.tag == .macos) {
-        const surface_tests = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/test_surface.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-            }),
-        });
-        surface_tests.root_module.addIncludePath(b.path("deps/libnsfb/include"));
-        surface_tests.root_module.addCSourceFile(.{ .file = b.path("src/nsfb_surface_init.c"), .flags = &.{} });
-        surface_tests.root_module.linkLibrary(libnsfb);
         addCocoa(b, surface_tests.root_module, target);
-        const test_surface_step = b.step("test-surface", "Run RAM framebuffer color and resize tests");
-        test_surface_step.dependOn(&b.addRunArtifact(surface_tests).step);
+    } else {
+        surface_tests.root_module.linkSystemLibrary("xcb", .{});
+        surface_tests.root_module.linkSystemLibrary("xcb-icccm", .{});
+        surface_tests.root_module.linkSystemLibrary("xcb-image", .{});
+        surface_tests.root_module.linkSystemLibrary("xcb-keysyms", .{});
+        surface_tests.root_module.linkSystemLibrary("xcb-util", .{});
+        surface_tests.root_module.linkSystemLibrary("X11", .{});
+        surface_tests.root_module.linkSystemLibrary("xcb-shm", .{});
+        surface_tests.root_module.linkSystemLibrary("xcb-cursor", .{});
     }
+    const run_surface_tests = b.addRunArtifact(surface_tests);
+    const test_surface_step = b.step("test-surface", "Run RAM framebuffer color and resize tests");
+    test_surface_step.dependOn(&run_surface_tests.step);
 
     const navigation_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -556,6 +566,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_surface_tests.step);
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_test_js.step);
     test_step.dependOn(&run_test_dom_js.step);

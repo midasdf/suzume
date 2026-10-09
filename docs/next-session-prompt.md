@@ -1,6 +1,6 @@
 # suzume — 開発引き継ぎ
 
-## READ FIRST — 2026-10-09 / Wave 232
+## READ FIRST — 2026-10-09 / Wave 233
 
 ### 状態スナップショット
 
@@ -23,11 +23,17 @@ URL の percent encoding は、孤立した WTF-8 サロゲートを U+FFFD に�
 
 DOMException の name/message/code はネイティブの内部データに保存する。prototype の getter は受信側の branding を検証し、偽装オブジェクトや prototype 自身を拒否する。DOM が作る例外も同じネイティブの生成処理を使う。Error の文字列化は getter を読む。統合途中に GitHub 側で成功していた URLSearchParams の branding テストが失敗したため、公開前にこの処理を修正した。
 
+Wave 233 は Linux の初期ウィンドウを実際の画面サイズへ収める。「画面いっぱいに表示する」という方針は保持し、4096×4096 の要求を XCB の画面サイズで制限してから framebuffer を確保する。macOS の既存経路と、画面より背の高い RAM screenshot は維持した。
+
+自作の fixture では、検索欄の x 座標が 1808 から 400 へ変わり、1280×1024 の画面内に入った。同じ fixture の撮影中に観測したプロセスの VmHWM は 200.6MiB から 52.0MiB へ減った。x86_64 の撮影処理を 10ms ごとに観測した値であり、Pi の実機メモリや通常の閲覧負荷の検証ではない。明示した 640×480 の画像差は 0 ピクセルだった。
+
+0 と負の寸法はバックエンドの確保前に拒否する。不正な resize では既存の framebuffer を保持する。RAM surface のテストを Linux でも有効にし、全テストと Linux CI に加えた。証拠は `docs/evidence/wave233-viewport.md` と比較画像に記録した。
+
 ### 検証結果
 
-| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 232 |
+| 対象 | GitHub `4a33941` | 統合前の Wave 231 | Wave 233 |
 |---|---:|---:|---:|
-| `zig build test` | 2125/2125 | 1858/1858 | 2240/2240 |
+| `zig build test` | 2125/2125 | 1858/1858 | 2244/2244 |
 | ReleaseSafe ビルド | 12/12 steps | 12/12 steps | 12/12 steps |
 | kotori DOM (Debug / ReleaseSafe) | — | 242/242 (Debug) | 245/245 / 245/245 |
 | URL WPT | 5801/7316 (79.3%) | 6661/7316 (91.0%) | 6662/7316 (91.1%) |
@@ -38,13 +44,15 @@ ReleaseSafe の UI/input/navigation/CSS/style テストは 373/373。ローカ�
 
 WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。3 回の計測とも 28 ファイル、7316 サブテストで、報告欠落は 0。GitHub 側と Wave 231 の双方に対する既存成功の退行は 0。`data-uri-fragment.html` の 0 件報告は iframe の動作確認と扱わない。
 
-証拠とファイルごとの比較は `docs/evidence/wave232-integration.md` に記録した。追加した percent encoding の 2 件と branding の 3 件は、実装前に失敗、実装後に成功した。
+統合の証拠とファイルごとの比較は `docs/evidence/wave232-integration.md` に記録した。追加した percent encoding の 2 件と branding の 3 件は、実装前に失敗、実装後に成功した。Wave 233 でも URL WPT は 6662/7316 を維持し、新しい失敗と報告欠落は 0。寸法検証の新しい 2 件は実装前に失敗し、実装後の RAM surface テストは Debug / ReleaseSafe とも 4/4 だった。
 
-一般利用向けの完成には達していない。Wave 231 の Google は検索欄が初期画面外にあり、Wikipedia にはスタイル適用不足があった。GitHub 側の Google の全ページ PNG は 4096×4156 だったが、制御された比較ではない。スクリプトの大きさによる拒否も残る。画像取得のタイミングを固定していないため、これらの実サイト画像から退行を断定しない。
+Wave 232 は `908d115` として main に push 済み。GitHub CI の run `37864269467` は、Linux、macOS、HTTP、security-audit の全ジョブで成功した。Wave 233 の CI は別の実行なので、その結果も確認する。
+
+一般利用向けの完成には達していない。Wave 231 の Google は検索欄が初期画面外にあり、Wikipedia にはスタイル適用不足があった。GitHub 側の Google の全ページ PNG は 4096×4156、Wave 233 の新しい撮影は 1280×1084 だった。ただし実ページは保存しておらず、制御された比較ではない。スクリプトの大きさによる拒否も残る。画像取得のタイミングを固定していないため、これらの実サイト画像から退行を断定しない。
 
 ### 次の優先タスク
 
-1. Google と Wikipedia の描画を、ローカル fixture で再現して直す。実ページの HTML/CSS はまず一時ファイルに保存し、公開する fixture は原因を再現する最小の自作 HTML/CSS にする。flex の高さ、横幅の overflow、CSS の取得・適用、画像完了のタイミングを分ける。
+1. `tests/wpt/benchmark/window-viewport.html` で残る flex の配置を直す。heading/button の align-items と justify-content が指定どおりになっていない。匿名ブロックの扱いと、ブラウザのバーを除いた content-height も調べる。Google/Wikipedia の HTML/CSS はまず一時ファイルに保存し、公開する fixture は最小の自作 HTML/CSS にする。CSS の取得・適用と画像完了のタイミングも分けて確認する。
 2. Pi Zero 2W の起動、表示、入力、通信、メモリ使用量を確認する。macOS GUI はこの Linux ホストでは動かしていない。TLS のローカル試験は通ったが、origin/CORS、認証付きアセット、実サイトとの通信も調べる。
 3. URL/要求 API の残りを処理する。埋め込み IPv4 を含む IPv6 の leading zero は既知の失敗。`urlencoded-parser.any.html` の 70 件は Request/Response.formData の未実装。sendBeacon は true を返すスタブ。不正 UTF-8 の formDecode はネイティブの処理へ統合し、NUL、切れた列、範囲外の列に対する境界テストを追加する。
 
@@ -52,8 +60,9 @@ WPT の参照版は `2810902e6a3a78789efe5de3376d4f082087041f`。3 回の計測�
 
 ```bash
 cd /home/midasdf/suzume-integration-20261009
-zig fmt --check src/js/kotori/object.zig src/js/kotori/vm.zig src/js/kotori_dom.zig src/url/host.zig src/url/parser.zig src/url/percent_encode.zig tests/test_kotori_dom.zig
+zig fmt --check build.zig src/paint/surface.zig src/test_surface.zig src/ui/chrome.zig src/main.zig src/js/kotori/object.zig src/js/kotori/vm.zig src/js/kotori_dom.zig src/url/host.zig src/url/parser.zig src/url/percent_encode.zig tests/test_kotori_dom.zig
 zig build test --summary all
+zig build test-surface -Doptimize=ReleaseSafe --summary all
 zig build test-kotori-dom -Doptimize=ReleaseSafe --summary all
 zig build test-ui-input test-navigation test-css test-dom-style -Doptimize=ReleaseSafe --summary all
 python3 tests/http_regression.py
@@ -101,7 +110,7 @@ DISPLAY=:98 SUZUME_JS=kotori timeout 120 ./zig-out/bin/suzume --wpt-mode http://
 
 - 2026-07-06 以前: kotori が既定で、QuickJS はフォールバック。ネイティブ実装を優先する。
 - 2026-07-06: 引き継ぎは `docs/next-session-prompt.md` を唯一の正とする。
-- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 232 の次は Wave 233。
+- 2026-07-06: 1 論点を 1 つの「Wave NNN」連番コミットにする。全テスト成功と対象 WPT の before/after 記録をコミット条件とする。Wave 233 の次は Wave 234。
 - 2026-10-09: ユーザーの push 指示を受け、検証済みの統合結果を GitHub main へ公開する。元の未コミット変更は保持する。
 
 repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の UB 規律は `~/.claude/skills/zig-gotchas/SKILL.md` に従う。
@@ -116,5 +125,6 @@ repo-local identity は `midasdf <midasdf@users.noreply.github.com>`。Zig の U
 - libnsfb パッチ: `./scripts/apply-libnsfb-patch.sh "$PWD/patches/libnsfb-xim.patch" "$PWD/deps/libnsfb"`。
 - Wave 230/231 の要求 URL と USVString の証拠: `docs/evidence/wave230-url-results.txt`、`wave231-url-results.txt`。
 - 描画の既知の未完成箇所: `docs/evidence/wave231-smoke.md`。
+- Native window / RAM surface: `src/paint/surface.zig`、`src/test_surface.zig`。自作の描画 fixture は `tests/wpt/benchmark/window-viewport.html`。
 - 詳細ログ: `/tmp/suzume-integration-20261009/`。一時ファイルなので再起動で消える。以前のログは `/tmp/suzume-20261009/`。
 - Wave 231 の引き継ぎ: `git show 2978cf7:docs/next-session-prompt.md`。Wave 229 以前の履歴: `git show 1171fae:docs/next-session-prompt.md`。
